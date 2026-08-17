@@ -72,6 +72,9 @@ static void on_selection_changed(GtkSelectionModel *model, guint position,
 static void
 load_file(App *app, const char *path)
 {
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_printerr("SIEB: load_file path=%s\n", path);
+
     GtkSourceLanguageManager *lang_mgr;
     GtkSourceLanguage        *language;
     gchar                    *content = NULL;
@@ -1711,6 +1714,8 @@ descend_path(App *app, const char *path, gboolean select_last)
 static void
 reveal_path(App *app, const char *file_path)
 {
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_printerr("SIEB: reveal_path path=%s\n", file_path);
     descend_path(app, file_path, TRUE);
 }
 
