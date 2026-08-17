@@ -1,0 +1,468 @@
+/*
+ * Roots : modèle des "Roots de structure" et "Roots de projet".
+ *
+ * Un Root de structure est un dossier qui contient des projets
+ * (ex: /home/eric/dev) — on n'y travaille jamais directement.
+ * Un Root de projet est un dossier de travail ouvert dans l'IDE
+ * (ex: /home/eric/dev/alvalllm), comme dans Zed.
+ *
+ * Persistance : ~/.config/siebcodedashboard/roots.json
+ */
+
+#include "roots.h"
+#include <json-glib/json-glib.h>
+#include <glib/gstdio.h>
+#include <stdio.h>
+
+#define SIEB_CONFIG_DIR  "siebcodedashboard"
+#define SIEB_ROOTS_FILE  "roots.json"
+
+/* Prototypes internes (définies plus bas dans le fichier). */
+static gboolean root_in_any_children(GListStore *roots, const char *path);
+static void scan_project_dirs(GListStore *roots, RootEntry *structure,
+                              const char *path);
+
+G_DEFINE_TYPE(RootEntry, root_entry, G_TYPE_OBJECT)
+
+static void
+root_entry_init(RootEntry *e)
+{
+    e->children = NULL;
+}
+
+static void
+root_entry_finalize(GObject *object)
+{
+    RootEntry *e = ROOT_ENTRY(object);
+
+    if (e->children != NULL) {
+        guint n = g_list_model_get_n_items(G_LIST_MODEL(e->children));
+        for (guint i = 0; i < n; i++)
+            g_object_unref(g_list_model_get_item(G_LIST_MODEL(e->children), i));
+        g_object_unref(e->children);
+    }
+    if (e->contents != NULL) {
+        guint n = g_list_model_get_n_items(G_LIST_MODEL(e->contents));
+        for (guint i = 0; i < n; i++)
+            g_object_unref(g_list_model_get_item(G_LIST_MODEL(e->contents), i));
+        g_object_unref(e->contents);
+    }
+    g_free(e->path);
+    g_free(e->basename);
+
+    G_OBJECT_CLASS(root_entry_parent_class)->finalize(object);
+}
+
+static void
+root_entry_class_init(RootEntryClass *klass)
+{
+    G_OBJECT_CLASS(klass)->finalize = root_entry_finalize;
+}
+
+static RootEntry *
+root_entry_new(RootKind kind, const char *path)
+{
+    RootEntry *e = g_object_new(ROOT_TYPE_ENTRY, NULL);
+
+    e->path = g_strdup(path);
+    e->kind = kind;
+    e->basename = g_path_get_basename(path);
+    if (e->basename == NULL || *e->basename == '\0')
+        e->basename = g_strdup(path);
+
+    if (kind == ROOT_STRUCTURE)
+        e->children = g_list_store_new(ROOT_TYPE_ENTRY);
+    e->contents_dirty = FALSE;
+    return e;
+}
+
+static char *
+roots_config_path(void)
+{
+    const char *dir = g_get_user_config_dir();
+
+    if (dir == NULL)
+        dir = g_get_home_dir();
+    return g_build_filename(dir, SIEB_CONFIG_DIR, SIEB_ROOTS_FILE, NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* JSON : sauvegarde                                                   */
+/* ------------------------------------------------------------------ */
+
+static JsonNode *
+entry_to_json(RootEntry *e)
+{
+    JsonBuilder *b = json_builder_new();
+    JsonNode    *node;
+
+    /* Seuls les ROOTS sont persistés : pas de children — les projets
+     * d'une structure sont reconstruits par scan au chargement. */
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "path");
+    json_builder_add_string_value(b, e->path);
+    json_builder_set_member_name(b, "kind");
+    json_builder_add_string_value(b, e->kind == ROOT_STRUCTURE ? "structure" : "project");
+    json_builder_end_object(b);
+
+    node = json_builder_get_root(b);
+    g_object_unref(b);
+    return node;
+}
+
+void
+roots_save(GListStore *roots)
+{
+    JsonBuilder  *b = json_builder_new();
+    JsonGenerator *gen;
+    char         *path;
+    gsize         n = g_list_model_get_n_items(G_LIST_MODEL(roots));
+
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "roots");
+    json_builder_begin_array(b);
+    for (gsize i = 0; i < n; i++) {
+        RootEntry *e = g_list_model_get_item(G_LIST_MODEL(roots), i);
+        json_builder_add_value(b, entry_to_json(e));
+        g_object_unref(e);
+    }
+    json_builder_end_array(b);
+    json_builder_end_object(b);
+
+    gen = json_generator_new();
+    json_generator_set_root(gen, json_builder_get_root(b));
+    json_generator_set_pretty(gen, TRUE);
+
+    path = roots_config_path();
+    if (g_mkdir_with_parents(g_path_get_dirname(path), 0700) == 0)
+        json_generator_to_file(gen, path, NULL);
+    g_free(path);
+
+    g_object_unref(gen);
+    g_object_unref(b);
+}
+
+/* ------------------------------------------------------------------ */
+/* JSON : chargement                                                   */
+/* ------------------------------------------------------------------ */
+
+/* Construit un root depuis le JSON. Les enfants ne sont PAS lus :
+ * ils sont reconstruits par scan (structures) à la racine. */
+static RootEntry *
+json_to_entry(JsonObject *obj)
+{
+    const char *path = json_object_get_string_member(obj, "path");
+    const char *kind = json_object_get_string_member(obj, "kind");
+
+    if (path == NULL)
+        return NULL;
+
+    return root_entry_new(g_strcmp0(kind, "structure") == 0
+                          ? ROOT_STRUCTURE : ROOT_PROJECT, path);
+}
+
+GListStore *
+roots_load(void)
+{
+    GListStore *roots = g_list_store_new(ROOT_TYPE_ENTRY);
+    JsonParser *parser;
+    JsonNode   *node;
+    JsonObject *obj;
+    JsonArray  *arr;
+    char       *path;
+    GError     *error = NULL;
+
+    path = roots_config_path();
+    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
+        g_free(path);
+        return roots;
+    }
+
+    parser = json_parser_new();
+    if (!json_parser_load_from_file(parser, path, &error)) {
+        g_printerr("SIEBCodeDashboard: roots.json: %s\n", error->message);
+        g_error_free(error);
+        g_object_unref(parser);
+        g_free(path);
+        return roots;
+    }
+    g_free(path);
+
+    node = json_parser_get_root(parser);
+    obj = json_node_get_object(node);
+    arr = json_object_get_array_member(obj, "roots");
+    if (arr != NULL) {
+        guint n = json_array_get_length(arr);
+        for (guint i = 0; i < n; i++) {
+            RootEntry *e = json_to_entry(json_array_get_object_element(arr, i));
+
+            if (e == NULL)
+                continue;
+            if (e->kind == ROOT_STRUCTURE) {
+                /* Structure : scanne ses sous-dossiers en projets,
+                 * et absorbe les projets isolés déjà chargés. */
+                g_list_store_append(roots, e);
+                scan_project_dirs(roots, e, e->path);
+                g_object_unref(e);
+            } else {
+                /* Projet isolé : ignoré s'il est déjà couvert par une
+                 * structure chargée précédemment (pas de doublon). */
+                if (root_in_any_children(roots, e->path))
+                    g_object_unref(e);
+                else
+                    g_list_store_append(roots, e);
+            }
+        }
+    }
+
+    g_object_unref(parser);
+    return roots;
+}
+
+/* Dernier fichier ouvert : lu depuis roots.json (clé "last_file"). */
+char *
+roots_read_last_file(void)
+{
+    JsonParser *parser;
+    JsonNode   *node;
+    JsonObject *obj;
+    char       *path = roots_config_path();
+    char       *last = NULL;
+
+    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
+        g_free(path);
+        return NULL;
+    }
+    parser = json_parser_new();
+    if (json_parser_load_from_file(parser, path, NULL)) {
+        node = json_parser_get_root(parser);
+        obj = json_node_get_object(node);
+        if (json_object_has_member(obj, "last_file"))
+            last = g_strdup(json_object_get_string_member(obj, "last_file"));
+    }
+    g_object_unref(parser);
+    g_free(path);
+    return last;
+}
+
+/* Met à jour le dernier fichier ouvert dans roots.json. */
+void
+roots_write_last_file(const char *last_path)
+{
+    JsonParser   *parser;
+    JsonNode     *node;
+    JsonObject   *obj;
+    JsonGenerator *gen;
+    char         *path = roots_config_path();
+
+    parser = json_parser_new();
+    if (json_parser_load_from_file(parser, path, NULL)) {
+        node = json_parser_get_root(parser);
+        obj = json_node_get_object(node);
+        json_object_set_string_member(obj, "last_file", last_path);
+        gen = json_generator_new();
+        json_generator_set_root(gen, node);
+        json_generator_set_pretty(gen, TRUE);
+        json_generator_to_file(gen, path, NULL);
+        g_object_unref(gen);
+    }
+    g_object_unref(parser);
+    g_free(path);
+}
+
+/* ------------------------------------------------------------------ */
+/* Ajout / suppression                                                 */
+/* ------------------------------------------------------------------ */
+
+/* Index d'un root à la racine (niveau 0) par chemin, -1 sinon. */
+static gint
+root_index_at_top(GListStore *roots, const char *path)
+{
+    guint n = g_list_model_get_n_items(G_LIST_MODEL(roots));
+
+    for (guint i = 0; i < n; i++) {
+        RootEntry *e = g_list_model_get_item(G_LIST_MODEL(roots), i);
+        gboolean eq = g_strcmp0(e->path, path) == 0;
+
+        g_object_unref(e);
+        if (eq)
+            return (gint)i;
+    }
+    return -1;
+}
+
+/* Le chemin existe-t-il déjà comme enfant d'une structure ? */
+static gboolean
+root_in_any_children(GListStore *roots, const char *path)
+{
+    guint n = g_list_model_get_n_items(G_LIST_MODEL(roots));
+
+    for (guint i = 0; i < n; i++) {
+        RootEntry *e = g_list_model_get_item(G_LIST_MODEL(roots), i);
+
+        if (e->children != NULL) {
+            guint m = g_list_model_get_n_items(G_LIST_MODEL(e->children));
+            for (guint j = 0; j < m; j++) {
+                RootEntry *c = g_list_model_get_item(G_LIST_MODEL(e->children), j);
+                gboolean eq = g_strcmp0(c->path, path) == 0;
+
+                g_object_unref(c);
+                if (eq) {
+                    g_object_unref(e);
+                    return TRUE;
+                }
+            }
+        }
+        g_object_unref(e);
+    }
+    return FALSE;
+}
+
+/* Scan d'une structure : chaque sous-dossier direct devient un root
+ * projet. Exclus : fichiers, dossiers cachés (.*).
+ * Un projet isolé à la racine situé DANS ce dossier est absorbé :
+ * il quitte la racine et devient enfant de la structure (il disparaîtra
+ * avec elle si on la supprime). */
+static void
+scan_project_dirs(GListStore *roots, RootEntry *structure, const char *path)
+{
+    GDir       *dir;
+    const char *name;
+    GPtrArray  *found = g_ptr_array_new_with_free_func(g_free);
+
+    dir = g_dir_open(path, 0, NULL);
+    if (dir == NULL)
+        return;
+
+    while ((name = g_dir_read_name(dir)) != NULL) {
+        char *full;
+
+        if (name[0] == '.')
+            continue; /* dossier caché : pas un projet */
+        full = g_build_filename(path, name, NULL);
+        if (!g_file_test(full, G_FILE_TEST_IS_DIR)) {
+            g_free(full);
+            continue;
+        }
+
+        gint idx = root_index_at_top(roots, full);
+        if (idx >= 0) {
+            /* Le chemin existe déjà à la racine. */
+            RootEntry *e = g_list_model_get_item(G_LIST_MODEL(roots), idx);
+
+            if (e->kind == ROOT_PROJECT) {
+                /* Projet isolé dans ce dossier → absorbé par la structure. */
+                g_list_store_remove(roots, idx);
+                e->parent = structure;
+                g_list_store_append(structure->children, e);
+            }
+            g_object_unref(e); /* la structure (ou la racine) garde la ref */
+            g_free(full);
+            continue;
+        }
+        if (root_in_any_children(roots, full)) {
+            g_free(full);
+            continue; /* déjà enfant d'une autre structure : pas de doublon */
+        }
+        g_ptr_array_add(found, full);
+    }
+    g_dir_close(dir);
+
+    g_ptr_array_sort(found, (GCompareFunc)g_ascii_strcasecmp);
+    for (guint i = 0; i < found->len; i++) {
+        RootEntry *p = root_entry_new(ROOT_PROJECT, found->pdata[i]);
+        p->parent = structure;
+        g_list_store_append(structure->children, p);
+    }
+    g_ptr_array_free(found, TRUE);
+}
+
+RootEntry *
+roots_add(GListStore *roots, RootEntry *parent, RootKind kind, const char *path)
+{
+    RootEntry *e = root_entry_new(kind, path);
+
+    e->parent = parent;
+    if (parent != NULL && parent->children != NULL)
+        g_list_store_append(parent->children, e);
+    else
+        g_list_store_append(roots, e);
+    return e;
+}
+
+/* Ajoute un root de structure puis scanne ses sous-dossiers directs :
+ * chacun devient un root projet enfant. */
+RootEntry *
+roots_add_structure(GListStore *roots, const char *path)
+{
+    RootEntry *e = root_entry_new(ROOT_STRUCTURE, path);
+
+    g_list_store_append(roots, e);
+    scan_project_dirs(roots, e, path);
+    return e;
+}
+
+/* Un chemin est-il déjà un root (racine) ou un projet d'une structure ?
+ * Empêche les doublons à l'ajout. */
+gboolean
+roots_conflict(GListStore *roots, const char *path)
+{
+    if (root_index_at_top(roots, path) >= 0)
+        return TRUE;
+    return root_in_any_children(roots, path);
+}
+
+void
+roots_remove(GListStore *roots, RootEntry *entry)
+{
+    guint i;
+
+    for (i = 0; i < g_list_model_get_n_items(G_LIST_MODEL(roots)); i++) {
+        RootEntry *e = g_list_model_get_item(G_LIST_MODEL(roots), i);
+        if (e == entry) {
+            g_list_store_remove(roots, i);
+            g_object_unref(e); /* libère entry et ses enfants */
+            return;
+        }
+        if (e->children != NULL) {
+            guint j;
+            for (j = 0; j < g_list_model_get_n_items(G_LIST_MODEL(e->children)); j++) {
+                RootEntry *c = g_list_model_get_item(G_LIST_MODEL(e->children), j);
+                if (c == entry) {
+                    g_list_store_remove(e->children, j);
+                    g_object_unref(c);
+                    g_object_unref(e);
+                    return;
+                }
+            }
+        }
+        g_object_unref(e);
+    }
+    g_printerr("SIEBCodeDashboard: root introuvable: %s\n", entry->path);
+}
+
+/* Suppression récursive d'un dossier : ne suit pas les liens symboliques
+ * (le lien est supprimé, pas sa cible). Retourne FALSE en cas d'échec. */
+gboolean
+roots_delete_recursive(const char *path)
+{
+    GDir     *dir;
+    gboolean  ok = TRUE;
+
+    if (g_file_test(path, G_FILE_TEST_IS_SYMLINK))
+        return g_remove(path) == 0;
+
+    dir = g_dir_open(path, 0, NULL);
+    if (dir == NULL)
+        return g_remove(path) == 0; /* fichier simple */
+
+    const char *name;
+    while ((name = g_dir_read_name(dir)) != NULL) {
+        char *child = g_build_filename(path, name, NULL);
+
+        ok = roots_delete_recursive(child) && ok;
+        g_free(child);
+    }
+    g_dir_close(dir);
+    return g_rmdir(path) == 0 && ok;
+}
