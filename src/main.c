@@ -247,6 +247,8 @@ on_remove_root_clicked(GtkButton *button, gpointer data)
         roots_remove(app->roots, app->pending_remove);
         roots_save(app->roots);
         app->pending_remove = NULL;
+        if (g_getenv("SIEB_DEBUG") != NULL)
+            g_printerr("SIEB: MUTATION unselect_all from %s\n", G_STRFUNC);
         gtk_selection_model_unselect_all(GTK_SELECTION_MODEL(app->selection));
     }
     gtk_popover_popdown(GTK_POPOVER(gtk_widget_get_parent(GTK_WIDGET(button))));
@@ -1307,6 +1309,9 @@ on_primary_pressed(GtkGestureClick *gesture,
         if (g_getenv("SIEB_DEBUG") != NULL)
             g_printerr("SIEB: Shift+clic plage [%u, %u] (unselect_rest=%d)\n",
                        lo, lo + n - 1, unselect_rest);
+        if (g_getenv("SIEB_DEBUG") != NULL)
+            g_printerr("SIEB: MUTATION select_range lo=%u n=%u unselect_rest=%d from %s\n",
+                       lo, n, unselect_rest, G_STRFUNC);
         gtk_selection_model_select_range(GTK_SELECTION_MODEL(app->selection),
                                          lo, n, unselect_rest);
         return;
@@ -1342,11 +1347,18 @@ on_primary_pressed(GtkGestureClick *gesture,
         gtk_bitset_unref(bits);
     }
 
-    if (gtk_selection_model_is_selected(GTK_SELECTION_MODEL(app->selection), pos))
+    if (gtk_selection_model_is_selected(GTK_SELECTION_MODEL(app->selection), pos)) {
+        if (g_getenv("SIEB_DEBUG") != NULL)
+            g_printerr("SIEB: MUTATION unselect_item pos=%u from %s\n",
+                       pos, G_STRFUNC);
         gtk_selection_model_unselect_item(GTK_SELECTION_MODEL(app->selection), pos);
-    else
+    } else {
+        if (g_getenv("SIEB_DEBUG") != NULL)
+            g_printerr("SIEB: MUTATION select_item pos=%u exclusive=%d from %s\n",
+                       pos, FALSE, G_STRFUNC);
         gtk_selection_model_select_item(GTK_SELECTION_MODEL(app->selection),
                                         pos, FALSE);
+    }
 
     if (g_getenv("SIEB_DEBUG") != NULL) {
         GtkBitset *bits = gtk_selection_model_get_selection(
@@ -1442,6 +1454,9 @@ select_row(App *app, GtkTreeListRow *row)
                     GTK_SELECTION_MODEL(app->selection), i)) {
                 if (g_getenv("SIEB_DEBUG") != NULL)
                     g_printerr("SIEB: select_row pos=%u (exclusif)\n", i);
+                if (g_getenv("SIEB_DEBUG") != NULL)
+                    g_printerr("SIEB: MUTATION select_row pos=%u exclusive=1 from %s\n",
+                               i, G_STRFUNC);
                 gtk_selection_model_select_item(
                     GTK_SELECTION_MODEL(app->selection), i, TRUE);
             } else if (g_getenv("SIEB_DEBUG") != NULL) {
