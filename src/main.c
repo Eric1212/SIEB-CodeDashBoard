@@ -1232,6 +1232,15 @@ explorer_pos_at(GtkWidget *view, double x, double y)
     for (GtkWidget *w = pick; w != NULL; w = gtk_widget_get_parent(w)) {
         guint pos = explorer_pos_from_widget(w);
 
+        if (g_getenv("SIEB_DEBUG") != NULL) {
+            const char *parent_type = w != NULL ? G_OBJECT_TYPE_NAME(w) : "NULL";
+            gpointer tagged = w != NULL
+                ? g_object_get_data(G_OBJECT(w), "sieb-pos") : NULL;
+            guint tagged_pos = tagged != NULL ? GPOINTER_TO_UINT(tagged) - 1 : GTK_INVALID_LIST_POSITION;
+            g_printerr("SIEB: pick_walk widget=%s sieb-pos=%u pos=%u\n",
+                       parent_type, tagged_pos, pos);
+        }
+
         if (pos != GTK_INVALID_LIST_POSITION)
             return pos;
 
