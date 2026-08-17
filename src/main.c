@@ -1435,6 +1435,18 @@ on_row_activate(GtkListView *view, guint position, gpointer data)
         g_printerr("SIEB: activate pos=%u (mods=%u)\n", position,
                    app->last_click_mods);
 
+    if (row != NULL && g_getenv("SIEB_DEBUG") != NULL) {
+        gpointer item = gtk_tree_list_row_get_item(row);
+        if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
+            RootEntry *e = item;
+            g_printerr("SIEB: activate path=root:%s\n", e->path);
+        } else {
+            FileEntry *f = item;
+            g_printerr("SIEB: activate path=%s%s\n", f->path,
+                       f->is_dir ? "/" : "");
+        }
+    }
+
     /* Ctrl/Shift+clic : sélection uniquement, pas d'ouverture. Normalement
      * l'activate n'est plus émis (release claimé) : garde de sécurité. */
     if ((app->last_click_mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) != 0) {
