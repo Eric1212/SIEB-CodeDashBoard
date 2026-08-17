@@ -1304,14 +1304,31 @@ on_primary_pressed(GtkGestureClick *gesture,
     }
 
     /* Ctrl : toggle de la ligne, le reste de la sélection est conservé. */
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: Ctrl+clic toggle pos=%u\n", pos);
+    if (g_getenv("SIEB_DEBUG") != NULL) {
+        GtkBitset *bits = gtk_selection_model_get_selection(
+            GTK_SELECTION_MODEL(app->selection));
+        gboolean was_selected = gtk_selection_model_is_selected(
+            GTK_SELECTION_MODEL(app->selection), pos);
+        g_printerr("SIEB: Ctrl+clic toggle pos=%u avant: size=%lu is_selected=%d\n",
+                   pos,
+                   (unsigned long)gtk_bitset_get_size(bits),
+                   was_selected);
+        gtk_bitset_unref(bits);
+    }
 
     if (gtk_selection_model_is_selected(GTK_SELECTION_MODEL(app->selection), pos))
         gtk_selection_model_unselect_item(GTK_SELECTION_MODEL(app->selection), pos);
     else
         gtk_selection_model_select_item(GTK_SELECTION_MODEL(app->selection),
                                         pos, FALSE);
+
+    if (g_getenv("SIEB_DEBUG") != NULL) {
+        GtkBitset *bits = gtk_selection_model_get_selection(
+            GTK_SELECTION_MODEL(app->selection));
+        g_printerr("SIEB: Ctrl+clic toggle pos=%u après: size=%lu\n",
+                   pos, (unsigned long)gtk_bitset_get_size(bits));
+        gtk_bitset_unref(bits);
+    }
 }
 
 /* Clic modifié : le press claimé a déjà fait le toggle / la plage.
