@@ -1487,6 +1487,18 @@ select_row(App *app, GtkTreeListRow *row)
     GListModel *model = G_LIST_MODEL(gtk_multi_selection_get_model(app->selection));
     guint n = g_list_model_get_n_items(model);
 
+    if (g_getenv("SIEB_DEBUG") != NULL && row != NULL) {
+        gpointer item = gtk_tree_list_row_get_item(row);
+        if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
+            RootEntry *e = item;
+            g_printerr("SIEB: select_row target path=root:%s\n", e->path);
+        } else {
+            FileEntry *f = item;
+            g_printerr("SIEB: select_row target path=%s%s\n", f->path,
+                       f->is_dir ? "/" : "");
+        }
+    }
+
     for (guint i = 0; i < n; i++) {
         GtkTreeListRow *r = g_list_model_get_item(model, i);
         gboolean is = r == row;
