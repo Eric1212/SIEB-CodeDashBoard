@@ -1309,10 +1309,27 @@ on_primary_pressed(GtkGestureClick *gesture,
             GTK_SELECTION_MODEL(app->selection));
         gboolean was_selected = gtk_selection_model_is_selected(
             GTK_SELECTION_MODEL(app->selection), pos);
-        g_printerr("SIEB: Ctrl+clic toggle pos=%u avant: size=%lu is_selected=%d\n",
-                   pos,
-                   (unsigned long)gtk_bitset_get_size(bits),
-                   was_selected);
+        g_printerr("SIEB: Ctrl+clic toggle pos=%u avant: size=%lu is_selected=%d",
+                   pos, (unsigned long)gtk_bitset_get_size(bits), was_selected);
+        if (app->tree_model != NULL) {
+            GtkTreeListRow *row = gtk_tree_list_model_get_row(app->tree_model, pos);
+            if (row != NULL) {
+                gpointer item = gtk_tree_list_row_get_item(row);
+                if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
+                    RootEntry *e = item;
+                    g_printerr(" path=root:%s\n", e->path);
+                } else {
+                    FileEntry *f = item;
+                    g_printerr(" path=%s%s\n", f->path,
+                               f->is_dir ? "/" : "");
+                }
+                g_object_unref(row);
+            } else {
+                g_printerr(" path=<no row>\n");
+            }
+        } else {
+            g_printerr(" path=<no tree_model>\n");
+        }
         gtk_bitset_unref(bits);
     }
 
