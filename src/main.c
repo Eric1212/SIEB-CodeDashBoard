@@ -24,7 +24,7 @@ typedef struct {
     GtkTreeListModel   *tree_model;
     GtkWidget          *explorer_scrolled;
     GdkModifierType    last_click_mods;
-    GtkBitset          *pre_click_sel; /* sélection avant clic modifié */
+    guint              sel_anchor; /* dernière ancre (clic exclusif) */
     GtkLabel          *status_file;
     GtkLabel          *status_pos;
     GtkWidget         *statusbar;
@@ -231,6 +231,9 @@ on_row_bind(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
         gtk_label_set_text(GTK_LABEL(label), f->name);
     }
     gtk_tree_expander_set_list_row(GTK_TREE_EXPANDER(expander), row);
+    /* pos+1 : l'index 0 est valide, GUINT_TO_POINTER(0) == NULL. */
+    g_object_set_data(G_OBJECT(expander), "sieb-pos",
+                      GUINT_TO_POINTER(gtk_list_item_get_position(item) + 1));
 }
 
 static void
@@ -1194,12 +1197,63 @@ on_selection_changed(GtkSelectionModel *model, guint position, guint n_items,
     }
 }
 
+/* Position d'une ligne : GtkTreeListRow de l'expander, sinon sieb-pos
+ * (index + 1, car GUINT_TO_POINTER(0) == NULL). */
+static guint
+explorer_pos_from_widget(GtkWidget *w)
+{
+    GtkTreeListRow *row;
+    gpointer        tagged;
+
+    if (w == NULL)
+        return GTK_INVALID_LIST_POSITION;
+
+    if (GTK_IS_TREE_EXPANDER(w)) {
+        row = gtk_tree_expander_get_list_row(GTK_TREE_EXPANDER(w));
+        if (row != NULL)
+            return gtk_tree_list_row_get_position(row);
+    }
+
+    tagged = g_object_get_data(G_OBJECT(w), "sieb-pos");
+    if (tagged != NULL)
+        return GPOINTER_TO_UINT(tagged) - 1;
+
+    return GTK_INVALID_LIST_POSITION;
+}
+
+/* GtkListItem n'est pas un widget : le pick tombe sur le contenu factory
+ * (label, box, expander). On remonte jusqu'à l'expander, ou on lit la
+ * position posée au bind. */
+static guint
+explorer_pos_at(GtkWidget *view, double x, double y)
+{
+    GtkWidget *pick = gtk_widget_pick(view, x, y, GTK_PICK_DEFAULT);
+
+    for (GtkWidget *w = pick; w != NULL; w = gtk_widget_get_parent(w)) {
+        guint pos = explorer_pos_from_widget(w);
+
+        if (pos != GTK_INVALID_LIST_POSITION)
+            return pos;
+
+        /* Padding de la row : l'expander est l'enfant, pas un ancêtre. */
+        if (g_strcmp0(gtk_widget_get_css_name(w), "row") == 0) {
+            pos = explorer_pos_from_widget(gtk_widget_get_first_child(w));
+            if (pos != GTK_INVALID_LIST_POSITION)
+                return pos;
+        }
+    }
+
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_printerr("SIEB: pick=%s — pas de pos\n",
+                   pick != NULL ? G_OBJECT_TYPE_NAME(pick) : "NULL");
+    return GTK_INVALID_LIST_POSITION;
+}
+
 /* Mémorise les modificateurs du dernier clic primaire : Ctrl+clic et
  * Shift+clic doivent sélectionner SANS ouvrir le fichier.
  * En phase CAPTURE : exécuté AVANT le gesture de la vue.
- * Si Ctrl/Shift : on CLAIM le press (la vue ne verra pas l'événement),
- * on trouve la position via gtk_widget_pick → GtkListItem, et on
- * applique notre propre toggle (la vue ne fait pas son select exclusif). */
+ * Si Ctrl/Shift : on CLAIM le press (la vue ne verra pas l'événement)
+ * et on applique toggle (Ctrl) ou plage (Shift). */
 static void
 on_primary_pressed(GtkGestureClick *gesture,
                    int G_GNUC_UNUSED n_press,
@@ -1207,91 +1261,80 @@ on_primary_pressed(GtkGestureClick *gesture,
                    gpointer data)
 {
     App       *app = data;
+    GtkWidget *view = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
     GdkEvent  *event = gtk_gesture_get_last_event(GTK_GESTURE(gesture), NULL);
     GdkModifierType mods = event != NULL
                            ? gdk_event_get_modifier_state(event) : 0;
+    guint pos;
 
     app->last_click_mods = mods;
+    pos = explorer_pos_at(view, x, y);
 
-    if ((mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) == 0)
+    if ((mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) == 0) {
+        if (pos != GTK_INVALID_LIST_POSITION)
+            app->sel_anchor = pos;
         return; /* clic simple : la vue gère normalement */
+    }
 
     /* Ctrl/Shift : CLAIM le press — la vue ne fera PAS son select exclusif. */
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 
-    /* Trouve le GtkListItem sous le curseur. */
-    GtkWidget *view = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
-    GtkWidget *pick = gtk_widget_pick(view, x, y, GTK_PICK_DEFAULT);
-    GtkListItem *item = NULL;
-
-    for (GtkWidget *w = pick; w != NULL; w = gtk_widget_get_parent(w)) {
-        if (GTK_IS_LIST_ITEM(w)) {
-            item = GTK_LIST_ITEM(w);
-            break;
-        }
-    }
-
-    if (item == NULL) {
+    if (pos == GTK_INVALID_LIST_POSITION) {
         if (g_getenv("SIEB_DEBUG") != NULL)
             g_printerr("SIEB: Ctrl+clic hors item\n");
         return;
     }
 
-    guint pos = gtk_list_item_get_position(item);
+    if (mods & GDK_SHIFT_MASK) {
+        guint    anchor = app->sel_anchor;
+        guint    lo;
+        guint    n;
+        gboolean unselect_rest = (mods & GDK_CONTROL_MASK) == 0;
 
-    /* Figé la sélection AVANT le clic. */
-    if (app->pre_click_sel != NULL)
-        gtk_bitset_unref(app->pre_click_sel);
-    app->pre_click_sel = gtk_selection_model_get_selection(
-        GTK_SELECTION_MODEL(app->selection));
-
-    /* Applique le toggle : pré ± pos. */
-    GtkBitset *prev = app->pre_click_sel;
-    GtkBitsetIter it;
-    guint p = 0;
-
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: Ctrl+clic press toggle pos=%u\n", pos);
-
-    gtk_selection_model_unselect_all(GTK_SELECTION_MODEL(app->selection));
-    if (prev != NULL && gtk_bitset_iter_init_first(&it, prev, &p)) {
-        do {
-            if (p != pos)
-                gtk_selection_model_select_item(
-                    GTK_SELECTION_MODEL(app->selection), p, FALSE);
-        } while (gtk_bitset_iter_next(&it, &p));
+        if (anchor == GTK_INVALID_LIST_POSITION)
+            anchor = pos;
+        lo = MIN(anchor, pos);
+        n = MAX(anchor, pos) - lo + 1;
+        if (g_getenv("SIEB_DEBUG") != NULL)
+            g_printerr("SIEB: Shift+clic plage [%u, %u] (unselect_rest=%d)\n",
+                       lo, lo + n - 1, unselect_rest);
+        gtk_selection_model_select_range(GTK_SELECTION_MODEL(app->selection),
+                                         lo, n, unselect_rest);
+        return;
     }
-    if (prev != NULL && gtk_bitset_contains(prev, pos))
-        gtk_selection_model_unselect_item(
-            GTK_SELECTION_MODEL(app->selection), pos);
-    else
-        gtk_selection_model_select_item(
-            GTK_SELECTION_MODEL(app->selection), pos, FALSE);
 
-    /* Le press est claimé : la vue ne fera rien. On n'a pas besoin de
-     * pending_ctrl ni du handler selection-changed pour ce cas. */
-    app->pending_ctrl = FALSE;
+    /* Ctrl : toggle de la ligne, le reste de la sélection est conservé. */
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_printerr("SIEB: Ctrl+clic toggle pos=%u\n", pos);
+
+    if (gtk_selection_model_is_selected(GTK_SELECTION_MODEL(app->selection), pos))
+        gtk_selection_model_unselect_item(GTK_SELECTION_MODEL(app->selection), pos);
+    else
+        gtk_selection_model_select_item(GTK_SELECTION_MODEL(app->selection),
+                                        pos, FALSE);
 }
 
-/* Clic modifié (Ctrl/Shift) : le press de la vue fait le toggle natif,
- * MAIS son release re-sélectionne l'item en exclusif et émet l'activate
- * (qui ouvrirait le fichier et écraserait la multi). On CLAIM le release :
- * la vue ne voit rien → la sélection du press reste intacte. */
+/* Clic modifié : le press claimé a déjà fait le toggle / la plage.
+ * Sans claim du release, la vue re-sélectionne en exclusif et émet
+ * activate (ouverture + perte de la multi). */
 static void
 on_primary_released(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
                     double G_GNUC_UNUSED x, double G_GNUC_UNUSED y,
-                    gpointer G_GNUC_UNUSED data)
+                    gpointer data)
 {
-    GdkEvent  *event = gtk_gesture_get_last_event(GTK_GESTURE(gesture), NULL);
-    GdkModifierType mods = event != NULL
-                           ? gdk_event_get_modifier_state(event) : 0;
+    App *app = data;
 
-    if (mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) {
+    /* Se fier au press, pas à l'état actuel : Ctrl peut être relâché
+     * avant le bouton, la vue ferait alors un select exclusif. */
+    if (app->last_click_mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) {
         if (g_getenv("SIEB_DEBUG") != NULL)
             g_printerr("SIEB: release CLAIMÉ (mods=0x%x) — pas d'écrasement\n",
-                       mods);
+                       app->last_click_mods);
         gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
     }
+
+    /* Réinitialise les modificateurs pour les activations clavier suivantes. */
+    app->last_click_mods = 0;
 }
 
 /* Clic (activation) : un fichier de l'explorateur s'ouvre dans l'éditeur. */
@@ -1572,6 +1615,8 @@ rebuild_explorer(App *app)
     if (g_getenv("SIEB_DEBUG") != NULL)
         g_printerr("SIEB: rebuild_explorer (dossiers ouverts=%u)\n",
                    expanded->len);
+
+    app->sel_anchor = GTK_INVALID_LIST_POSITION;
 
     tree_model = gtk_tree_list_model_new(G_LIST_MODEL(app->roots), FALSE, FALSE,
                                          roots_create_child, NULL, NULL);
@@ -1871,6 +1916,7 @@ main(int argc, char **argv)
     int             status;
 
     app = g_new0(App, 1);
+    app->sel_anchor = GTK_INVALID_LIST_POSITION;
 
     gtk_app = GTK_APPLICATION(adw_application_new("org.sieb.code-dashboard",
                                                   G_APPLICATION_DEFAULT_FLAGS));
