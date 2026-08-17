@@ -1325,6 +1325,7 @@ on_primary_pressed(GtkGestureClick *gesture,
             GTK_SELECTION_MODEL(app->selection), pos);
         g_printerr("SIEB: Ctrl+clic toggle pos=%u avant: size=%lu is_selected=%d",
                    pos, (unsigned long)gtk_bitset_get_size(bits), was_selected);
+        gtk_bitset_unref(bits);
         if (app->tree_model != NULL) {
             GtkTreeListRow *row = gtk_tree_list_model_get_row(app->tree_model, pos);
             if (row != NULL) {
@@ -1344,7 +1345,37 @@ on_primary_pressed(GtkGestureClick *gesture,
         } else {
             g_printerr(" path=<no tree_model>\n");
         }
-        gtk_bitset_unref(bits);
+        /* Dump complet du bitset: tous les chemins sélectionnés. */
+        {
+            GtkBitset *all = gtk_selection_model_get_selection(
+                GTK_SELECTION_MODEL(app->selection));
+            guint n = (guint)gtk_bitset_get_size(all);
+            guint i = 0;
+            GtkBitsetIter it;
+            g_printerr("SIEB: Ctrl+clic bitset complet size=%lu:", (unsigned long)n);
+            if (gtk_bitset_iter_init_first(&it, all, &i)) {
+                do {
+                    const char *label = "<unknown>";
+                    if (app->tree_model != NULL) {
+                        GtkTreeListRow *r = gtk_tree_list_model_get_row(app->tree_model, i);
+                        if (r != NULL) {
+                            gpointer item = gtk_tree_list_row_get_item(r);
+                            if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
+                                RootEntry *e = item;
+                                label = e->path;
+                            } else {
+                                FileEntry *f = item;
+                                label = f->path;
+                            }
+                            g_object_unref(r);
+                        }
+                    }
+                    g_printerr(" [%u]=%s", i, label);
+                } while (gtk_bitset_iter_next(&it, &i));
+            }
+            g_printerr("\n");
+            gtk_bitset_unref(all);
+        }
     }
 
     if (gtk_selection_model_is_selected(GTK_SELECTION_MODEL(app->selection), pos)) {
