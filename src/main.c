@@ -1517,6 +1517,36 @@ select_row(App *app, GtkTreeListRow *row)
             } else if (g_getenv("SIEB_DEBUG") != NULL) {
                 g_printerr("SIEB: select_row pos=%u déjà sélectionnée (skip)\n", i);
             }
+            if (g_getenv("SIEB_DEBUG") != NULL) {
+                GtkBitset *bits = gtk_selection_model_get_selection(
+                    GTK_SELECTION_MODEL(app->selection));
+                guint nbits = (guint)gtk_bitset_get_size(bits);
+                guint j = 0;
+                GtkBitsetIter it;
+                g_printerr("SIEB: select_row après size=%lu:", (unsigned long)nbits);
+                if (gtk_bitset_iter_init_first(&it, bits, &j)) {
+                    do {
+                        const char *label = "<unknown>";
+                        if (app->tree_model != NULL) {
+                            GtkTreeListRow *r = gtk_tree_list_model_get_row(app->tree_model, j);
+                            if (r != NULL) {
+                                gpointer item = gtk_tree_list_row_get_item(r);
+                                if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
+                                    RootEntry *e = item;
+                                    label = e->path;
+                                } else {
+                                    FileEntry *f = item;
+                                    label = f->path;
+                                }
+                                g_object_unref(r);
+                            }
+                        }
+                        g_printerr(" [%u]=%s", j, label);
+                    } while (gtk_bitset_iter_next(&it, &j));
+                }
+                g_printerr("\n");
+                gtk_bitset_unref(bits);
+            }
             return;
         }
     }
