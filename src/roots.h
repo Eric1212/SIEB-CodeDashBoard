@@ -30,6 +30,8 @@ typedef struct _RootEntry {
     RootEntry   *parent;    /* structure d'accueil, NULL si à la racine */
     GListStore  *contents;  /* explorateur du projet (FileEntry), lazy */
     gboolean     contents_dirty; /* re-scan requis après modif FS */
+    gboolean     dirty;      /* contient un fichier non sauvegardé (propagé) */
+    GtkWidget   *indicator;  /* widget témoin de la row (row visible), NULL */
 } RootEntry;
 
 typedef struct _RootEntryClass {

@@ -17,6 +17,8 @@ typedef struct _FileEntry {
     gboolean    is_dir;
     GListStore *children;  /* scanné au premier dépliage, NULL sinon */
     gboolean    children_dirty; /* re-scan requis après modif FS */
+    gboolean    dirty;      /* fichier non sauvegardé (ou contient un sale) */
+    GtkWidget  *indicator;  /* widget témoin de la row (row visible), NULL sinon */
 } FileEntry;
 
 typedef struct _FileEntryClass {

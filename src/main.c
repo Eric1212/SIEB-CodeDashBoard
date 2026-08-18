@@ -14,6 +14,7 @@
 #include <glib/gstdio.h>
 #include "roots.h"
 #include "fslist.h"
+#include "dirty.h"
 
 typedef struct {
     GtkWindow         *win;
@@ -27,10 +28,20 @@ typedef struct {
     guint              sel_anchor; /* dernière ancre (clic exclusif) */
     GtkLabel          *status_file;
     GtkLabel          *status_pos;
+    GtkLabel          *status_mod; /* témoin non sauvegardé (« ● ») */
     GtkWidget         *statusbar;
     RootEntry         *pending_remove;
     RootKind           pending_kind;
     gboolean           centered;
+    /* Chemin du fichier courant de l'éditeur (NULL = demo, rien à sauver). */
+    char              *current_file;
+    /* Contenu « propre » de référence du fichier courant (celui sur disque
+     * au dernier chargement/sauvegarde). Le sale = buffer ≠ ce contenu. */
+    char              *saved_content;
+    /* Fichiers non sauvegardés (témoin par fichier + contenu en attente). */
+    DirtyStore        *dirty;
+    /* Ignore les signaux pendant un chargement (évite un sale transitoire). */
+    gboolean           suppress_dirty;
     /* Source de vérité de la multi-sélection : set de chemins (clés
      * g_strdup/g_free). GTK ne fait qu'afficher. */
     GHashTable        *multi_paths;
@@ -72,6 +83,11 @@ static void on_selection_changed(GtkSelectionModel *model, guint position,
 static char *explorer_path_at_pos(App *app, guint pos);
 static void selection_apply_from_paths(App *app);
 static void selection_sync_from_model(App *app);
+static void on_save_activated(GSimpleAction *action, GVariant *param, gpointer data);
+static void update_modified_indicator(App *app);
+static void sync_current_dirty(App *app);
+static gboolean item_is_dirty(App *app, gpointer item);
+static void recompute_dirty(App *app);
 
 /* ------------------------------------------------------------------ */
 /* Chargement de fichier                                               */
@@ -85,19 +101,37 @@ load_file(App *app, const char *path)
 
     GtkSourceLanguageManager *lang_mgr;
     GtkSourceLanguage        *language;
+    const char               *cached;
     gchar                    *content = NULL;
     gsize                     len = 0;
+    gboolean                  restore_dirty;
     GError                   *error = NULL;
 
+    /* Avant de quitter le buffer, on persiste le fichier précédent s'il
+     * était sale (son contenu est déjà frais dans dirty_store). */
+    if (app->current_file != NULL
+        && dirty_contains(app->dirty, app->current_file))
+        dirty_persist_now(app->dirty);
+
+    /* Contenu en attente éventuel : on restaure, pas de re-lecture disque. */
+    cached = dirty_content(app->dirty, path);
+    restore_dirty = cached != NULL;
+
+    /* Référence « propre » = contenu disque (baseline de comparaison). */
     if (!g_file_get_contents(path, &content, &len, &error)) {
-        g_printerr("SIEB - CodeDashBoard: %s\n", error->message);
+        if (!restore_dirty) {
+            g_printerr("SIEB - CodeDashBoard: %s\n", error->message);
+            g_error_free(error);
+            return;
+        }
+        /* Fichier disparu mais contenu en attente : baseline vide. */
         g_error_free(error);
-        return;
+        content = g_strdup("");
     }
 
     /* Fichier binaire ou encodage non UTF-8 : l'éditeur ne peut pas
      * l'afficher — on prévient au lieu de casser le buffer. */
-    if (!g_utf8_validate(content, len, NULL)) {
+    if (!restore_dirty && !g_utf8_validate(content, len, NULL)) {
         GtkAlertDialog *alert = gtk_alert_dialog_new(
             "Fichier binaire ou encodage non UTF-8 :\n%s", path);
         gtk_alert_dialog_show(alert, app->win);
@@ -112,18 +146,224 @@ load_file(App *app, const char *path)
         language = gtk_source_language_manager_get_language(lang_mgr, "c");
     gtk_source_buffer_set_language(app->buffer, language);
 
-    gtk_text_buffer_set_text(GTK_TEXT_BUFFER(app->buffer), content, (int)len);
+    /* Pendant le chargement on ignore les signaux pour ne pas marquer un
+     * sale transitoire ni écraser le contenu du fichier précédent. */
+    app->suppress_dirty = TRUE;
+    gtk_text_buffer_set_text(GTK_TEXT_BUFFER(app->buffer),
+                             restore_dirty ? cached : content, -1);
+    app->suppress_dirty = FALSE;
+
+    /* La référence « propre » sert à détecter les annulations. */
+    g_free(app->saved_content);
+    app->saved_content = g_strdup(content);
     g_free(content);
+
+    /* Le fichier ouvert devient la cible de Ctrl+S. */
+    g_free(app->current_file);
+    app->current_file = g_strdup(path);
 
     gtk_label_set_text(app->status_file, path);
     gtk_label_set_ellipsize(app->status_file, PANGO_ELLIPSIZE_MIDDLE);
     update_status(app);
+
+    if (restore_dirty) {
+        /* Fichier sale restauré : on garde l'état « non sauvegardé ». */
+        gtk_text_buffer_set_modified(GTK_TEXT_BUFFER(app->buffer), TRUE);
+    } else {
+        gtk_text_buffer_set_modified(GTK_TEXT_BUFFER(app->buffer), FALSE);
+        dirty_clear(app->dirty, path); /* propre après un chargement disque */
+    }
 
     /* Mémorise le dernier fichier ouvert (réouverture au boot). */
     roots_write_last_file(path);
 
     /* L'explorateur suit l'éditeur : déplie jusqu'au fichier, sélectionne. */
     reveal_path(app, path);
+
+    update_modified_indicator(app);
+    recompute_dirty(app);
+}
+
+/* ------------------------------------------------------------------ */
+/* Témoin non sauvegardé + sauvegarde (Ctrl+S)                          */
+/* ------------------------------------------------------------------ */
+
+/* Contenu courant du buffer (g_strdup). */
+static char *
+buffer_text(App *app)
+{
+    GtkTextIter start;
+    GtkTextIter end;
+
+    gtk_text_buffer_get_start_iter(GTK_TEXT_BUFFER(app->buffer), &start);
+    gtk_text_buffer_get_end_iter(GTK_TEXT_BUFFER(app->buffer), &end);
+    return gtk_text_buffer_get_text(GTK_TEXT_BUFFER(app->buffer), &start, &end, TRUE);
+}
+
+/* Met à jour le titre de la fenêtre et le point de la barre de statut :
+ * le témoin ne vaut « sale » que pour le fichier COURANT (∈ dirty_store). */
+static void
+update_modified_indicator(App *app)
+{
+    gboolean dirty = app->current_file != NULL
+                     && dirty_contains(app->dirty, app->current_file);
+
+    if (app->status_mod != NULL)
+        gtk_label_set_text(app->status_mod, dirty ? "●" : "");
+
+    if (app->current_file != NULL) {
+        char *title = g_strdup_printf("%s%s — SIEB - CodeDashBoard",
+                                      app->current_file, dirty ? "*" : "");
+
+        gtk_window_set_title(app->win, title);
+        g_free(title);
+    } else {
+        gtk_window_set_title(app->win, "SIEB - CodeDashBoard");
+    }
+}
+
+/* TRUE si l'item est « sale » : fichier présent dans dirty_store, ou
+ * dossier/root contenant (transitivement) un fichier sale. */
+static gboolean
+item_is_dirty(App *app, gpointer item)
+{
+    const char *path;
+
+    if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
+        path = ((RootEntry *)item)->path;
+    } else {
+        FileEntry *f = item;
+
+        if (!f->is_dir)
+            return g_hash_table_contains(app->dirty->store, f->path);
+        path = f->path;
+    }
+    /* Dossier / structure / projet : un descendant sale suffit. */
+    return dirty_under(app->dirty, path);
+}
+
+/* Recalcule et affiche l'indicateur de chaque ligne de l'arbre. Pas de
+ * rebuild global : on met à jour en place les widgets témoins (le scroll
+ * et le curseur de l'éditeur sont préservés). */
+static void
+recompute_dirty(App *app)
+{
+    GtkTreeListModel *tree = app->tree_model;
+    guint             n;
+
+    if (tree == NULL)
+        return;
+    n = g_list_model_get_n_items(G_LIST_MODEL(tree));
+    for (guint i = 0; i < n; i++) {
+        GtkTreeListRow *row = g_list_model_get_item(G_LIST_MODEL(tree), i);
+        gboolean        dirty;
+        GtkWidget      *indicator;
+
+        if (row == NULL)
+            continue;
+        {
+            gpointer item = gtk_tree_list_row_get_item(row);
+
+            dirty = item_is_dirty(app, item);
+            if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
+                RootEntry *e = item;
+
+                e->dirty = dirty;
+                indicator = e->indicator;
+            } else {
+                FileEntry *f = item;
+
+                f->dirty = dirty;
+                indicator = f->indicator;
+            }
+        }
+        if (indicator != NULL)
+            gtk_label_set_text(GTK_LABEL(indicator), dirty ? "●" : "");
+        g_object_unref(row);
+    }
+}
+
+/* Le buffer a changé (frappe/annulation) : on recalcule l'état sale du
+ * fichier courant par comparaison au contenu disque de référence. */
+static void
+on_buffer_changed(GtkTextBuffer G_GNUC_UNUSED *buffer, gpointer data)
+{
+    App *app = data;
+
+    if (app->suppress_dirty)
+        return; /* chargement en cours : ne pas écraser l'ancien contenu sale */
+    sync_current_dirty(app);
+}
+
+/* Sale = buffer ≠ contenu disque de référence. Détecte aussi la transition
+ * propre -> sale et sale -> propre (ex: taper « 555 » puis l'effacer) pour
+ * n'afficher / persister que si l'état change. */
+static void
+sync_current_dirty(App *app)
+{
+    gchar    *text;
+    gboolean  is;
+    gboolean  was;
+
+    if (app->current_file == NULL || app->saved_content == NULL)
+        return;
+
+    text = buffer_text(app);
+    is = g_strcmp0(text, app->saved_content) != 0;
+    was = dirty_contains(app->dirty, app->current_file);
+
+    if (is)
+        dirty_mark(app->dirty, app->current_file, text);
+    else
+        dirty_clear(app->dirty, app->current_file);
+    g_free(text);
+
+    if (is != was) {
+        /* L'état a basculé : on rafraîchit témoins + persistance. */
+        update_modified_indicator(app);
+        recompute_dirty(app);
+        dirty_schedule_persist(app->dirty);
+    }
+}
+
+/* Ctrl+S : écrit le contenu du buffer dans le fichier courant. */
+static void
+on_save_activated(GSimpleAction G_GNUC_UNUSED *action,
+                  GVariant G_GNUC_UNUSED *param, gpointer data)
+{
+    App        *app = data;
+    GtkTextIter start;
+    GtkTextIter end;
+    char       *text;
+    GError     *error = NULL;
+
+    if (app->current_file == NULL)
+        return; /* demo : pas de fichier à sauvegarder */
+
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_printerr("SIEB: save -> %s\n", app->current_file);
+
+    gtk_text_buffer_get_start_iter(GTK_TEXT_BUFFER(app->buffer), &start);
+    gtk_text_buffer_get_end_iter(GTK_TEXT_BUFFER(app->buffer), &end);
+    text = gtk_text_buffer_get_text(GTK_TEXT_BUFFER(app->buffer), &start, &end, TRUE);
+
+    if (!g_file_set_contents(app->current_file, text, -1, &error)) {
+        GtkAlertDialog *alert = gtk_alert_dialog_new(
+            "Impossible d'enregistrer :\n%s", error->message);
+
+        gtk_alert_dialog_show(alert, app->win);
+        g_error_free(error);
+    } else {
+        /* Le contenu disque devient la nouvelle référence « propre ». */
+        g_free(app->saved_content);
+        app->saved_content = buffer_text(app);
+        dirty_clear(app->dirty, app->current_file);
+        gtk_text_buffer_set_modified(GTK_TEXT_BUFFER(app->buffer), FALSE);
+        update_modified_indicator(app);
+        recompute_dirty(app);
+        dirty_persist_now(app->dirty);
+    }
+    g_free(text);
 }
 
 /* ------------------------------------------------------------------ */
@@ -196,17 +436,23 @@ on_row_setup(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
     GtkWidget  *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget  *icon = gtk_image_new();
     GtkWidget  *label = gtk_label_new(NULL);
+    GtkWidget  *indicator = gtk_label_new(NULL);
     GtkGesture *gesture = gtk_gesture_click_new();
 
     gtk_label_set_xalign(GTK_LABEL(label), 0.0);
     gtk_widget_set_hexpand(label, TRUE);
     gtk_box_append(GTK_BOX(box), icon);
     gtk_box_append(GTK_BOX(box), label);
+    /* Témoin non sauvegardé, tout à droite de la ligne (le label hexpand
+     * pousse l'indicateur vers la droite). */
+    gtk_widget_set_margin_start(indicator, 8);
+    gtk_box_append(GTK_BOX(box), indicator);
     gtk_tree_expander_set_child(GTK_TREE_EXPANDER(expander), box);
     gtk_list_item_set_child(item, expander);
 
     g_object_set_data(G_OBJECT(item), "icon", icon);
     g_object_set_data(G_OBJECT(item), "label", label);
+    g_object_set_data(G_OBJECT(item), "indicator", indicator);
 
     /* Clic droit sur la ligne → menu de suppression. */
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), 3);
@@ -219,12 +465,15 @@ on_row_setup(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
 
 static void
 on_row_bind(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
-            gpointer G_GNUC_UNUSED data)
+            gpointer data)
 {
+    App           *app = data;
     GtkTreeListRow *row = gtk_list_item_get_item(item);
     GtkWidget      *icon = g_object_get_data(G_OBJECT(item), "icon");
     GtkWidget      *label = g_object_get_data(G_OBJECT(item), "label");
+    GtkWidget      *indicator = g_object_get_data(G_OBJECT(item), "indicator");
     GtkWidget      *expander = gtk_list_item_get_child(item);
+    gboolean        dirty;
 
     if (g_type_is_a(G_TYPE_FROM_INSTANCE(gtk_tree_list_row_get_item(row)),
                     ROOT_TYPE_ENTRY)) {
@@ -234,17 +483,42 @@ on_row_bind(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
             entry->kind == ROOT_STRUCTURE ? "folder-symbolic"
                                           : "folder-documents-symbolic");
         gtk_label_set_text(GTK_LABEL(label), entry->basename);
+        dirty = item_is_dirty(app, entry);
+        entry->dirty = dirty;
+        entry->indicator = indicator;
     } else {
         FileEntry *f = gtk_tree_list_row_get_item(row);
 
         gtk_image_set_from_icon_name(GTK_IMAGE(icon),
             f->is_dir ? "folder-symbolic" : "text-x-generic-symbolic");
         gtk_label_set_text(GTK_LABEL(label), f->name);
+        dirty = item_is_dirty(app, f);
+        f->dirty = dirty;
+        f->indicator = indicator;
     }
+    gtk_label_set_text(GTK_LABEL(indicator), dirty ? "●" : "");
     gtk_tree_expander_set_list_row(GTK_TREE_EXPANDER(expander), row);
     /* pos+1 : l'index 0 est valide, GUINT_TO_POINTER(0) == NULL. */
     g_object_set_data(G_OBJECT(expander), "sieb-pos",
                       GUINT_TO_POINTER(gtk_list_item_get_position(item) + 1));
+}
+
+static void
+on_row_unbind(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
+              gpointer G_GNUC_UNUSED data)
+{
+    GtkTreeListRow *row = gtk_list_item_get_item(item);
+
+    /* La row est recyclée : on détache l'indicateur de l'entrée pour que
+     * recompute_dirty n'écrive pas dans un widget qui montre autre chose. */
+    if (row != NULL) {
+        gpointer it = gtk_tree_list_row_get_item(row);
+
+        if (g_type_is_a(G_TYPE_FROM_INSTANCE(it), ROOT_TYPE_ENTRY))
+            ((RootEntry *)it)->indicator = NULL;
+        else
+            ((FileEntry *)it)->indicator = NULL;
+    }
 }
 
 static void
@@ -1832,6 +2106,7 @@ rebuild_explorer(App *app)
     factory = gtk_signal_list_item_factory_new();
     g_signal_connect(factory, "setup", G_CALLBACK(on_row_setup), app);
     g_signal_connect(factory, "bind", G_CALLBACK(on_row_bind), app);
+    g_signal_connect(factory, "unbind", G_CALLBACK(on_row_unbind), app);
 
     view = gtk_list_view_new(GTK_SELECTION_MODEL(app->selection),
                              GTK_LIST_ITEM_FACTORY(factory));
@@ -1863,6 +2138,9 @@ rebuild_explorer(App *app)
     for (guint i = 0; i < expanded->len; i++)
         expand_path(app, expanded->pdata[i]);
     g_ptr_array_free(expanded, TRUE);
+
+    /* Réaffiche les témoins non sauvegardés (les chemins sont inchangés). */
+    recompute_dirty(app);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2004,6 +2282,8 @@ build_editor(App *app)
 
     g_signal_connect(app->buffer, "notify::cursor-position",
                      G_CALLBACK(on_cursor_notify), app);
+    g_signal_connect(app->buffer, "changed",
+                     G_CALLBACK(on_buffer_changed), app);
 
     scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_has_frame(GTK_SCROLLED_WINDOW(scrolled), TRUE);
@@ -2043,9 +2323,13 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         const GActionEntry win_actions[] = {
             { "add-structure", on_add_structure, NULL, NULL, NULL, { 0 } },
             { "add-project",   on_add_project,   NULL, NULL, NULL, { 0 } },
+            { "save",          on_save_activated, NULL, NULL, NULL, { 0 } },
         };
         g_action_map_add_action_entries(G_ACTION_MAP(app->win), win_actions,
                                         G_N_ELEMENTS(win_actions), app);
+        /* Ctrl+S (ou Cmd+S sur mac) déclenche win.save. */
+        gtk_application_set_accels_for_action(gtk_app, "win.save",
+                                              (const char *[]){"<Primary>s", NULL});
     }
 
     /* Éditeur */
@@ -2076,6 +2360,11 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     app->status_pos = GTK_LABEL(gtk_label_new("1:1"));
     gtk_label_set_xalign(app->status_pos, 1.0);
 
+    /* Témoin non sauvegardé : point affiché à droite du nom de fichier. */
+    app->status_mod = GTK_LABEL(gtk_label_new(NULL));
+    gtk_label_set_xalign(GTK_LABEL(app->status_mod), 0.0);
+    gtk_widget_set_margin_start(GTK_WIDGET(app->status_mod), 8);
+
     statusbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     app->statusbar = statusbar;
     gtk_widget_set_margin_start(statusbar, 8);
@@ -2086,6 +2375,7 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     gtk_widget_set_margin_start(sep, 8);
     gtk_widget_set_margin_end(sep, 8);
     gtk_box_append(GTK_BOX(statusbar), GTK_WIDGET(app->status_file));
+    gtk_box_append(GTK_BOX(statusbar), GTK_WIDGET(app->status_mod));
     gtk_box_append(GTK_BOX(statusbar), sep);
     gtk_box_append(GTK_BOX(statusbar), GTK_WIDGET(app->status_pos));
 
@@ -2097,6 +2387,8 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     gtk_window_set_child(app->win, root);
 
     update_status(app);
+    update_modified_indicator(app);
+    recompute_dirty(app);
 
     /* Boot sur le dernier fichier ouvert, s'il existe encore. */
     {
@@ -2122,14 +2414,20 @@ main(int argc, char **argv)
     app = g_new0(App, 1);
     app->sel_anchor = GTK_INVALID_LIST_POSITION;
     app->multi_paths = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    app->dirty = dirty_store_new();
 
     gtk_app = GTK_APPLICATION(adw_application_new("org.sieb.code-dashboard",
                                                   G_APPLICATION_DEFAULT_FLAGS));
     g_signal_connect(gtk_app, "activate", G_CALLBACK(on_activate), app);
 
     status = g_application_run(G_APPLICATION(gtk_app), argc, argv);
+    /* Persiste les fichiers sales avant de quitter (le buffer courant inclus). */
+    if (app->dirty != NULL)
+        dirty_persist_now(app->dirty);
     g_object_unref(gtk_app);
     g_hash_table_destroy(app->multi_paths);
+    g_free(app->saved_content);
+    dirty_store_free(app->dirty);
     g_free(app);
 
     return status;
