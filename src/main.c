@@ -31,6 +31,11 @@ typedef struct {
     RootEntry         *pending_remove;
     RootKind           pending_kind;
     gboolean           centered;
+    /* Source de vérité de la multi-sélection : set de chemins (clés
+     * g_strdup/g_free). GTK ne fait qu'afficher. */
+    GHashTable        *multi_paths;
+    /* Évite la récursion selection-changed pendant nos propres mutations. */
+    gboolean           selection_guard;
 } App;
 
 /* ------------------------------------------------------------------ */
@@ -64,6 +69,9 @@ static void reveal_path(App *app, const char *file_path);
 static void rebuild_explorer(App *app);
 static void on_selection_changed(GtkSelectionModel *model, guint position,
                                  guint n_items, gpointer data);
+static char *explorer_path_at_pos(App *app, guint pos);
+static void selection_apply_from_paths(App *app);
+static void selection_sync_from_model(App *app);
 
 /* ------------------------------------------------------------------ */
 /* Chargement de fichier                                               */
@@ -1192,14 +1200,95 @@ static guint selection_changed_handler_id = 0;
 /* Trace les changements de sélection (debug multi-sélection). */
 static void
 on_selection_changed(GtkSelectionModel *model, guint position, guint n_items,
-                     gpointer G_GNUC_UNUSED data)
+                     gpointer data)
 {
+    App *app = data;
+
     if (g_getenv("SIEB_DEBUG") != NULL) {
         GtkBitset *bits = gtk_selection_model_get_selection(model);
         g_printerr("SIEB: sélection -> %lu éléments (changed pos=%u n=%u)\n",
                    (unsigned long)gtk_bitset_get_size(bits), position, n_items);
         gtk_bitset_unref(bits);
     }
+
+    /* Source de vérité = multi_paths ; GTK n'est que le rendu. Dès qu'il
+     * modifie la sélection seul (souris, ListView), on la réécrit depuis
+     * la table. Le guard couvre nos propres mutations (pas de récursion). */
+    if (app->selection_guard)
+        return;
+    if (g_hash_table_size(app->multi_paths) >= 1)
+        selection_apply_from_paths(app);
+}
+
+/* Chemin (g_strdup) de la row à pos, ou NULL si invalide. */
+static char *
+explorer_path_at_pos(App *app, guint pos)
+{
+    GtkTreeListRow *row;
+
+    if (app->tree_model == NULL)
+        return NULL;
+    row = gtk_tree_list_model_get_row(app->tree_model, pos);
+    if (row == NULL)
+        return NULL;
+    {
+        gpointer item = gtk_tree_list_row_get_item(row);
+        char    *path = g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)
+                        ? g_strdup(((RootEntry *)item)->path)
+                        : g_strdup(((FileEntry *)item)->path);
+
+        g_object_unref(row);
+        return path;
+    }
+}
+
+/* Réécrit la sélection GTK pour qu'elle reflète exactement multi_paths.
+ * guard posé pendant la mutation : les selection-changed imbriqués sont
+ * ignorés (la sélection correspond déjà à la table à la fin). */
+static void
+selection_apply_from_paths(App *app)
+{
+    GListModel *model = G_LIST_MODEL(app->tree_model);
+    guint       n;
+
+    app->selection_guard = TRUE;
+    gtk_selection_model_unselect_all(GTK_SELECTION_MODEL(app->selection));
+    n = g_list_model_get_n_items(model);
+    for (guint i = 0; i < n; i++) {
+        char    *path = explorer_path_at_pos(app, i);
+        gboolean in_set = path != NULL
+                          && g_hash_table_contains(app->multi_paths, path);
+
+        g_free(path);
+        if (in_set)
+            gtk_selection_model_select_item(GTK_SELECTION_MODEL(app->selection),
+                                            i, FALSE);
+    }
+    app->selection_guard = FALSE;
+}
+
+/* Re-synchronise multi_paths depuis la sélection GTK courante (utilisé
+ * après un Shift+clic pour ne pas désaligner la table). */
+static void
+selection_sync_from_model(App *app)
+{
+    GtkBitset    *bits = gtk_selection_model_get_selection(
+        GTK_SELECTION_MODEL(app->selection));
+    GtkBitsetIter iter;
+    guint         pos = 0;
+
+    g_hash_table_remove_all(app->multi_paths);
+    if (gtk_bitset_iter_init_first(&iter, bits, &pos)) {
+        do {
+            char *path = explorer_path_at_pos(app, pos);
+
+            if (path != NULL)
+                g_hash_table_add(app->multi_paths, path);
+            else
+                g_free(path);
+        } while (gtk_bitset_iter_next(&iter, &pos));
+    }
+    gtk_bitset_unref(bits);
 }
 
 /* Position d'une ligne : GtkTreeListRow de l'expander, sinon sieb-pos
@@ -1285,9 +1374,19 @@ on_primary_pressed(GtkGestureClick *gesture,
     pos = explorer_pos_at(view, x, y);
 
     if ((mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) == 0) {
-        if (pos != GTK_INVALID_LIST_POSITION)
-            app->sel_anchor = pos;
-        return; /* clic simple : la vue gère normalement */
+        /* Clic simple : on réinitialise la multi à {path sous le curseur}
+         * AVANT que GTK ne fasse son select exclusif — sinon le handler
+         * selection-changed ré-appliquerait la vieille multi. */
+        app->sel_anchor = pos;
+        g_hash_table_remove_all(app->multi_paths);
+        if (pos != GTK_INVALID_LIST_POSITION) {
+            char *p = explorer_path_at_pos(app, pos);
+
+            if (p != NULL)
+                g_hash_table_add(app->multi_paths, p);
+        }
+        selection_apply_from_paths(app);
+        return; /* la vue gère normalement le reste */
     }
 
     /* Ctrl/Shift : CLAIM le press — la vue ne fera PAS son select exclusif. */
@@ -1317,6 +1416,7 @@ on_primary_pressed(GtkGestureClick *gesture,
                        lo, n, unselect_rest, G_STRFUNC);
         gtk_selection_model_select_range(GTK_SELECTION_MODEL(app->selection),
                                          lo, n, unselect_rest);
+        selection_sync_from_model(app);
         return;
     }
 
@@ -1381,17 +1481,22 @@ on_primary_pressed(GtkGestureClick *gesture,
         }
     }
 
-    if (gtk_selection_model_is_selected(GTK_SELECTION_MODEL(app->selection), pos)) {
+    /* Ctrl : toggle du chemin dans multi_paths (source de vérité), puis
+     * on réécrit la sélection GTK. On ne se fie plus à is_selected(pos) :
+     * le bitset GTK peut avoir été écrasé par le passage du pointeur. */
+    {
+        char *path = explorer_path_at_pos(app, pos);
+
+        if (path == NULL)
+            return;
+        if (g_hash_table_contains(app->multi_paths, path))
+            g_hash_table_remove(app->multi_paths, path);
+        else
+            g_hash_table_add(app->multi_paths, path);
         if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: MUTATION unselect_item pos=%u from %s\n",
-                       pos, G_STRFUNC);
-        gtk_selection_model_unselect_item(GTK_SELECTION_MODEL(app->selection), pos);
-    } else {
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: MUTATION select_item pos=%u exclusive=%d from %s\n",
-                       pos, FALSE, G_STRFUNC);
-        gtk_selection_model_select_item(GTK_SELECTION_MODEL(app->selection),
-                                        pos, FALSE);
+            g_printerr("SIEB: Ctrl+clic -> multi_paths size=%lu\n",
+                       (unsigned long)g_hash_table_size(app->multi_paths));
+        selection_apply_from_paths(app);
     }
 
     if (g_getenv("SIEB_DEBUG") != NULL) {
@@ -1481,78 +1586,24 @@ path_is_under(const char *path, const char *dir)
     return g_str_has_prefix(path, dir) && (path[n] == '\0' || path[n] == '/');
 }
 
-/* Sélectionne la row dans l'explorateur (recherche par position).
- * N'écrase PAS une sélection multiple existante : si la row est déjà
- * sélectionnée (ex: Ctrl+clic), on laisse la multi intacte. */
+/* Sélectionne la row à l'ouverture d'un fichier : on réinitialise la
+ * multi à {chemin} (même contrat qu'un clic simple), puis on réapplique.
+ * C'est la source de vérité multi_paths qui est mise à jour, pas le
+ * bitset GTK directement. */
 static void
 select_row(App *app, GtkTreeListRow *row)
 {
-    GListModel *model = G_LIST_MODEL(gtk_multi_selection_get_model(app->selection));
-    guint n = g_list_model_get_n_items(model);
+    gpointer     item = gtk_tree_list_row_get_item(row);
+    const char  *path = g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)
+                        ? ((RootEntry *)item)->path
+                        : ((FileEntry *)item)->path;
 
-    if (g_getenv("SIEB_DEBUG") != NULL && row != NULL) {
-        gpointer item = gtk_tree_list_row_get_item(row);
-        if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
-            RootEntry *e = item;
-            g_printerr("SIEB: select_row target path=root:%s\n", e->path);
-        } else {
-            FileEntry *f = item;
-            g_printerr("SIEB: select_row target path=%s%s\n", f->path,
-                       f->is_dir ? "/" : "");
-        }
-    }
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_printerr("SIEB: select_row (open) reset multi -> %s\n", path);
 
-    for (guint i = 0; i < n; i++) {
-        GtkTreeListRow *r = g_list_model_get_item(model, i);
-        gboolean is = r == row;
-
-        g_object_unref(r);
-        if (is) {
-            if (!gtk_selection_model_is_selected(
-                    GTK_SELECTION_MODEL(app->selection), i)) {
-                if (g_getenv("SIEB_DEBUG") != NULL)
-                    g_printerr("SIEB: select_row pos=%u (exclusif)\n", i);
-                if (g_getenv("SIEB_DEBUG") != NULL)
-                    g_printerr("SIEB: MUTATION select_row pos=%u exclusive=1 from %s\n",
-                               i, G_STRFUNC);
-                gtk_selection_model_select_item(
-                    GTK_SELECTION_MODEL(app->selection), i, TRUE);
-            } else if (g_getenv("SIEB_DEBUG") != NULL) {
-                g_printerr("SIEB: select_row pos=%u déjà sélectionnée (skip)\n", i);
-            }
-            if (g_getenv("SIEB_DEBUG") != NULL) {
-                GtkBitset *bits = gtk_selection_model_get_selection(
-                    GTK_SELECTION_MODEL(app->selection));
-                guint nbits = (guint)gtk_bitset_get_size(bits);
-                guint j = 0;
-                GtkBitsetIter it;
-                g_printerr("SIEB: select_row après size=%lu:", (unsigned long)nbits);
-                if (gtk_bitset_iter_init_first(&it, bits, &j)) {
-                    do {
-                        const char *label = "<unknown>";
-                        if (app->tree_model != NULL) {
-                            GtkTreeListRow *r = gtk_tree_list_model_get_row(app->tree_model, j);
-                            if (r != NULL) {
-                                gpointer item = gtk_tree_list_row_get_item(r);
-                                if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
-                                    RootEntry *e = item;
-                                    label = e->path;
-                                } else {
-                                    FileEntry *f = item;
-                                    label = f->path;
-                                }
-                                g_object_unref(r);
-                            }
-                        }
-                        g_printerr(" [%u]=%s", j, label);
-                    } while (gtk_bitset_iter_next(&it, &j));
-                }
-                g_printerr("\n");
-                gtk_bitset_unref(bits);
-            }
-            return;
-        }
-    }
+    g_hash_table_remove_all(app->multi_paths);
+    g_hash_table_add(app->multi_paths, g_strdup(path));
+    selection_apply_from_paths(app);
 }
 
 /* Trouve la row d'un enfant DIRECT de la row à parent_pos, par nom.
@@ -1772,6 +1823,11 @@ rebuild_explorer(App *app)
     app->selection = gtk_multi_selection_new(G_LIST_MODEL(tree_model));
     selection_changed_handler_id = g_signal_connect(app->selection, "selection-changed",
                                                     G_CALLBACK(on_selection_changed), app);
+
+    /* Après recréation du modèle, les positions changent mais les chemins
+     * restent : on réapplique la multi (source de vérité) si elle existe. */
+    if (g_hash_table_size(app->multi_paths) >= 1)
+        selection_apply_from_paths(app);
 
     factory = gtk_signal_list_item_factory_new();
     g_signal_connect(factory, "setup", G_CALLBACK(on_row_setup), app);
@@ -2065,6 +2121,7 @@ main(int argc, char **argv)
 
     app = g_new0(App, 1);
     app->sel_anchor = GTK_INVALID_LIST_POSITION;
+    app->multi_paths = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 
     gtk_app = GTK_APPLICATION(adw_application_new("org.sieb.code-dashboard",
                                                   G_APPLICATION_DEFAULT_FLAGS));
@@ -2072,6 +2129,7 @@ main(int argc, char **argv)
 
     status = g_application_run(G_APPLICATION(gtk_app), argc, argv);
     g_object_unref(gtk_app);
+    g_hash_table_destroy(app->multi_paths);
     g_free(app);
 
     return status;
