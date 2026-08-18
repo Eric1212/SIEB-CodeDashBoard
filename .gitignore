@@ -1,0 +1,11 @@
+# Binaire compilé
+siebcdashboard
+
+# Objets
+*.o
+
+# Éditeurs / système
+.vscode/
+.idea/
+*.swp
+*~
