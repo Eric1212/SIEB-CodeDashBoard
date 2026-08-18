@@ -9,17 +9,28 @@
  */
 
 #include <gtk/gtk.h>
+#include <gdk/gdkkeysyms.h>
 #include <gtksourceview/gtksource.h>
 #include <adwaita.h>
 #include <glib/gstdio.h>
 #include "roots.h"
 #include "fslist.h"
 #include "dirty.h"
+#include "diffbar.h"
+
+/* Un fichier ouvert garde son propre buffer (l'historique undo survit à la
+ * navigation) et son propre baseline « propre ». */
+typedef struct {
+    GtkSourceBuffer *buffer;
+    char            *saved_content; /* contenu « propre » de référence */
+} PerFile;
 
 typedef struct {
     GtkWindow         *win;
     GtkPaned          *paned;
-    GtkSourceBuffer   *buffer;
+    GtkSourceBuffer   *buffer;    /* buffer courant (dérivé de files[]) */
+    GtkWidget         *source_view; /* la GtkSourceView (change de buffer) */
+    GHashTable        *files;     /* chemin -> PerFile* (buffer + baseline) */
     GListStore        *roots;
     GtkMultiSelection  *selection;
     GtkTreeListModel   *tree_model;
@@ -40,6 +51,9 @@ typedef struct {
     char              *saved_content;
     /* Fichiers non sauvegardés (témoin par fichier + contenu en attente). */
     DirtyStore        *dirty;
+    /* Barre de diff (vert/rouge) sur la scrollbar du fichier courant. */
+    GtkWidget         *diffbar;
+    guint              diff_timer; /* debounce du recalcul de diff */
     /* Ignore les signaux pendant un chargement (évite un sale transitoire). */
     gboolean           suppress_dirty;
     /* Source de vérité de la multi-sélection : set de chemins (clés
@@ -48,6 +62,19 @@ typedef struct {
     /* Évite la récursion selection-changed pendant nos propres mutations. */
     gboolean           selection_guard;
 } App;
+
+/* Libère un PerFile (buffer + baseline). */
+static void
+per_file_free(gpointer data)
+{
+    PerFile *pf = data;
+
+    if (pf == NULL)
+        return;
+    g_free(pf->saved_content);
+    g_object_unref(pf->buffer);
+    g_free(pf);
+}
 
 /* ------------------------------------------------------------------ */
 /* Statut                                                              */
@@ -86,8 +113,12 @@ static void selection_sync_from_model(App *app);
 static void on_save_activated(GSimpleAction *action, GVariant *param, gpointer data);
 static void update_modified_indicator(App *app);
 static void sync_current_dirty(App *app);
+static void schedule_diff(App *app);
+static void update_diff(App *app);
 static gboolean item_is_dirty(App *app, gpointer item);
 static void recompute_dirty(App *app);
+static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
+static void update_style_scheme(App *app);
 
 /* ------------------------------------------------------------------ */
 /* Chargement de fichier                                               */
@@ -101,11 +132,7 @@ load_file(App *app, const char *path)
 
     GtkSourceLanguageManager *lang_mgr;
     GtkSourceLanguage        *language;
-    const char               *cached;
-    gchar                    *content = NULL;
-    gsize                     len = 0;
-    gboolean                  restore_dirty;
-    GError                   *error = NULL;
+    PerFile                  *pf;
 
     /* Avant de quitter le buffer, on persiste le fichier précédent s'il
      * était sale (son contenu est déjà frais dans dirty_store). */
@@ -113,50 +140,90 @@ load_file(App *app, const char *path)
         && dirty_contains(app->dirty, app->current_file))
         dirty_persist_now(app->dirty);
 
-    /* Contenu en attente éventuel : on restaure, pas de re-lecture disque. */
-    cached = dirty_content(app->dirty, path);
-    restore_dirty = cached != NULL;
+    pf = g_hash_table_lookup(app->files, path);
 
-    /* Référence « propre » = contenu disque (baseline de comparaison). */
-    if (!g_file_get_contents(path, &content, &len, &error)) {
-        if (!restore_dirty) {
-            g_printerr("SIEB - CodeDashBoard: %s\n", error->message);
-            g_error_free(error);
-            return;
+    if (pf == NULL) {
+        /* Premier chargement de ce fichier dans la session : on crée son
+         * propre buffer (historique undo) et on le remplit. */
+        const char *cached;
+        gboolean    restore_dirty;
+        gchar      *content = NULL;
+        gsize       len = 0;
+        GError     *error = NULL;
+
+        pf = g_new0(PerFile, 1);
+        pf->buffer = gtk_source_buffer_new(NULL);
+        gtk_source_buffer_set_highlight_syntax(pf->buffer, TRUE);
+        /* Signaux éditeur (statut curseur + détection de dirty). */
+        g_signal_connect(pf->buffer, "notify::cursor-position",
+                         G_CALLBACK(on_cursor_notify), app);
+        g_signal_connect(pf->buffer, "changed",
+                         G_CALLBACK(on_buffer_changed), app);
+
+        /* Contenu en attente éventuel : on restaure, pas de re-lecture
+         * disque. */
+        cached = dirty_content(app->dirty, path);
+        restore_dirty = cached != NULL;
+
+        if (restore_dirty) {
+            /* Référence « propre » = BASELINE d'origine (celui dont
+             * découlent les modifications), et non le fichier disque
+             * courant : un changement externe du fichier source ne doit
+             * pas apparaître comme un nouveau dirty. */
+            const char *bl = dirty_baseline(app->dirty, path);
+
+            content = g_strdup(bl != NULL ? bl : "");
+            len = strlen(content);
+        } else {
+            /* Chargement propre : la référence est le contenu disque. */
+            if (!g_file_get_contents(path, &content, &len, &error)) {
+                g_printerr("SIEB - CodeDashBoard: %s\n", error->message);
+                g_error_free(error);
+                g_object_unref(pf->buffer);
+                g_free(pf);
+                return;
+            }
+
+            /* Fichier binaire ou encodage non UTF-8 : l'éditeur ne peut
+             * pas l'afficher — on prévient au lieu de casser le buffer. */
+            if (!g_utf8_validate(content, len, NULL)) {
+                GtkAlertDialog *alert = gtk_alert_dialog_new(
+                    "Fichier binaire ou encodage non UTF-8 :\n%s", path);
+
+                gtk_alert_dialog_show(alert, app->win);
+                g_free(content);
+                g_object_unref(pf->buffer);
+                g_free(pf);
+                return;
+            }
         }
-        /* Fichier disparu mais contenu en attente : baseline vide. */
-        g_error_free(error);
-        content = g_strdup("");
+
+        /* Détection de la langue par extension (retombe sur C). */
+        lang_mgr = gtk_source_language_manager_get_default();
+        language = gtk_source_language_manager_guess_language(lang_mgr, path, NULL);
+        if (language == NULL)
+            language = gtk_source_language_manager_get_language(lang_mgr, "c");
+        gtk_source_buffer_set_language(pf->buffer, language);
+
+        /* Pendant le chargement on ignore les signaux pour ne pas marquer
+         * un sale transitoire. */
+        app->suppress_dirty = TRUE;
+        gtk_text_buffer_set_text(GTK_TEXT_BUFFER(pf->buffer),
+                                 restore_dirty ? cached : content, -1);
+        app->suppress_dirty = FALSE;
+
+        pf->saved_content = content; /* devient la référence « propre » */
+        g_hash_table_insert(app->files, g_strdup(path), pf);
     }
 
-    /* Fichier binaire ou encodage non UTF-8 : l'éditeur ne peut pas
-     * l'afficher — on prévient au lieu de casser le buffer. */
-    if (!restore_dirty && !g_utf8_validate(content, len, NULL)) {
-        GtkAlertDialog *alert = gtk_alert_dialog_new(
-            "Fichier binaire ou encodage non UTF-8 :\n%s", path);
-        gtk_alert_dialog_show(alert, app->win);
-        g_free(content);
-        return;
-    }
-
-    /* Détection de la langue par extension (retombe sur C si inconnue). */
-    lang_mgr = gtk_source_language_manager_get_default();
-    language = gtk_source_language_manager_guess_language(lang_mgr, path, NULL);
-    if (language == NULL)
-        language = gtk_source_language_manager_get_language(lang_mgr, "c");
-    gtk_source_buffer_set_language(app->buffer, language);
-
-    /* Pendant le chargement on ignore les signaux pour ne pas marquer un
-     * sale transitoire ni écraser le contenu du fichier précédent. */
-    app->suppress_dirty = TRUE;
-    gtk_text_buffer_set_text(GTK_TEXT_BUFFER(app->buffer),
-                             restore_dirty ? cached : content, -1);
-    app->suppress_dirty = FALSE;
-
-    /* La référence « propre » sert à détecter les annulations. */
-    g_free(app->saved_content);
-    app->saved_content = g_strdup(content);
-    g_free(content);
+    /* Bascule sur le buffer de ce fichier (réutilisation : son undo est
+     * préservé ; app->buffer/saved_content dérivent de PerFile). */
+    app->buffer = pf->buffer;
+    app->saved_content = pf->saved_content;
+    gtk_text_view_set_buffer(GTK_TEXT_VIEW(app->source_view),
+                             GTK_TEXT_BUFFER(pf->buffer));
+    /* Le buffer (neuf ou réutilisé) doit suivre le thème clair/sombre. */
+    update_style_scheme(app);
 
     /* Le fichier ouvert devient la cible de Ctrl+S. */
     g_free(app->current_file);
@@ -166,8 +233,8 @@ load_file(App *app, const char *path)
     gtk_label_set_ellipsize(app->status_file, PANGO_ELLIPSIZE_MIDDLE);
     update_status(app);
 
-    if (restore_dirty) {
-        /* Fichier sale restauré : on garde l'état « non sauvegardé ». */
+    if (dirty_contains(app->dirty, path)) {
+        /* Fichier sale (restauré ou rouvert) : on garde « non sauvegardé ». */
         gtk_text_buffer_set_modified(GTK_TEXT_BUFFER(app->buffer), TRUE);
     } else {
         gtk_text_buffer_set_modified(GTK_TEXT_BUFFER(app->buffer), FALSE);
@@ -182,6 +249,7 @@ load_file(App *app, const char *path)
 
     update_modified_indicator(app);
     recompute_dirty(app);
+    update_diff(app);
 }
 
 /* ------------------------------------------------------------------ */
@@ -293,6 +361,7 @@ on_buffer_changed(GtkTextBuffer G_GNUC_UNUSED *buffer, gpointer data)
     if (app->suppress_dirty)
         return; /* chargement en cours : ne pas écraser l'ancien contenu sale */
     sync_current_dirty(app);
+    schedule_diff(app);
 }
 
 /* Sale = buffer ≠ contenu disque de référence. Détecte aussi la transition
@@ -313,7 +382,7 @@ sync_current_dirty(App *app)
     was = dirty_contains(app->dirty, app->current_file);
 
     if (is)
-        dirty_mark(app->dirty, app->current_file, text);
+        dirty_mark(app->dirty, app->current_file, text, app->saved_content);
     else
         dirty_clear(app->dirty, app->current_file);
     g_free(text);
@@ -324,6 +393,45 @@ sync_current_dirty(App *app)
         recompute_dirty(app);
         dirty_schedule_persist(app->dirty);
     }
+}
+
+#define DIFF_DEBOUNCE_MS 150
+
+static gboolean
+update_diff_timeout(gpointer data)
+{
+    App *app = data;
+
+    app->diff_timer = 0;
+    update_diff(app);
+    return G_SOURCE_REMOVE;
+}
+
+/* Recalcule la barre de diff après une courte accalmie de frappe. */
+static void
+schedule_diff(App *app)
+{
+    if (app->diff_timer != 0)
+        g_source_remove(app->diff_timer);
+    app->diff_timer = g_timeout_add(DIFF_DEBOUNCE_MS, update_diff_timeout, app);
+}
+
+/* Diff référence disque <-> buffer, affiché dans la barre (vert/rouge). */
+static void
+update_diff(App *app)
+{
+    GPtrArray *ranges;
+    guint      total;
+
+    if (app->diffbar == NULL)
+        return;
+    ranges = g_ptr_array_new_with_free_func(g_free);
+    if (app->current_file != NULL && app->saved_content != NULL)
+        siebd_diff_compute(app->saved_content, buffer_text(app), ranges, &total);
+    else
+        total = 0;
+    siebd_diff_bar_set_ranges(SIEBD_DIFF_BAR(app->diffbar), ranges, total);
+    g_ptr_array_free(ranges, TRUE);
 }
 
 /* Ctrl+S : écrit le contenu du buffer dans le fichier courant. */
@@ -355,12 +463,18 @@ on_save_activated(GSimpleAction G_GNUC_UNUSED *action,
         g_error_free(error);
     } else {
         /* Le contenu disque devient la nouvelle référence « propre ». */
-        g_free(app->saved_content);
-        app->saved_content = buffer_text(app);
+        PerFile *pf = g_hash_table_lookup(app->files, app->current_file);
+
+        if (pf != NULL) {
+            g_free(pf->saved_content);
+            pf->saved_content = buffer_text(app);
+            app->saved_content = pf->saved_content;
+        }
         dirty_clear(app->dirty, app->current_file);
         gtk_text_buffer_set_modified(GTK_TEXT_BUFFER(app->buffer), FALSE);
         update_modified_indicator(app);
         recompute_dirty(app);
+        update_diff(app);
         dirty_persist_now(app->dirty);
     }
     g_free(text);
@@ -2179,6 +2293,44 @@ on_theme_notify(GObject G_GNUC_UNUSED *obj, GParamSpec G_GNUC_UNUSED *pspec, gpo
     update_style_scheme((App *)data);
 }
 
+/* Ctrl+Z : undo standard du buffer ; quand plus rien à défaire mais que le
+ * fichier est encore sale (ex: dirty restauré via set_text, historique vide),
+ * un dernier Ctrl+Z revient au baseline et efface tout le dirty. */
+static gboolean
+on_editor_key_pressed(GtkEventControllerKey G_GNUC_UNUSED *controller,
+                      guint keyval, guint G_GNUC_UNUSED keycode,
+                      GdkModifierType state, gpointer data)
+{
+    App *app = data;
+
+    if (keyval != GDK_KEY_z)
+        return FALSE;
+    if ((state & GDK_CONTROL_MASK) == 0
+        || (state & GDK_ALT_MASK) != 0
+        || (state & GDK_SHIFT_MASK) != 0) /* Ctrl+Shift+Z = redo, laisser */
+        return FALSE;
+
+    if (gtk_text_buffer_get_can_undo(GTK_TEXT_BUFFER(app->buffer))) {
+        gtk_text_buffer_undo(GTK_TEXT_BUFFER(app->buffer));
+        return TRUE; /* consommé, l'undo standard a fait le boulot */
+    }
+
+    /* Plus d'undo dans le buffer : si le fichier est sale, on revient au
+     * baseline (ce dernier Ctrl+Z « efface le dirty »). */
+    if (app->current_file != NULL && app->saved_content != NULL
+        && dirty_contains(app->dirty, app->current_file)) {
+        app->suppress_dirty = TRUE;
+        gtk_text_buffer_set_text(GTK_TEXT_BUFFER(app->buffer),
+                                 app->saved_content, -1);
+        app->suppress_dirty = FALSE;
+        gtk_text_buffer_set_modified(GTK_TEXT_BUFFER(app->buffer), FALSE);
+        sync_current_dirty(app); /* vide le dirty + indicateurs + persist */
+        update_diff(app);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 /* ------------------------------------------------------------------ */
 /* Construction de l'UI                                                */
 /* ------------------------------------------------------------------ */
@@ -2242,6 +2394,7 @@ build_editor(App *app)
     GtkSourceLanguageManager *lang_mgr;
     GtkSourceLanguage        *language;
     GtkWidget                *scrolled;
+    GtkWidget                *overlay;
     GtkWidget                *view;
     const char               *demo =
         "/* demo.c — coloration GtkSourceView */\n"
@@ -2269,6 +2422,7 @@ build_editor(App *app)
     gtk_source_buffer_set_highlight_syntax(app->buffer, TRUE);
 
     view = gtk_source_view_new_with_buffer(app->buffer);
+    app->source_view = view;
     gtk_source_view_set_show_line_numbers(GTK_SOURCE_VIEW(view), TRUE);
     gtk_source_view_set_tab_width(GTK_SOURCE_VIEW(view), 4);
     gtk_source_view_set_auto_indent(GTK_SOURCE_VIEW(view), TRUE);
@@ -2285,12 +2439,33 @@ build_editor(App *app)
     g_signal_connect(app->buffer, "changed",
                      G_CALLBACK(on_buffer_changed), app);
 
+    /* Intercepte Ctrl+Z (phase capture) pour gérer le « dernier undo »
+     * qui efface le dirty quand l'historique du buffer est épuisé. */
+    {
+        GtkEventController *key = gtk_event_controller_key_new();
+
+        gtk_event_controller_set_propagation_phase(key, GTK_PHASE_CAPTURE);
+        g_signal_connect(key, "key-pressed",
+                         G_CALLBACK(on_editor_key_pressed), app);
+        gtk_widget_add_controller(view, key);
+    }
+
     scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_has_frame(GTK_SCROLLED_WINDOW(scrolled), TRUE);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), view);
-    return scrolled;
+
+    /* La barre de diff est superposée à droite, par-dessus la scrollbar :
+     * transparente et sans cible d'événements (la scrollbar reste
+     * utilisable). */
+    overlay = gtk_overlay_new();
+    gtk_overlay_set_child(GTK_OVERLAY(overlay), scrolled);
+    app->diffbar = siebd_diff_bar_new();
+    gtk_widget_set_halign(app->diffbar, GTK_ALIGN_END);
+    gtk_widget_set_valign(app->diffbar, GTK_ALIGN_FILL);
+    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), app->diffbar);
+    return overlay;
 }
 
 static void
@@ -2415,6 +2590,8 @@ main(int argc, char **argv)
     app->sel_anchor = GTK_INVALID_LIST_POSITION;
     app->multi_paths = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     app->dirty = dirty_store_new();
+    app->files = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+                                       per_file_free);
 
     gtk_app = GTK_APPLICATION(adw_application_new("org.sieb.code-dashboard",
                                                   G_APPLICATION_DEFAULT_FLAGS));
@@ -2425,8 +2602,10 @@ main(int argc, char **argv)
     if (app->dirty != NULL)
         dirty_persist_now(app->dirty);
     g_object_unref(gtk_app);
+    if (app->diff_timer != 0)
+        g_source_remove(app->diff_timer);
     g_hash_table_destroy(app->multi_paths);
-    g_free(app->saved_content);
+    g_hash_table_destroy(app->files); /* libère chaque PerFile */
     dirty_store_free(app->dirty);
     g_free(app);
 

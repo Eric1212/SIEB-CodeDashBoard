@@ -4,7 +4,7 @@ PKGS    := gtk4 gtksourceview-5 libadwaita-1 json-glib-1.0
 CFLAGS  += $(shell pkg-config --cflags $(PKGS))
 LIBS    := $(shell pkg-config --libs $(PKGS))
 
-SRC     := src/main.c src/roots.c src/fslist.c src/dirty.c
+SRC     := src/main.c src/roots.c src/fslist.c src/dirty.c src/diffbar.c
 OBJ     := $(SRC:.c=.o)
 TARGET  := siebcdashboard
 

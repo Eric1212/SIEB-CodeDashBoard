@@ -2,7 +2,7 @@
  * Dirty : état des fichiers non sauvegardés (témoin + contenu en attente).
  *
  * Persistance : ~/.config/siebcodedashboard/dirty.json
- * Format : {"dirty":[{"path": "...", "content": "..."}, ...]}
+ * Format : {"dirty":[{"path": "...", "content": "...", "baseline": "..."}]}
  */
 
 #include "dirty.h"
@@ -22,6 +22,28 @@ dirty_config_path(void)
     return g_build_filename(dir, SIEB_CONFIG_DIR, SIEB_DIRTY_FILE, NULL);
 }
 
+static DirtyEntry *
+dirty_entry_new(const char *content, const char *baseline)
+{
+    DirtyEntry *e = g_new0(DirtyEntry, 1);
+
+    e->content = g_strdup(content != NULL ? content : "");
+    e->baseline = g_strdup(baseline != NULL ? baseline : "");
+    return e;
+}
+
+static void
+dirty_entry_free(gpointer ptr)
+{
+    DirtyEntry *e = ptr;
+
+    if (e == NULL)
+        return;
+    g_free(e->content);
+    g_free(e->baseline);
+    g_free(e);
+}
+
 DirtyStore *
 dirty_store_new(void)
 {
@@ -30,7 +52,8 @@ dirty_store_new(void)
     JsonNode     *root;
     GError       *error = NULL;
 
-    ds->store = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    ds->store = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+                                      dirty_entry_free);
     ds->file = dirty_config_path();
 
     parser = json_parser_new();
@@ -54,9 +77,18 @@ dirty_store_new(void)
                 JsonObject *e = json_array_get_object_element(arr, i);
                 const char *path = json_object_get_string_member(e, "path");
                 const char *content = json_object_get_string_member(e, "content");
+                const char *baseline;
+
+                /* Baseline absent (ancien format) : on retombe sur le
+                 * contenu pour ne pas créer de diff fantôme. */
+                if (json_object_has_member(e, "baseline"))
+                    baseline = json_object_get_string_member(e, "baseline");
+                else
+                    baseline = content;
 
                 if (path != NULL && content != NULL)
-                    g_hash_table_insert(ds->store, g_strdup(path), g_strdup(content));
+                    g_hash_table_insert(ds->store, g_strdup(path),
+                                        dirty_entry_new(content, baseline));
             }
         }
     }
@@ -77,9 +109,19 @@ dirty_store_free(DirtyStore *ds)
 }
 
 void
-dirty_mark(DirtyStore *ds, const char *path, const char *content)
+dirty_mark(DirtyStore *ds, const char *path, const char *content,
+           const char *baseline)
 {
-    g_hash_table_insert(ds->store, g_strdup(path), g_strdup(content));
+    DirtyEntry *e = g_hash_table_lookup(ds->store, path);
+
+    if (e != NULL) {
+        /* Déjà sale : on rafraîchit le contenu, on garde le baseline. */
+        g_free(e->content);
+        e->content = g_strdup(content);
+        return;
+    }
+    g_hash_table_insert(ds->store, g_strdup(path),
+                        dirty_entry_new(content, baseline));
 }
 
 void
@@ -97,7 +139,17 @@ dirty_contains(DirtyStore *ds, const char *path)
 const char *
 dirty_content(DirtyStore *ds, const char *path)
 {
-    return g_hash_table_lookup(ds->store, path);
+    DirtyEntry *e = g_hash_table_lookup(ds->store, path);
+
+    return e != NULL ? e->content : NULL;
+}
+
+const char *
+dirty_baseline(DirtyStore *ds, const char *path)
+{
+    DirtyEntry *e = g_hash_table_lookup(ds->store, path);
+
+    return e != NULL ? e->baseline : NULL;
 }
 
 static gboolean
@@ -158,11 +210,15 @@ dirty_persist_now(DirtyStore *ds)
 
     g_hash_table_iter_init(&iter, ds->store);
     while (g_hash_table_iter_next(&iter, &key, &value)) {
+        DirtyEntry *e = value;
+
         json_builder_begin_object(builder);
         json_builder_set_member_name(builder, "path");
         json_builder_add_string_value(builder, key);
         json_builder_set_member_name(builder, "content");
-        json_builder_add_string_value(builder, value);
+        json_builder_add_string_value(builder, e->content);
+        json_builder_set_member_name(builder, "baseline");
+        json_builder_add_string_value(builder, e->baseline);
         json_builder_end_object(builder);
     }
 
