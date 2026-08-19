@@ -17,6 +17,7 @@
 #include "fslist.h"
 #include "dirty.h"
 #include "diffbar.h"
+#include "layout.h"
 
 /* Un fichier ouvert garde son propre buffer (l'historique undo survit à la
  * navigation) et son propre baseline « propre ». */
@@ -31,6 +32,9 @@ typedef struct {
     GtkSourceBuffer   *buffer;    /* buffer courant (dérivé de files[]) */
     GtkWidget         *source_view; /* la GtkSourceView (change de buffer) */
     GHashTable        *files;     /* chemin -> PerFile* (buffer + baseline) */
+    Layout            *layout;    /* modèle du tiling (source de vérité) */
+    GtkWidget         *layout_holder; /* conteneur du rendu paned */
+    GtkWidget         *layout_root;   /* arbre GtkPaned rendu */
     GListStore        *roots;
     GtkMultiSelection  *selection;
     GtkTreeListModel   *tree_model;
@@ -86,6 +90,10 @@ update_status(App *app)
     GtkTextIter iter;
     gchar      *text;
 
+    /* Aucune vue éditeur n'existe (layout sans tuile editor) : rien à
+     * afficher, l'état (buffer) peut quand même exister. */
+    if (app->buffer == NULL)
+        return;
     gtk_text_buffer_get_iter_at_mark(GTK_TEXT_BUFFER(app->buffer), &iter,
                                      gtk_text_buffer_get_insert(GTK_TEXT_BUFFER(app->buffer)));
 
@@ -116,9 +124,15 @@ static void sync_current_dirty(App *app);
 static void schedule_diff(App *app);
 static void update_diff(App *app);
 static gboolean item_is_dirty(App *app, gpointer item);
+static void create_roots_state(App *app);
+static GtkWidget *build_roots_view(App *app);
 static void recompute_dirty(App *app);
 static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
 static void update_style_scheme(App *app);
+static void render_layout(App *app);
+static void set_paned_positions(App *app);
+static GtkWidget *build_editor(App *app);
+static GtkWidget *build_roots_panel(App *app);
 
 /* ------------------------------------------------------------------ */
 /* Chargement de fichier                                               */
@@ -213,6 +227,10 @@ load_file(App *app, const char *path)
         app->suppress_dirty = FALSE;
 
         pf->saved_content = content; /* devient la référence « propre » */
+        /* Ref EXPLICITE détenue par PerFile : le buffer (flottant) est
+         * sinké par la vue éditeur ; sans notre ref il mourrait avec elle
+         * au retrait de la tuile (l'état doit survivre aux vues). */
+        g_object_ref(pf->buffer);
         g_hash_table_insert(app->files, g_strdup(path), pf);
     }
 
@@ -220,8 +238,10 @@ load_file(App *app, const char *path)
      * préservé ; app->buffer/saved_content dérivent de PerFile). */
     app->buffer = pf->buffer;
     app->saved_content = pf->saved_content;
-    gtk_text_view_set_buffer(GTK_TEXT_VIEW(app->source_view),
-                             GTK_TEXT_BUFFER(pf->buffer));
+    /* L'état existe toujours ; l'affichage seulement s'il y a une vue. */
+    if (app->source_view != NULL)
+        gtk_text_view_set_buffer(GTK_TEXT_VIEW(app->source_view),
+                                 GTK_TEXT_BUFFER(pf->buffer));
     /* Le buffer (neuf ou réutilisé) doit suivre le thème clair/sombre. */
     update_style_scheme(app);
 
@@ -263,6 +283,8 @@ buffer_text(App *app)
     GtkTextIter start;
     GtkTextIter end;
 
+    if (app->buffer == NULL)
+        return NULL;
     gtk_text_buffer_get_start_iter(GTK_TEXT_BUFFER(app->buffer), &start);
     gtk_text_buffer_get_end_iter(GTK_TEXT_BUFFER(app->buffer), &end);
     return gtk_text_buffer_get_text(GTK_TEXT_BUFFER(app->buffer), &start, &end, TRUE);
@@ -1551,6 +1573,11 @@ build_roots_panel(App *app)
     GtkWidget *add_button;
     GtkWidget *scrolled;
 
+    /* ÉTAT : modèle + sélection, créé une fois et partagé par toutes les
+     * vues « explorer » (les tuiles multiples montrent la même sélection). */
+    if (app->tree_model == NULL)
+        create_roots_state(app);
+
     /* Titre + bouton d'ajout. */
     title = gtk_label_new("Explorateur");
     gtk_label_set_xalign(GTK_LABEL(title), 0.0);
@@ -1567,14 +1594,15 @@ build_roots_panel(App *app)
     gtk_box_append(GTK_BOX(title_box), add_button);
 
     /* Zone de l'arbre : autoexpand=FALSE, tout replié (compact) ;
-     * l'expansion n'arrive qu'au clic de l'utilisateur, sans limite. */
+     * l'expansion n'arrive qu'au clic de l'utilisateur, sans limite.
+     * VUE : chaque tuile a son scrolled + sa liste (état partagé). */
     scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_vexpand(scrolled, TRUE);
     app->explorer_scrolled = scrolled;
-
-    rebuild_explorer(app);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled),
+                                  build_roots_view(app));
 
     panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_size_request(panel, 200, -1);
@@ -2073,8 +2101,15 @@ static void
 descend_path(App *app, const char *path, gboolean select_last)
 {
     GtkTreeListModel *tree = app->tree_model;
-    GListModel *model = G_LIST_MODEL(tree);
-    guint n = g_list_model_get_n_items(model);
+    GListModel *model;
+    guint n;
+
+    /* Layout sans explorateur : rien à déplier/sélectionner (l'état peut
+     * être créé plus tard par la première tuile « explorer »). */
+    if (tree == NULL)
+        return;
+    model = G_LIST_MODEL(tree);
+    n = g_list_model_get_n_items(model);
 
     for (guint i = 0; i < n; i++) {
         GtkTreeListRow *row = g_list_model_get_item(model, i);
@@ -2186,25 +2221,15 @@ collect_expanded(GListModel *model, GPtrArray *paths)
     }
 }
 
-/* Reconstruit entièrement l'explorateur (après création/suppression/
- * renommage sur le disque) et restaure les dossiers ouverts. */
+/* ÉTAT de l'explorateur : modèle + sélection. Créé une seule fois, partagé
+ * par toutes les vues « explorer » ; retirer une tuile ne détruit rien.
+ * La sélection multi (app->multi_paths) est la source de vérité. */
 static void
-rebuild_explorer(App *app)
+create_roots_state(App *app)
 {
-    GPtrArray           *expanded = g_ptr_array_new_with_free_func(g_free);
-    GtkTreeListModel    *tree_model;
-    GtkListItemFactory  *factory;
-    GtkWidget           *view;
-
-    if (app->tree_model != NULL)
-        collect_expanded(G_LIST_MODEL(app->tree_model), expanded);
-
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: rebuild_explorer (dossiers ouverts=%u)\n",
-                   expanded->len);
+    GtkTreeListModel *tree_model;
 
     app->sel_anchor = GTK_INVALID_LIST_POSITION;
-
     tree_model = gtk_tree_list_model_new(G_LIST_MODEL(app->roots), FALSE, FALSE,
                                          roots_create_child, NULL, NULL);
     app->tree_model = tree_model;
@@ -2212,10 +2237,18 @@ rebuild_explorer(App *app)
     selection_changed_handler_id = g_signal_connect(app->selection, "selection-changed",
                                                     G_CALLBACK(on_selection_changed), app);
 
-    /* Après recréation du modèle, les positions changent mais les chemins
+    /* Après (re)création du modèle, les positions changent mais les chemins
      * restent : on réapplique la multi (source de vérité) si elle existe. */
     if (g_hash_table_size(app->multi_paths) >= 1)
         selection_apply_from_paths(app);
+}
+
+/* VUE de l'explorateur : une GtkListView par tuile, sur l'état partagé. */
+static GtkWidget *
+build_roots_view(App *app)
+{
+    GtkListItemFactory *factory;
+    GtkWidget           *view;
 
     factory = gtk_signal_list_item_factory_new();
     g_signal_connect(factory, "setup", G_CALLBACK(on_row_setup), app);
@@ -2241,12 +2274,35 @@ rebuild_explorer(App *app)
                          G_CALLBACK(on_primary_released), app);
         gtk_widget_add_controller(view, GTK_EVENT_CONTROLLER(gesture));
     }
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(app->explorer_scrolled),
-                                  view);
+    return view;
+}
+
+/* Reconstruit entièrement l'explorateur (après création/suppression/
+ * renommage sur le disque) et restaure les dossiers ouverts. */
+static void
+rebuild_explorer(App *app)
+{
+    GPtrArray *expanded = g_ptr_array_new_with_free_func(g_free);
+
+    if (app->tree_model != NULL)
+        collect_expanded(G_LIST_MODEL(app->tree_model), expanded);
 
     if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: rebuild_explorer vue créée (n_items=%u)\n",
-                   g_list_model_get_n_items(G_LIST_MODEL(tree_model)));
+        g_printerr("SIEB: rebuild_explorer (dossiers ouverts=%u)\n",
+                   expanded->len);
+
+    create_roots_state(app);
+
+    /* Met à jour la dernière vue créée (app->explorer_scrolled). Avec
+     * plusieurs vues « explorer », seules les vues suivantes reflètent le
+     * nouvel état — limitation acceptée (Phase 1). */
+    if (app->explorer_scrolled != NULL) {
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(app->explorer_scrolled),
+                                      build_roots_view(app));
+        if (g_getenv("SIEB_DEBUG") != NULL)
+            g_printerr("SIEB: rebuild_explorer vue créée (n_items=%u)\n",
+                       g_list_model_get_n_items(G_LIST_MODEL(app->tree_model)));
+    }
 
     /* Restaure l'état d'expansion. */
     for (guint i = 0; i < expanded->len; i++)
@@ -2335,19 +2391,19 @@ on_editor_key_pressed(GtkEventControllerKey G_GNUC_UNUSED *controller,
 /* Construction de l'UI                                                */
 /* ------------------------------------------------------------------ */
 
-/* Au premier affichage, moitié/moitié : l'éditeur prend toute la moitié droite. */
+/* Au premier affichage, applique les fractions persistées aux poignées. */
 static gboolean
-center_paned(GtkWidget *widget, GdkFrameClock G_GNUC_UNUSED *clock, gpointer data)
+center_paned(GtkWidget G_GNUC_UNUSED *widget, GdkFrameClock G_GNUC_UNUSED *clock, gpointer data)
 {
     App *app = data;
-    int  width;
 
-    /* Tick callback : tourne après le layout du frame — la largeur est réelle. */
-    width = gtk_widget_get_width(widget);
-    if (width <= 0)
+    /* Tick callback : tourne après le layout du frame — les tailles sont
+     * réelles. On réapplique les fractions persistées du modèle. */
+    if (app->layout_root == NULL
+        || gtk_widget_get_width(app->layout_root) <= 0)
         return G_SOURCE_CONTINUE;
 
-    gtk_paned_set_position(app->paned, width / 2);
+    set_paned_positions(app);
     return G_SOURCE_REMOVE; /* une seule fois */
 }
 
@@ -2357,19 +2413,14 @@ dump_allocations(gpointer data)
 {
     App       *app = data;
     GtkWidget *root = gtk_window_get_child(app->win);
-    GtkWidget *side = gtk_paned_get_start_child(app->paned);
-    GtkWidget *editor = gtk_paned_get_end_child(app->paned);
 
     fprintf(stderr,
-            "SIEB: win %dx%d | root %dx%d | paned %dx%d | side %dx%d | "
-            "editor %dx%d | statusbar %dx%d\n",
+            "SIEB: win %dx%d | root %dx%d | layout %dx%d | statusbar %dx%d\n",
             gtk_widget_get_width(GTK_WIDGET(app->win)),
             gtk_widget_get_height(GTK_WIDGET(app->win)),
             gtk_widget_get_width(root), gtk_widget_get_height(root),
-            gtk_widget_get_width(GTK_WIDGET(app->paned)),
-            gtk_widget_get_height(GTK_WIDGET(app->paned)),
-            gtk_widget_get_width(side), gtk_widget_get_height(side),
-            gtk_widget_get_width(editor), gtk_widget_get_height(editor),
+            gtk_widget_get_width(app->layout_root),
+            gtk_widget_get_height(app->layout_root),
             gtk_widget_get_width(app->statusbar),
             gtk_widget_get_height(app->statusbar));
     return G_SOURCE_REMOVE;
@@ -2396,31 +2447,48 @@ build_editor(App *app)
     GtkWidget                *scrolled;
     GtkWidget                *overlay;
     GtkWidget                *view;
-    const char               *demo =
-        "/* demo.c — coloration GtkSourceView */\n"
-        "#include <stdio.h>\n"
-        "\n"
-        "static int fib(int n)\n"
-        "{\n"
-        "    if (n < 2)\n"
-        "        return n;\n"
-        "    return fib(n - 1) + fib(n - 2);\n"
-        "}\n"
-        "\n"
-        "int main(void)\n"
-        "{\n"
-        "    for (int i = 0; i < 10; i++)\n"
-        "        printf(\"fib(%d) = %d\\n\", i, fib(i));\n"
-        "    return 0;\n"
-        "}\n";
 
-    lang_mgr = gtk_source_language_manager_get_default();
-    language = gtk_source_language_manager_get_language(lang_mgr, "c");
+    /* ÉTAT : le buffer (contenu + undo) vit dans App, créé une seule fois.
+     * Chaque tuile « editor » n'est qu'une vue sur ce buffer ; retirer une
+     * tuile ne détruit pas l'éditeur (le buffer survit). */
+    if (app->buffer == NULL) {
+        const char *demo =
+            "/* demo.c — coloration GtkSourceView */\n"
+            "#include <stdio.h>\n"
+            "\n"
+            "static int fib(int n)\n"
+            "{\n"
+            "    if (n < 2)\n"
+            "        return n;\n"
+            "    return fib(n - 1) + fib(n - 2);\n"
+            "}\n"
+            "\n"
+            "int main(void)\n"
+            "{\n"
+            "    for (int i = 0; i < 10; i++)\n"
+            "        printf(\"fib(%d) = %d\\n\", i, fib(i));\n"
+            "    return 0;\n"
+            "}\n";
 
-    app->buffer = gtk_source_buffer_new(NULL);
-    gtk_source_buffer_set_language(app->buffer, language);
-    gtk_source_buffer_set_highlight_syntax(app->buffer, TRUE);
+        lang_mgr = gtk_source_language_manager_get_default();
+        language = gtk_source_language_manager_get_language(lang_mgr, "c");
 
+        app->buffer = gtk_source_buffer_new(NULL);
+        gtk_source_buffer_set_language(app->buffer, language);
+        gtk_source_buffer_set_highlight_syntax(app->buffer, TRUE);
+        gtk_text_buffer_set_text(GTK_TEXT_BUFFER(app->buffer), demo, -1);
+        /* Ref explicite détenue par App : le buffer demo (flottant) est
+         * sinké par la vue ; il doit survivre au retrait de toutes les
+         * vues éditeur (l'état vit plus longtemps que les tuiles). */
+        g_object_ref(app->buffer);
+
+        g_signal_connect(app->buffer, "notify::cursor-position",
+                         G_CALLBACK(on_cursor_notify), app);
+        g_signal_connect(app->buffer, "changed",
+                         G_CALLBACK(on_buffer_changed), app);
+    }
+
+    /* VUE : une par tuile, attachée au buffer partagé. */
     view = gtk_source_view_new_with_buffer(app->buffer);
     app->source_view = view;
     gtk_source_view_set_show_line_numbers(GTK_SOURCE_VIEW(view), TRUE);
@@ -2431,13 +2499,6 @@ build_editor(App *app)
     gtk_source_view_set_show_right_margin(GTK_SOURCE_VIEW(view), TRUE);
     gtk_source_view_set_right_margin_position(GTK_SOURCE_VIEW(view), 80);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view), GTK_WRAP_NONE);
-
-    gtk_text_buffer_set_text(GTK_TEXT_BUFFER(app->buffer), demo, -1);
-
-    g_signal_connect(app->buffer, "notify::cursor-position",
-                     G_CALLBACK(on_cursor_notify), app);
-    g_signal_connect(app->buffer, "changed",
-                     G_CALLBACK(on_buffer_changed), app);
 
     /* Intercepte Ctrl+Z (phase capture) pour gérer le « dernier undo »
      * qui efface le dirty quand l'historique du buffer est épuisé. */
@@ -2468,14 +2529,266 @@ build_editor(App *app)
     return overlay;
 }
 
+/* ------------------------------------------------------------------ */
+/* Système de tuiles (layout dynamique + persistant)                   */
+/* ------------------------------------------------------------------ */
+
+/* Contexte d'une action de menu (split/remove) pour une tuile donnée. */
+typedef struct {
+    App     *app;
+    Layout  *node;
+    gboolean horizontal; /* split : orientation */
+    const char *piece;   /* split : nouvelle pièce */
+    gboolean remove;     /* remove : retirer la tuile */
+    GtkWidget *popover;
+} TileAction;
+
+/* Crée la VUE d'une pièce. Les morceaux (editor/explorer) ont un état
+ * unique partagé (buffer / modèle+sélection) qui survit aux tuiles ;
+ * chaque tuile obtient sa propre vue sur cet état. */
+static GtkWidget *
+create_piece(const char *id, App *app)
+{
+    GtkWidget *w;
+
+    if (strcmp(id, "editor") == 0)
+        w = build_editor(app);
+    else if (strcmp(id, "explorer") == 0)
+        w = build_roots_panel(app);
+    else {
+        /* Vide : emplacement réservé, prêt à recevoir un morceau (Phase 2). */
+        w = gtk_label_new("Vide\n(emplacement réservé)");
+        gtk_widget_set_halign(w, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(w, GTK_ALIGN_CENTER);
+    }
+
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_printerr("SIEB: create_piece id=%s -> %p\n",
+                   id != NULL ? id : "(null)", (void *)w);
+    return w;
+}
+
+/* Action choisie dans le menu d'une tuile : split ou remove, puis
+ * re-rendu + persistance. */
+static void
+on_tile_action(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    TileAction *act = data;
+    Layout     *new_root;
+
+    /* Ferme d'abord le popover (render_layout va détruire l'ancien arbre
+     * qui le contient — ne plus y toucher ensuite). */
+    gtk_popover_popdown(GTK_POPOVER(act->popover));
+
+    if (act->remove)
+        new_root = layout_remove(act->app->layout, act->node);
+    else
+        new_root = layout_split(act->app->layout, act->node,
+                                act->horizontal, act->piece);
+
+    act->app->layout = new_root;
+    layout_save(new_root);
+    render_layout(act->app);
+}
+
+static void
+add_menu_button(GtkWidget *box, const char *label, TileAction *act)
+{
+    GtkWidget *b = gtk_button_new_with_label(label);
+
+    gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+    g_signal_connect(b, "clicked", G_CALLBACK(on_tile_action), act);
+    gtk_box_append(GTK_BOX(box), b);
+}
+
+/* En-tête de tuile : nom + menu (diviser horizontalement/verticalement →
+ * pièce, retirer). Actions explicites pour éviter tout split/retrait
+ * accidentel. */
+static GtkWidget *
+build_tile_menu(Layout *node, App *app)
+{
+    GtkWidget  *pop;
+    GtkWidget  *menu;
+    GPtrArray  *acts;
+    const char *pieces[] = { "editor", "explorer", "empty" };
+    gsize       i;
+
+    pop = gtk_popover_new();
+    /* Libère les TileAction quand le popover est détruit. */
+    acts = g_ptr_array_new_with_free_func(g_free);
+    g_object_set_data_full(G_OBJECT(pop), "tile-actions", acts,
+                           (GDestroyNotify)g_ptr_array_unref);
+
+    menu = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_start(menu, 8);
+    gtk_widget_set_margin_end(menu, 8);
+    gtk_widget_set_margin_top(menu, 6);
+    gtk_widget_set_margin_bottom(menu, 6);
+
+    for (int h = 0; h < 2; h++) {
+        for (i = 0; i < G_N_ELEMENTS(pieces); i++) {
+            TileAction *a;
+            char       *label;
+
+            if (strcmp(pieces[i], node->id) == 0)
+                continue; /* ne pas dupliquer la tuile elle-même */
+            a = g_new0(TileAction, 1);
+            a->app = app;
+            a->node = node;
+            a->horizontal = (h == 0);
+            a->piece = pieces[i];
+            a->popover = pop;
+            g_ptr_array_add(acts, a);
+            label = g_strdup_printf("%s → %s",
+                                    h == 0 ? "Diviser horizontalement"
+                                           : "Diviser verticalement",
+                                    layout_name(pieces[i]));
+            add_menu_button(menu, label, a);
+            g_free(label);
+        }
+    }
+
+    /* Séparateur + retirer. */
+    gtk_box_append(GTK_BOX(menu), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    if (node->parent != NULL) {
+        TileAction *r = g_new0(TileAction, 1);
+
+        r->app = app;
+        r->node = node;
+        r->remove = TRUE;
+        r->popover = pop;
+        g_ptr_array_add(acts, r);
+        add_menu_button(menu, "Retirer cette tuile", r);
+    }
+
+    gtk_popover_set_child(GTK_POPOVER(pop), menu);
+    return pop;
+}
+
+static GtkWidget *
+build_tile_wrapper(Layout *node, App *app)
+{
+    GtkWidget *box;
+    GtkWidget *header;
+    GtkWidget *menu_btn;
+    GtkWidget *content;
+
+    /* Vue fraîche par tuile : retirer une tuile ne détruit que la vue,
+     * l'état du morceau (buffer / modèle) survit dans App. */
+    content = create_piece(node->id, app);
+
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_printerr("SIEB: tile id=%s widget=%p\n",
+                   node->id != NULL ? node->id : "(null)", (void *)content);
+
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    header = gtk_header_bar_new();
+    gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), FALSE);
+    {
+        GtkWidget *title = gtk_label_new(layout_name(node->id));
+
+        gtk_widget_set_halign(title, GTK_ALIGN_START);
+        gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title);
+    }
+
+    menu_btn = gtk_menu_button_new();
+    gtk_widget_add_css_class(menu_btn, "flat");
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(menu_btn), "open-menu-symbolic");
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(menu_btn),
+                                build_tile_menu(node, app));
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), menu_btn);
+
+    gtk_box_append(GTK_BOX(box), header);
+    gtk_box_append(GTK_BOX(box), content);
+    gtk_widget_set_vexpand(content, TRUE);
+    gtk_widget_set_hexpand(content, TRUE);
+    return box;
+}
+
+/* Rendu récursif du modèle -> arbre GtkPaned. Chaque tuile crée une vue
+ * fraîche sur l'état partagé de son morceau ; les paned sont reconstruits. */
+static GtkWidget *
+render_layout_node(Layout *node, App *app)
+{
+    GtkWidget *paned;
+
+    if (node->kind == LAYOUT_TILE)
+        return build_tile_wrapper(node, app);
+
+    paned = gtk_paned_new(node->kind == LAYOUT_HSPLIT
+                              ? GTK_ORIENTATION_HORIZONTAL
+                              : GTK_ORIENTATION_VERTICAL);
+    gtk_paned_set_start_child(GTK_PANED(paned), render_layout_node(node->a, app));
+    gtk_paned_set_end_child(GTK_PANED(paned), render_layout_node(node->b, app));
+    gtk_paned_set_resize_start_child(GTK_PANED(paned), TRUE);
+    gtk_paned_set_resize_end_child(GTK_PANED(paned), TRUE);
+    return paned;
+}
+
+/* Applique les fractions persistées aux poignées (après allocation). */
+static void
+set_paned_positions_walk(GtkWidget *widget, Layout *node)
+{
+    GtkPaned *paned;
+    int       total;
+
+    if (node == NULL || node->kind == LAYOUT_TILE)
+        return;
+    paned = GTK_PANED(widget);
+    total = (node->kind == LAYOUT_HSPLIT)
+                ? gtk_widget_get_width(widget)
+                : gtk_widget_get_height(widget);
+    if (total > 0)
+        gtk_paned_set_position(paned, (int)(node->fraction * total));
+    set_paned_positions_walk(gtk_paned_get_start_child(paned), node->a);
+    set_paned_positions_walk(gtk_paned_get_end_child(paned), node->b);
+}
+
+static void
+set_paned_positions(App *app)
+{
+    if (app->layout_root != NULL && app->layout != NULL)
+        set_paned_positions_walk(app->layout_root, app->layout);
+}
+
+/* À chaque affichage (1er ou après re-rendu), on réapplique les fractions. */
+static void
+on_layout_map(GtkWidget G_GNUC_UNUSED *widget, gpointer data)
+{
+    set_paned_positions((App *)data);
+}
+
+/* Reconstruit l'arbre paned depuis le modèle et l'insère dans le holder.
+ * Les vues des tuiles meurent avec l'ancien arbre ; l'état des morceaux
+ * (buffer / modèle) survit dans App. Les pointeurs de VUE sont invalidés
+ * ici et réassignés par les build_* des nouvelles tuiles (ou restent NULL
+ * si le nouveau layout n'affiche pas la pièce). */
+static void
+render_layout(App *app)
+{
+    /* gtk_widget_unparent retire proprement l'ancien arbre (les vues sont
+     * détruites : widgets GInitiallyUnowned sans ref externe). */
+    if (app->layout_root != NULL) {
+        gtk_widget_unparent(app->layout_root);
+        app->layout_root = NULL;
+    }
+    app->source_view = NULL;
+    app->diffbar = NULL;
+    app->explorer_scrolled = NULL;
+
+    app->layout_root = render_layout_node(app->layout, app);
+    gtk_widget_set_vexpand(app->layout_root, TRUE);
+    gtk_box_append(GTK_BOX(app->layout_holder), app->layout_root);
+    g_signal_connect_after(app->layout_root, "map",
+                           G_CALLBACK(on_layout_map), app);
+    gtk_widget_set_visible(app->layout_root, TRUE);
+}
+
 static void
 on_activate(GtkApplication *gtk_app, gpointer data)
 {
     App      *app = data;
     GtkWidget *header;
-    GtkWidget *paned;
-    GtkWidget *side;
-    GtkWidget *editor;
     GtkWidget *statusbar;
     GtkWidget *sep;
     AdwStyleManager *style_mgr;
@@ -2488,10 +2801,6 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     header = gtk_header_bar_new();
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
     gtk_window_set_titlebar(app->win, header);
-
-    /* Panneau latéral : Explorateur (roots + contenu des projets). */
-    app->roots = roots_load();
-    side = build_roots_panel(app);
 
     /* Actions du menu "+" du panneau Explorateur. */
     {
@@ -2507,17 +2816,13 @@ on_activate(GtkApplication *gtk_app, gpointer data)
                                               (const char *[]){"<Primary>s", NULL});
     }
 
-    /* Éditeur */
-    editor = build_editor(app);
+    /* Système de tuiles : modèle (source de vérité) + rendu paned. */
+    app->roots = roots_load();
+    app->layout = layout_load();
+    app->layout_holder = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    render_layout(app);
 
-    paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_paned_set_start_child(GTK_PANED(paned), side);
-    gtk_paned_set_end_child(GTK_PANED(paned), editor);
-    /* Le paned doit occuper toute la hauteur restante (sinon ~80px écrasés). */
-    gtk_widget_set_vexpand(paned, TRUE);
-    app->paned = GTK_PANED(paned);
-
-    /* Moitié/moitié au premier affichage, puis ajustable à la poignée. */
+    /* Moitié/moitié (fractions persistées) au premier affichage. */
     g_signal_connect(app->win, "map", G_CALLBACK(on_first_map), app);
 
     /* Suivi du thème clair/sombre système : AdwStyleManager suit
@@ -2556,7 +2861,7 @@ on_activate(GtkApplication *gtk_app, gpointer data)
 
     /* Assemblage final */
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_box_append(GTK_BOX(root), paned);
+    gtk_box_append(GTK_BOX(root), app->layout_holder);
     gtk_box_append(GTK_BOX(root), statusbar);
 
     gtk_window_set_child(app->win, root);
@@ -2606,6 +2911,7 @@ main(int argc, char **argv)
         g_source_remove(app->diff_timer);
     g_hash_table_destroy(app->multi_paths);
     g_hash_table_destroy(app->files); /* libère chaque PerFile */
+    layout_free(app->layout);
     dirty_store_free(app->dirty);
     g_free(app);
 
