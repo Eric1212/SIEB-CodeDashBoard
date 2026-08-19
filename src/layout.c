@@ -231,17 +231,22 @@ layout_split(Layout *root, Layout *node, gboolean horizontal, const char *new_id
 {
     Layout *new_tile = layout_tile(new_id);
     Layout *split;
+    Layout *old_parent;
 
     if (node == NULL || new_tile == NULL)
         return root;
 
+    /* Récupère l'ancien parent AVANT layout_split_node : celui-ci réécrit
+     * node->parent (le nœud devient le fils a du nouveau split). */
+    old_parent = node->parent;
+
     split = layout_split_node(node, new_tile, horizontal);
 
-    if (node->parent == NULL) {
+    if (old_parent == NULL) {
         /* node était le root : le split devient la nouvelle racine. */
         return split;
     }
-    replace_child(node->parent, node, split);
+    replace_child(old_parent, node, split);
     return root;
 }
 
