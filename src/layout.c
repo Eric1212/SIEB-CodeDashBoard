@@ -30,7 +30,9 @@ layout_tile(const char *id)
     Layout *n = g_new0(Layout, 1);
 
     n->kind = LAYOUT_TILE;
-    n->id = g_strdup(id);
+    /* Une tuile a TOUJOURS un id : NULL serait un crash au rendu
+     * (create_piece) et une écriture "id":null dans le JSON. */
+    n->id = g_strdup(id != NULL ? id : "empty");
     n->fraction = 0.5;
     return n;
 }
@@ -41,7 +43,9 @@ layout_split_node(Layout *a, Layout *b, gboolean horizontal)
     Layout *n = g_new0(Layout, 1);
 
     n->kind = horizontal ? LAYOUT_HSPLIT : LAYOUT_VSPLIT;
-    n->fraction = DEFAULT_FRACTION;
+    /* Split utilisateur : deux moitiés (le boot à ~1/4 est réglé à part
+     * dans layout_load). Les fractions s'ajustent ensuite au drag. */
+    n->fraction = 0.5;
     n->a = a;
     n->b = b;
     a->parent = n;
@@ -208,8 +212,13 @@ layout_load(void)
 
 default_layout:
     /* Explorateur | Éditeur, fraction ~1/4. */
-    return layout_split_node(layout_tile("explorer"),
-                             layout_tile("editor"), TRUE);
+    {
+        Layout *l = layout_split_node(layout_tile("explorer"),
+                                      layout_tile("editor"), TRUE);
+
+        l->fraction = 0.25;
+        return l;
+    }
 }
 
 /* ------------------------------------------------ */
@@ -279,6 +288,22 @@ layout_remove(Layout *root, Layout *node)
     replace_child(parent->parent, parent, sibling);
     layout_free(parent);
     return root;
+}
+
+void
+layout_retile(Layout *node, const char *new_id)
+{
+    if (node == NULL || new_id == NULL)
+        return;
+    /* Un bloc (sous-arbre) devient une tuile unique : sa structure est
+     * libérée (le « Changer » du menu d'un bloc le réduit en pièce). */
+    layout_free(node->a);
+    layout_free(node->b);
+    node->a = NULL;
+    node->b = NULL;
+    node->kind = LAYOUT_TILE;
+    g_free(node->id);
+    node->id = g_strdup(new_id);
 }
 
 /* ------------------------------------------------ */

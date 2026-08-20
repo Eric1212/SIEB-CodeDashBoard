@@ -58,6 +58,7 @@ typedef struct {
     /* Barre de diff (vert/rouge) sur la scrollbar du fichier courant. */
     GtkWidget         *diffbar;
     guint              diff_timer; /* debounce du recalcul de diff */
+    guint              render_idle; /* re-rendu différé (destruction sûre) */
     /* Ignore les signaux pendant un chargement (évite un sale transitoire). */
     gboolean           suppress_dirty;
     /* Source de vérité de la multi-sélection : set de chemins (clés
@@ -112,6 +113,7 @@ on_cursor_notify(GObject G_GNUC_UNUSED *obj, GParamSpec G_GNUC_UNUSED *pspec, gp
 
 /* Prototypes (définitions plus bas dans le fichier). */
 static void reveal_path(App *app, const char *file_path);
+static void trace_destroy(GtkWidget *w, gpointer data);
 static void rebuild_explorer(App *app);
 static void on_selection_changed(GtkSelectionModel *model, guint position,
                                  guint n_items, gpointer data);
@@ -126,11 +128,16 @@ static void update_diff(App *app);
 static gboolean item_is_dirty(App *app, gpointer item);
 static void create_roots_state(App *app);
 static GtkWidget *build_roots_view(App *app);
+static gboolean test_split_idle(gpointer data);
+static gboolean test_grid_idle(gpointer data);
+static gboolean test_quit_idle(gpointer data);
 static void recompute_dirty(App *app);
 static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
 static void update_style_scheme(App *app);
 static void render_layout(App *app);
 static void set_paned_positions(App *app);
+static void on_paned_position(GObject *paned, GParamSpec *pspec,
+                              gpointer data);
 static GtkWidget *build_editor(App *app);
 static GtkWidget *build_roots_panel(App *app);
 
@@ -1600,6 +1607,8 @@ build_roots_panel(App *app)
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_vexpand(scrolled, TRUE);
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_signal_connect(scrolled, "destroy", G_CALLBACK(trace_destroy), app);
     app->explorer_scrolled = scrolled;
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled),
                                   build_roots_view(app));
@@ -2224,6 +2233,35 @@ collect_expanded(GListModel *model, GPtrArray *paths)
 /* ÉTAT de l'explorateur : modèle + sélection. Créé une seule fois, partagé
  * par toutes les vues « explorer » ; retirer une tuile ne détruit rien.
  * La sélection multi (app->multi_paths) est la source de vérité. */
+/* Trace d'état (SIEB_DEBUG) : adresses + refcounts des objets d'état
+ * partagés — permet de voir quand tree_model/selection deviennent
+ * invalides (double-unref / use-after-free). */
+static void
+trace_destroy(GtkWidget *w, gpointer data)
+{
+    App *app = data;
+
+    if (g_getenv("SIEB_DEBUG") == NULL)
+        return;
+    g_printerr("SIEB: destroy %s @%p (refs selection=%d)\n",
+               G_OBJECT_TYPE_NAME(w), (void *)w,
+               app->selection != NULL
+                   ? (int)((GObject *)app->selection)->ref_count : -1);
+}
+
+static void
+trace_state(App *app, const char *where)
+{
+    if (g_getenv("SIEB_DEBUG") == NULL)
+        return;
+    g_printerr("SIEB: [%s] tree_model=%p selection=%p (refs=%d) roots=%p "
+               "layout=%p\n",
+               where, (void *)app->tree_model, (void *)app->selection,
+               app->selection != NULL ? (int)((GObject *)app->selection)->ref_count
+                                      : -1,
+               (void *)app->roots, (void *)app->layout);
+}
+
 static void
 create_roots_state(App *app)
 {
@@ -2232,8 +2270,13 @@ create_roots_state(App *app)
     app->sel_anchor = GTK_INVALID_LIST_POSITION;
     tree_model = gtk_tree_list_model_new(G_LIST_MODEL(app->roots), FALSE, FALSE,
                                          roots_create_child, NULL, NULL);
+    /* Ref explicite : l'état nous appartient. Sans elle, la destruction
+     * des vues (qui unref le modèle/la sélection à leur dispose) peut
+     * libérer l'objet alors que app->selection le pointe encore. */
     app->tree_model = tree_model;
+    g_object_ref(app->tree_model);
     app->selection = gtk_multi_selection_new(G_LIST_MODEL(tree_model));
+    g_object_ref(app->selection);
     selection_changed_handler_id = g_signal_connect(app->selection, "selection-changed",
                                                     G_CALLBACK(on_selection_changed), app);
 
@@ -2241,6 +2284,7 @@ create_roots_state(App *app)
      * restent : on réapplique la multi (source de vérité) si elle existe. */
     if (g_hash_table_size(app->multi_paths) >= 1)
         selection_apply_from_paths(app);
+    trace_state(app, "create_roots_state");
 }
 
 /* VUE de l'explorateur : une GtkListView par tuile, sur l'état partagé. */
@@ -2257,6 +2301,20 @@ build_roots_view(App *app)
 
     view = gtk_list_view_new(GTK_SELECTION_MODEL(app->selection),
                              GTK_LIST_ITEM_FACTORY(factory));
+    /* GTK 4.22 libère 2 refs du model (et du selection) à la mort d'une
+     * GtkListView alors qu'il n'en a pris qu'une : le compteur de S1
+     * descend de 2 par vue morte. Avec plusieurs vues explorer partagées,
+     * S1 finit par être libéré alors que app->selection le pointe encore
+     * (use-after-free). On compense : +1 ref par vue créée ; elles ne sont
+     * jamais libérées (fuite bornée par le nombre de vues créées, l'état
+     * reste vivant pour toute la durée de vie de l'application). */
+    g_object_ref(app->selection);
+    if (g_getenv("SIEB_DEBUG") != NULL) {
+        g_printerr("SIEB: build_roots_view selection refs apres new=%d\n",
+                   app->selection != NULL
+                       ? (int)((GObject *)app->selection)->ref_count : -1);
+        g_signal_connect(view, "destroy", G_CALLBACK(trace_destroy), app);
+    }
     gtk_list_view_set_single_click_activate(GTK_LIST_VIEW(view), TRUE);
     g_signal_connect(view, "activate", G_CALLBACK(on_row_activate), app);
     {
@@ -2290,6 +2348,13 @@ rebuild_explorer(App *app)
     if (g_getenv("SIEB_DEBUG") != NULL)
         g_printerr("SIEB: rebuild_explorer (dossiers ouverts=%u)\n",
                    expanded->len);
+
+    /* L'ancien état (modèle + sélection) est remplacé : on libère nos
+     * refs explicites. Les vues existantes gardent leur propre ref. */
+    if (app->tree_model != NULL)
+        g_object_unref(app->tree_model);
+    if (app->selection != NULL)
+        g_object_unref(app->selection);
 
     create_roots_state(app);
 
@@ -2490,6 +2555,8 @@ build_editor(App *app)
 
     /* VUE : une par tuile, attachée au buffer partagé. */
     view = gtk_source_view_new_with_buffer(app->buffer);
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_signal_connect(view, "destroy", G_CALLBACK(trace_destroy), app);
     app->source_view = view;
     gtk_source_view_set_show_line_numbers(GTK_SOURCE_VIEW(view), TRUE);
     gtk_source_view_set_tab_width(GTK_SOURCE_VIEW(view), 4);
@@ -2533,12 +2600,13 @@ build_editor(App *app)
 /* Système de tuiles (layout dynamique + persistant)                   */
 /* ------------------------------------------------------------------ */
 
-/* Contexte d'une action de menu (split/remove) pour une tuile donnée. */
+/* Contexte d'une action de menu (split/change/remove) pour une tuile. */
 typedef struct {
     App     *app;
     Layout  *node;
     gboolean horizontal; /* split : orientation */
-    const char *piece;   /* split : nouvelle pièce */
+    const char *piece;   /* split/change : pièce visée */
+    gboolean change;     /* change : remplacer la pièce de la tuile */
     gboolean remove;     /* remove : retirer la tuile */
     GtkWidget *popover;
 } TileAction;
@@ -2568,27 +2636,48 @@ create_piece(const char *id, App *app)
     return w;
 }
 
-/* Action choisie dans le menu d'une tuile : split ou remove, puis
- * re-rendu + persistance. */
+/* Re-rendu différé : le handler de clic du menu est encore en train
+ * d'émettre quand on_tile_action tourne — détruire l'ancien arbre
+ * (donc le popover et son bouton) dans le handler provoque un
+ * use-after-free. Le re-rendu au tick suivant est sûr. */
+static gboolean
+render_layout_idle(gpointer data)
+{
+    App *app = data;
+
+    app->render_idle = 0;
+    render_layout(app);
+    return G_SOURCE_REMOVE;
+}
+
+/* Action choisie dans le menu d'une tuile : split, transformation ou
+ * remove, puis re-rendu différé + persistance. */
 static void
 on_tile_action(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 {
     TileAction *act = data;
+    App        *app = act->app;
     Layout     *new_root;
 
-    /* Ferme d'abord le popover (render_layout va détruire l'ancien arbre
+    /* Ferme d'abord le popover (le re-rendu va détruire l'ancien arbre
      * qui le contient — ne plus y toucher ensuite). */
     gtk_popover_popdown(GTK_POPOVER(act->popover));
 
     if (act->remove)
-        new_root = layout_remove(act->app->layout, act->node);
-    else
-        new_root = layout_split(act->app->layout, act->node,
+        new_root = layout_remove(app->layout, act->node);
+    else if (act->change) {
+        /* Transformation : la tuile garde sa place, change de pièce.
+         * L'état de l'ancienne pièce survit (découplé des vues). */
+        layout_retile(act->node, act->piece);
+        new_root = app->layout;
+    } else
+        new_root = layout_split(app->layout, act->node,
                                 act->horizontal, act->piece);
 
-    act->app->layout = new_root;
+    app->layout = new_root;
     layout_save(new_root);
-    render_layout(act->app);
+    if (app->render_idle == 0)
+        app->render_idle = g_idle_add(render_layout_idle, app);
 }
 
 static void
@@ -2601,9 +2690,8 @@ add_menu_button(GtkWidget *box, const char *label, TileAction *act)
     gtk_box_append(GTK_BOX(box), b);
 }
 
-/* En-tête de tuile : nom + menu (diviser horizontalement/verticalement →
- * pièce, retirer). Actions explicites pour éviter tout split/retrait
- * accidentel. */
+/* Menu d'une tuile : diviser (même pièce), changer de pièce, retirer.
+ * Actions explicites pour éviter tout split/retrait accidentel. */
 static GtkWidget *
 build_tile_menu(Layout *node, App *app)
 {
@@ -2625,27 +2713,43 @@ build_tile_menu(Layout *node, App *app)
     gtk_widget_set_margin_top(menu, 6);
     gtk_widget_set_margin_bottom(menu, 6);
 
+    /* Diviser : la nouvelle tuile prend la même pièce (un éditeur divisé
+     * donne un éditeur — deux vues sur le même état). */
     for (int h = 0; h < 2; h++) {
-        for (i = 0; i < G_N_ELEMENTS(pieces); i++) {
-            TileAction *a;
-            char       *label;
+        TileAction *a = g_new0(TileAction, 1);
 
-            if (strcmp(pieces[i], node->id) == 0)
-                continue; /* ne pas dupliquer la tuile elle-même */
-            a = g_new0(TileAction, 1);
-            a->app = app;
-            a->node = node;
-            a->horizontal = (h == 0);
-            a->piece = pieces[i];
-            a->popover = pop;
-            g_ptr_array_add(acts, a);
-            label = g_strdup_printf("%s → %s",
-                                    h == 0 ? "Diviser horizontalement"
-                                           : "Diviser verticalement",
-                                    layout_name(pieces[i]));
-            add_menu_button(menu, label, a);
-            g_free(label);
-        }
+        a->app = app;
+        a->node = node;
+        a->horizontal = (h == 0);
+        a->piece = node->id;
+        a->popover = pop;
+        g_ptr_array_add(acts, a);
+        add_menu_button(menu, h == 0 ? "Diviser horizontalement"
+                                     : "Diviser verticalement",
+                        a);
+    }
+
+    /* Changer de pièce : transformation en place (l'état de l'ancienne
+     * pièce survit). La pièce actuelle est désactivée. */
+    gtk_box_append(GTK_BOX(menu),
+                   gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    for (i = 0; i < G_N_ELEMENTS(pieces); i++) {
+        TileAction *a = g_new0(TileAction, 1);
+        GtkWidget  *b;
+
+        a->app = app;
+        a->node = node;
+        a->change = TRUE;
+        a->piece = pieces[i];
+        a->popover = pop;
+        g_ptr_array_add(acts, a);
+
+        b = gtk_button_new_with_label(layout_name(pieces[i]));
+        gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+        if (node->id != NULL && strcmp(pieces[i], node->id) == 0)
+            gtk_widget_set_sensitive(b, FALSE); /* pièce actuelle */
+        g_signal_connect(b, "clicked", G_CALLBACK(on_tile_action), a);
+        gtk_box_append(GTK_BOX(menu), b);
     }
 
     /* Séparateur + retirer. */
@@ -2666,29 +2770,33 @@ build_tile_menu(Layout *node, App *app)
 }
 
 static GtkWidget *
-build_tile_wrapper(Layout *node, App *app)
+build_tile_wrapper(Layout *node, App *app, GtkWidget *content)
 {
     GtkWidget *box;
     GtkWidget *header;
     GtkWidget *menu_btn;
-    GtkWidget *content;
+    const char *title;
 
-    /* Vue fraîche par tuile : retirer une tuile ne détruit que la vue,
-     * l'état du morceau (buffer / modèle) survit dans App. */
-    content = create_piece(node->id, app);
+    /* Vue fraîche par nœud : retirer une tuile ne détruit que la vue,
+     * l'état du morceau (buffer / modèle) survit dans App. Un bloc
+     * (sous-arbre) a aussi un wrapper : son menu permet de le diviser,
+     * de le réduire en pièce ou de le retirer. */
+    title = node->kind == LAYOUT_TILE ? layout_name(node->id) : "Bloc";
 
     if (g_getenv("SIEB_DEBUG") != NULL)
         g_printerr("SIEB: tile id=%s widget=%p\n",
                    node->id != NULL ? node->id : "(null)", (void *)content);
 
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_signal_connect(box, "destroy", G_CALLBACK(trace_destroy), app);
     header = gtk_header_bar_new();
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), FALSE);
     {
-        GtkWidget *title = gtk_label_new(layout_name(node->id));
+        GtkWidget *label = gtk_label_new(title);
 
-        gtk_widget_set_halign(title, GTK_ALIGN_START);
-        gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title);
+        gtk_widget_set_halign(label, GTK_ALIGN_START);
+        gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), label);
     }
 
     menu_btn = gtk_menu_button_new();
@@ -2710,34 +2818,108 @@ build_tile_wrapper(Layout *node, App *app)
 static GtkWidget *
 render_layout_node(Layout *node, App *app)
 {
-    GtkWidget *paned;
+    GtkWidget *content;
 
     if (node->kind == LAYOUT_TILE)
-        return build_tile_wrapper(node, app);
+        return build_tile_wrapper(node, app, create_piece(node->id, app));
 
-    paned = gtk_paned_new(node->kind == LAYOUT_HSPLIT
-                              ? GTK_ORIENTATION_HORIZONTAL
-                              : GTK_ORIENTATION_VERTICAL);
-    gtk_paned_set_start_child(GTK_PANED(paned), render_layout_node(node->a, app));
-    gtk_paned_set_end_child(GTK_PANED(paned), render_layout_node(node->b, app));
-    gtk_paned_set_resize_start_child(GTK_PANED(paned), TRUE);
-    gtk_paned_set_resize_end_child(GTK_PANED(paned), TRUE);
-    return paned;
+    content = gtk_paned_new(node->kind == LAYOUT_HSPLIT
+                                ? GTK_ORIENTATION_HORIZONTAL
+                                : GTK_ORIENTATION_VERTICAL);
+    gtk_paned_set_start_child(GTK_PANED(content),
+                              render_layout_node(node->a, app));
+    gtk_paned_set_end_child(GTK_PANED(content),
+                            render_layout_node(node->b, app));
+    gtk_paned_set_resize_start_child(GTK_PANED(content), TRUE);
+    gtk_paned_set_resize_end_child(GTK_PANED(content), TRUE);
+    /* Le drag de la poignée met à jour la fraction du modèle (persistée
+     * par layout_save) — sans quoi le re-rendu reviendrait aux valeurs
+     * par défaut. */
+    g_object_set_data(G_OBJECT(content), "sieb-app", app);
+    g_signal_connect(content, "notify::position",
+                     G_CALLBACK(on_paned_position), node);
+    return build_tile_wrapper(node, app, content);
+}
+
+/* Save différé du layout : le drag de poignée émet notify::position en
+ * continu ; on persiste une seule fois à la fin du mouvement. */
+static guint layout_save_idle = 0;
+
+static gboolean
+layout_save_idle_cb(gpointer data)
+{
+    App *app = data;
+
+    layout_save_idle = 0;
+    layout_save(app->layout);
+    return G_SOURCE_REMOVE;
+}
+
+static void
+on_paned_position(GObject *paned, GParamSpec G_GNUC_UNUSED *pspec,
+                  gpointer data)
+{
+    Layout    *node = data;
+    GtkPaned  *p = GTK_PANED(paned);
+    App       *app = NULL;
+    int        total;
+    double     fraction;
+
+    total = (node->kind == LAYOUT_HSPLIT)
+                ? gtk_widget_get_width(GTK_WIDGET(p))
+                : gtk_widget_get_height(GTK_WIDGET(p));
+    if (total <= 0)
+        return;
+    fraction = (double)gtk_paned_get_position(p) / (double)total;
+    node->fraction = CLAMP(fraction, 0.05, 0.95);
+
+    /* App pour le save différé : retrouvé via le handler d'action ? Non —
+     * on passe par l'état global du contexte GTK : le data du notify est
+     * le nœud ; on stocke app dans le widget pour le retrouver. */
+    app = g_object_get_data(G_OBJECT(p), "sieb-app");
+    if (app != NULL && layout_save_idle == 0)
+        layout_save_idle = g_idle_add(layout_save_idle_cb, app);
 }
 
 /* Applique les fractions persistées aux poignées (après allocation). */
+
+/* Le paned d'un nœud split se trouve dans son wrapper (le dernier enfant
+ * de la box). Recherche récursive robuste. */
+static GtkWidget *
+find_paned_widget(GtkWidget *w)
+{
+    GtkWidget *child;
+    GtkWidget *found;
+
+    if (w == NULL)
+        return NULL;
+    if (GTK_IS_PANED(w))
+        return w;
+    for (child = gtk_widget_get_first_child(w); child != NULL;
+         child = gtk_widget_get_next_sibling(child)) {
+        found = find_paned_widget(child);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
 static void
 set_paned_positions_walk(GtkWidget *widget, Layout *node)
 {
-    GtkPaned *paned;
-    int       total;
+    GtkWidget *paned_w;
+    GtkPaned  *paned;
+    int        total;
 
     if (node == NULL || node->kind == LAYOUT_TILE)
         return;
-    paned = GTK_PANED(widget);
+    paned_w = find_paned_widget(widget);
+    if (paned_w == NULL)
+        return;
+    paned = GTK_PANED(paned_w);
     total = (node->kind == LAYOUT_HSPLIT)
-                ? gtk_widget_get_width(widget)
-                : gtk_widget_get_height(widget);
+                ? gtk_widget_get_width(paned_w)
+                : gtk_widget_get_height(paned_w);
     if (total > 0)
         gtk_paned_set_position(paned, (int)(node->fraction * total));
     set_paned_positions_walk(gtk_paned_get_start_child(paned), node->a);
@@ -2766,6 +2948,7 @@ on_layout_map(GtkWidget G_GNUC_UNUSED *widget, gpointer data)
 static void
 render_layout(App *app)
 {
+    trace_state(app, "render_layout: avant unparent");
     /* gtk_widget_unparent retire proprement l'ancien arbre (les vues sont
      * détruites : widgets GInitiallyUnowned sans ref externe). */
     if (app->layout_root != NULL) {
@@ -2775,13 +2958,18 @@ render_layout(App *app)
     app->source_view = NULL;
     app->diffbar = NULL;
     app->explorer_scrolled = NULL;
+    trace_state(app, "render_layout: apres unparent");
 
     app->layout_root = render_layout_node(app->layout, app);
+    if (g_getenv("SIEB_DEBUG") != NULL)
+        g_signal_connect(app->layout_root, "destroy",
+                         G_CALLBACK(trace_destroy), app);
     gtk_widget_set_vexpand(app->layout_root, TRUE);
     gtk_box_append(GTK_BOX(app->layout_holder), app->layout_root);
     g_signal_connect_after(app->layout_root, "map",
                            G_CALLBACK(on_layout_map), app);
     gtk_widget_set_visible(app->layout_root, TRUE);
+    trace_state(app, "render_layout: fin");
 }
 
 static void
@@ -2882,6 +3070,122 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     }
 
     gtk_window_present(app->win);
+
+    /* MODE TEST (debug) : SIEB_TEST_SPLIT=1 reproduit le crash du split —
+     * split horizontal du root dans un idle, puis quitte après 2 s. */
+    if (g_getenv("SIEB_TEST_SPLIT") != NULL) {
+        g_idle_add(test_split_idle, app);
+        g_timeout_add(2000, test_quit_idle, gtk_app);
+    }
+    /* MODE TEST (debug) : SIEB_TEST_GRID=1 construit l'arrangement
+     * A:B:C / A:B:C / D:B:C / E:F:F par les opérations du modèle
+     * (comme le menu des tuiles/blocs), avec re-rendu à chaque étape. */
+    if (g_getenv("SIEB_TEST_GRID") != NULL) {
+        g_idle_add(test_grid_idle, app);
+        g_timeout_add(2500, test_quit_idle, gtk_app);
+    }
+}
+
+/* MODE TEST (debug) : voir SIEB_TEST_SPLIT dans on_activate. */
+static Layout *test_first_tile(Layout *n)
+{
+    return n->kind == LAYOUT_TILE ? n : test_first_tile(n->a);
+}
+
+static gboolean
+test_split_idle(gpointer data)
+{
+    App *app = data;
+    Layout *t;
+
+    /* SÉQUENCE STRESS : split+retile+remove enchaînés, avec re-rendu à
+     * chaque étape (comme les clics du user). */
+    t = test_first_tile(app->layout);
+    app->layout = layout_split(app->layout, t, TRUE, t->id);
+    render_layout(app);
+
+    t = test_first_tile(app->layout);
+    if (strcmp(t->id, "editor") == 0)
+        layout_retile(t, "explorer");
+    else
+        layout_retile(t, "editor");
+    /* PAS de layout_save : ne pas écraser le layout.json du user. */
+    render_layout(app);
+
+    t = test_first_tile(app->layout);
+    app->layout = layout_split(app->layout, t, FALSE, t->id);
+    render_layout(app);
+
+    t = test_first_tile(app->layout);
+    if (t->parent != NULL) {
+        app->layout = layout_remove(app->layout, t);
+        render_layout(app);
+    }
+
+    t = test_first_tile(app->layout);
+    if (t->parent != NULL) {
+        app->layout = layout_remove(app->layout, t);
+        /* PAS de layout_save : ne pas écraser le layout.json du user. */
+        render_layout(app);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean
+test_quit_idle(gpointer data)
+{
+    g_application_quit(G_APPLICATION(data));
+    return G_SOURCE_REMOVE;
+}
+
+/* MODE TEST (debug) : voir SIEB_TEST_GRID dans on_activate. Construit le
+ * pavage V( H(A,H(D,E)), H(V(B,C),F) ) — « A:B:C/A:B:C/D:B:C/E:F:F » — en
+ * n'utilisant que layout_split/layout_retile sur tuiles ET blocs. */
+static gboolean
+test_grid_idle(gpointer data)
+{
+    App    *app = data;
+    Layout *t;
+
+    /* 1. V : 2 colonnes (editor|editor). */
+    app->layout = layout_split(app->layout,
+                               test_first_tile(app->layout), FALSE, "editor");
+    render_layout(app);
+
+    /* 2. V(b) : 3 colonnes : A | B | C. */
+    t = app->layout->b;
+    app->layout = layout_split(app->layout, t, FALSE, "editor");
+    render_layout(app);
+
+    /* 3. H(A) : A sur 2 lignes. */
+    t = app->layout->a;
+    app->layout = layout_split(app->layout, t, TRUE, "editor");
+    render_layout(app);
+
+    /* 4. H(X) : X = D | E. */
+    t = app->layout->a->b;
+    app->layout = layout_split(app->layout, t, TRUE, "editor");
+    render_layout(app);
+
+    /* 5. H(bloc B|C) : Y=B|C | F (empty). */
+    t = app->layout->b;
+    app->layout = layout_split(app->layout, t, TRUE, "empty");
+    render_layout(app);
+
+    /* 6. V(Y) : Y = B | C. */
+    t = app->layout->b->a;
+    app->layout = layout_split(app->layout, t, FALSE, "editor");
+    render_layout(app);
+
+    /* 7. Pièces finales du dessin. */
+    layout_retile(app->layout->a->a, "editor");       /* A */
+    layout_retile(app->layout->a->b->a, "editor");    /* D */
+    layout_retile(app->layout->a->b->b, "explorer");  /* E */
+    layout_retile(app->layout->b->a->a, "editor");    /* B */
+    layout_retile(app->layout->b->a->b, "editor");    /* C */
+    layout_retile(app->layout->b->b, "editor");       /* F */
+    render_layout(app);
+    return G_SOURCE_REMOVE;
 }
 
 int
@@ -2909,6 +3213,14 @@ main(int argc, char **argv)
     g_object_unref(gtk_app);
     if (app->diff_timer != 0)
         g_source_remove(app->diff_timer);
+    if (layout_save_idle != 0) {
+        g_source_remove(layout_save_idle);
+        layout_save_idle = 0;
+    }
+    if (app->tree_model != NULL)
+        g_object_unref(app->tree_model);
+    if (app->selection != NULL)
+        g_object_unref(app->selection);
     g_hash_table_destroy(app->multi_paths);
     g_hash_table_destroy(app->files); /* libère chaque PerFile */
     layout_free(app->layout);

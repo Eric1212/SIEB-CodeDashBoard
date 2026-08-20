@@ -59,6 +59,10 @@ Layout *layout_split(Layout *root, Layout *node, gboolean horizontal,
  * seule tuile. Renvoie le (nouveau) root. */
 Layout *layout_remove(Layout *root, Layout *node);
 
+/* Transforme la tuile `node` : elle garde sa place, change de pièce.
+ * L'état de l'ancienne pièce (buffer/modèle) survit dans App. */
+void layout_retile(Layout *node, const char *new_id);
+
 /* Nom lisible d'une pièce (pour l'affichage). */
 const char *layout_name(const char *id);
 
