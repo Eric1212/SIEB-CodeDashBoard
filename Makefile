@@ -11,7 +11,7 @@ TARGET  := siebcdashboard
 all: $(TARGET)
 
 $(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LIBS)
+	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LIBS) $(LDFLAGS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -19,7 +19,14 @@ $(TARGET): $(OBJ)
 run: $(TARGET)
 	./$(TARGET)
 
+# Build avec AddressSanitizer + UBSan (debug de corruption mémoire).
+asan:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -O0 -fno-omit-frame-pointer" \
+	            LDFLAGS="-fsanitize=address,undefined" \
+	            LIBS="$(LIBS) -fsanitize=address,undefined"
+
 clean:
 	rm -f $(OBJ) $(TARGET)
 
-.PHONY: all run clean
+.PHONY: all run asan clean
