@@ -2632,6 +2632,122 @@ typedef struct {
  * unique partagé (buffer / modèle+sélection) qui survit aux tuiles ;
  * chaque tuile obtient sa propre vue sur cet état. */
 
+/* -------------------------------------------------------------- */
+/* Settings : accordéon (GtkRevealer) — General / GitHub-Git / LLM */
+/*                                                                */
+/* Sections fermées par défaut ; le contenu de chaque section est  */
+/* un placeholder en attendant l'implémentation réelle.            */
+/* -------------------------------------------------------------- */
+
+typedef struct SettingsSection {
+    const char *title;
+    const char *placeholder;             /* section simple */
+    const struct SettingsSection *subs;  /* ou sous-sections (accordéon) */
+    gsize        n_subs;
+} SettingsSection;
+
+static void on_settings_section_toggled(GtkToggleButton *btn, gpointer data);
+static GtkWidget *build_settings_section(const SettingsSection *sec);
+
+static GtkWidget *
+build_settings_section(const SettingsSection *sec)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *header_btn = gtk_toggle_button_new_with_label(sec->title);
+    GtkWidget *revealer = gtk_revealer_new();
+    GtkWidget *body;
+
+    /* Bouton-titre : plat, aligné à gauche (look ligne d'accordéon). */
+    gtk_widget_add_css_class(header_btn, "flat");
+    gtk_button_set_child(GTK_BUTTON(header_btn), NULL);
+    {
+        GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        GtkWidget *arrow = gtk_label_new("›");
+        GtkWidget *title = gtk_label_new(sec->title);
+
+        gtk_widget_add_css_class(title, "titlebar-brand");
+        gtk_widget_set_halign(title, GTK_ALIGN_START);
+        gtk_widget_set_hexpand(title, TRUE);
+        gtk_widget_set_halign(arrow, GTK_ALIGN_START);
+        g_object_set_data(G_OBJECT(header_btn), "arrow", arrow);
+        gtk_box_append(GTK_BOX(hbox), arrow);
+        gtk_box_append(GTK_BOX(hbox), title);
+        gtk_button_set_child(GTK_BUTTON(header_btn), hbox);
+    }
+
+    /* Le revealer suit l'état du bouton ; la flèche pivote quand ouvert. */
+    g_object_bind_property(header_btn, "active",
+                           revealer, "reveal-child",
+                           G_BINDING_DEFAULT);
+    g_signal_connect(header_btn, "toggled",
+                     G_CALLBACK(on_settings_section_toggled), NULL);
+
+    /* Corps : sous-accordéons indentés, ou placeholder simple. */
+    if (sec->subs != NULL && sec->n_subs > 0) {
+        body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_widget_set_margin_start(body, 16);
+        for (gsize i = 0; i < sec->n_subs; i++)
+            gtk_box_append(GTK_BOX(body),
+                           build_settings_section(&sec->subs[i]));
+    } else {
+        body = gtk_label_new(sec->placeholder);
+        gtk_label_set_xalign(GTK_LABEL(body), 0.0);
+        gtk_widget_set_margin_start(body, 24);
+        gtk_widget_set_margin_top(body, 6);
+        gtk_widget_set_margin_bottom(body, 6);
+        gtk_widget_add_css_class(body, "dim-label");
+    }
+    gtk_revealer_set_child(GTK_REVEALER(revealer), body);
+    gtk_revealer_set_reveal_child(GTK_REVEALER(revealer), FALSE); /* fermé */
+
+    gtk_box_append(GTK_BOX(box), header_btn);
+    gtk_box_append(GTK_BOX(box), revealer);
+    return box;
+}
+
+static void
+on_settings_section_toggled(GtkToggleButton *btn, gpointer G_GNUC_UNUSED data)
+{
+    GtkWidget *arrow = g_object_get_data(G_OBJECT(btn), "arrow");
+
+    if (arrow != NULL)
+        gtk_label_set_text(GTK_LABEL(arrow),
+                           gtk_toggle_button_get_active(btn) ? "⌄" : "›");
+}
+
+static GtkWidget *
+build_settings(App *app G_GNUC_UNUSED)
+{
+    static const SettingsSection provider_subs[] = {
+        { "OpenAi-Compatible", "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+        { "HyperCharm",        "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+        { "OpenCode",          "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+        { "OpenRouter",        "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+    };
+    static const SettingsSection llm_subs[] = {
+        { "Harness",    "(à venir : agent, boucle d'exécution…)", NULL, 0 },
+        { "Tools",      "(à venir : outils exposés au modèle…)", NULL, 0 },
+        { "Providers",  NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
+    };
+    static const SettingsSection sections[] = {
+        { "General",     "(à venir : thème, police, indentation…)", NULL, 0 },
+        { "GitHub/Git",  "(à venir : token, user, repo par défaut…)", NULL, 0 },
+        { "LLM",         NULL, llm_subs, G_N_ELEMENTS(llm_subs) },
+    };
+    GtkWidget *scroll = gtk_scrolled_window_new();
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+
+    for (gsize i = 0; i < G_N_ELEMENTS(sections); i++)
+        gtk_box_append(GTK_BOX(box), build_settings_section(&sections[i]));
+
+    gtk_widget_set_vexpand(scroll, TRUE);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                   GTK_POLICY_AUTOMATIC,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), box);
+    return scroll;
+}
+
 static GtkWidget *
 create_piece(const char *id, App *app)
 {
@@ -2643,7 +2759,9 @@ create_piece(const char *id, App *app)
         w = build_roots_panel(app);
     else if (strcmp(id, "bash") == 0)
         w = bash_panel_new(app->roots, app->multi_paths);
-    else {
+    else if (strcmp(id, "settings") == 0) {
+        w = build_settings(app);
+    } else {
         /* Vide : emplacement réservé, prêt à recevoir un morceau (Phase 2). */
         w = gtk_label_new("Vide\n(emplacement réservé)");
         gtk_widget_set_halign(w, GTK_ALIGN_CENTER);
@@ -3215,6 +3333,59 @@ on_new_window_activated(GSimpleAction G_GNUC_UNUSED *action,
         g_warning("CDB: limite de %d modales atteinte", MODAL_MAX);
 }
 
+/* About CDB : GtkAboutDialog standard. */
+static void
+on_about_activated(GSimpleAction G_GNUC_UNUSED *action,
+                   GVariant G_GNUC_UNUSED *param, gpointer data)
+{
+    App            *app = data;
+    GtkWidget      *dlg = gtk_about_dialog_new();
+    const char     *authors[] = { "SIEB", NULL };
+
+    gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(dlg), "CodeDashBoard");
+    gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(dlg), "0.1");
+    gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(dlg),
+        "CodeDashBoard (CDB) by SIEB is a C IDE for developing with LLM "
+        "on a lightweight footprint on RAM and CPU.");
+    gtk_about_dialog_set_copyright(GTK_ABOUT_DIALOG(dlg),
+                                   "Copyright © 2026 SIEB");
+    gtk_about_dialog_set_authors(GTK_ABOUT_DIALOG(dlg), authors);
+    gtk_window_set_transient_for(GTK_WINDOW(dlg), app->win);
+    gtk_window_set_modal(GTK_WINDOW(dlg), TRUE);
+    gtk_window_present(GTK_WINDOW(dlg));
+}
+
+/* Settings : modale avec la tuile settings (accordéon). */
+static void
+on_settings_activated(GSimpleAction G_GNUC_UNUSED *action,
+                      GVariant G_GNUC_UNUSED *param, gpointer data)
+{
+    App       *app = data;
+    GtkWidget *win = gtk_window_new();
+    GtkWidget *content = build_settings(app);
+
+    gtk_window_set_title(GTK_WINDOW(win), "Settings — CodeDashBoard");
+    gtk_window_set_transient_for(GTK_WINDOW(win), app->win);
+    /* NON modale : l'utilisateur peut avoir besoin de copier/coller
+     * (clé API, endpoint…) depuis l'éditeur pendant que Settings est
+     * ouvert. */
+    gtk_window_set_default_size(GTK_WINDOW(win), 800, 600);
+    gtk_window_set_child(GTK_WINDOW(win), content);
+    gtk_window_present(GTK_WINDOW(win));
+}
+
+/* Exit : ferme la session courante (passe par close-request → layout +
+ * window state sauvegardés). Les autres sessions ne sont pas touchées. */
+static void
+on_exit_activated(GSimpleAction G_GNUC_UNUSED *action,
+                  GVariant G_GNUC_UNUSED *param, gpointer data)
+{
+    App *app = data;
+
+    if (app->win != NULL)
+        gtk_window_destroy(app->win);
+}
+
 /* New Session : ouvre juste un nouveau PID du binaire (spawn sans
  * CDB_SESSION) — le nouveau processus suit la logique standard de
  * lancement (000 si seul, dialogue numéro sinon). */
@@ -3430,6 +3601,10 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         GtkWidget *brand = gtk_label_new("CDB");
         GtkWidget *sep = gtk_label_new("::");
 
+        g_menu_append(menu, "About CDB", "win.about");
+        g_menu_append(menu, "Settings", "win.settings");
+        g_menu_append(menu, "Exit", "win.exit");
+
         gtk_widget_add_css_class(brand, "titlebar-brand");
         gtk_widget_add_css_class(sep, "titlebar-sep");
         gtk_widget_set_valign(sep, GTK_ALIGN_CENTER);
@@ -3508,6 +3683,9 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             { "save",          on_save_activated, NULL, NULL, NULL, { 0 } },
             { "new-window",    on_new_window_activated, NULL, NULL, NULL, { 0 } },
             { "new-session",   on_new_session_activated, NULL, NULL, NULL, { 0 } },
+            { "about",         on_about_activated, NULL, NULL, NULL, { 0 } },
+            { "settings",      on_settings_activated, NULL, NULL, NULL, { 0 } },
+            { "exit",          on_exit_activated, NULL, NULL, NULL, { 0 } },
         };
         g_action_map_add_action_entries(G_ACTION_MAP(app->win), win_actions,
                                         G_N_ELEMENTS(win_actions), app);
