@@ -28,6 +28,7 @@ extern char **environ;
 #include "bashpanel.h"
 #include "modal.h"
 #include "session.h"
+#include "llm.h"
 #include "layout.h"
 
 /* Un fichier ouvert garde son propre buffer (l'historique undo survit à la
@@ -79,6 +80,8 @@ typedef struct {
     GHashTable        *multi_paths;
     /* Évite la récursion selection-changed pendant nos propres mutations. */
     gboolean           selection_guard;
+    /* Config LLM de la session (llm.json), possédée par App. */
+    LlmConfig         *llm_cfg;
 } App;
 
 /* Libère un PerFile (buffer + baseline). */
@@ -1675,9 +1678,17 @@ explorer_path_at_pos(App *app, guint pos)
         return NULL;
     {
         gpointer item = gtk_tree_list_row_get_item(row);
-        char    *path = g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)
-                        ? g_strdup(((RootEntry *)item)->path)
-                        : g_strdup(((FileEntry *)item)->path);
+        char    *path;
+
+        /* item peut être NULL (row en cours de remplissage) : sans ce
+         * garde, g_type_is_a sur NULL fait planter le ref interne. */
+        if (item == NULL) {
+            g_object_unref(row);
+            return NULL;
+        }
+        path = g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)
+               ? g_strdup(((RootEntry *)item)->path)
+               : g_strdup(((FileEntry *)item)->path);
 
         g_object_unref(row);
         return path;
@@ -2648,6 +2659,8 @@ typedef struct SettingsSection {
 
 static void on_settings_section_toggled(GtkToggleButton *btn, gpointer data);
 static GtkWidget *build_settings_section(const SettingsSection *sec);
+static void on_provider_field_changed(GtkEditable *editable, gpointer data);
+static GtkWidget *build_provider_form(const char *provider_name);
 
 static GtkWidget *
 build_settings_section(const SettingsSection *sec)
@@ -2682,8 +2695,10 @@ build_settings_section(const SettingsSection *sec)
     g_signal_connect(header_btn, "toggled",
                      G_CALLBACK(on_settings_section_toggled), NULL);
 
-    /* Corps : sous-accordéons indentés, ou placeholder simple. */
-    if (sec->subs != NULL && sec->n_subs > 0) {
+    /* Corps : formulaire provider, sous-accordéons, ou placeholder. */
+    if (g_strcmp0(sec->title, "OpenRouter") == 0)
+        body = build_provider_form("OpenRouter");
+    else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_widget_set_margin_start(body, 16);
         for (gsize i = 0; i < sec->n_subs; i++)
@@ -2715,6 +2730,91 @@ on_settings_section_toggled(GtkToggleButton *btn, gpointer G_GNUC_UNUSED data)
                            gtk_toggle_button_get_active(btn) ? "⌄" : "›");
 }
 
+/* Formulaire d'un provider LLM : api_key + default_model, pré-remplis
+ * depuis llm.json, sauvegardés à chaque modification. */
+/* Sauvegarde llm.json à chaque modification d'un champ provider.
+ * Le modèle déclencheur porte le nom du provider ; l'entry clé est
+ * retrouvé via l'autre champ (data "provider-key-entry"). */
+static void
+on_provider_field_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
+{
+    GtkWidget  *entry = GTK_WIDGET(editable);
+    const char *provider = g_object_get_data(G_OBJECT(entry), "provider");
+    GtkWidget  *key_entry = g_object_get_data(G_OBJECT(entry),
+                                              "provider-key-entry");
+    GtkWidget  *model_entry = entry;
+    const char *key, *model;
+
+    if (key_entry == NULL) {
+        /* C'est l'entry clé : le modèle est l'autre objet. On retrouve
+         * la grille parente puis l'entry modèle par position. */
+        GtkWidget *grid = gtk_widget_get_parent(GTK_WIDGET(editable));
+
+        key_entry = entry;
+        model_entry = gtk_grid_get_child_at(GTK_GRID(grid), 1, 1);
+        g_object_set_data(G_OBJECT(model_entry), "provider",
+                          g_object_get_data(G_OBJECT(entry), "provider"));
+        g_object_set_data(G_OBJECT(model_entry), "provider-key-entry", entry);
+    }
+    /* Évite la sauvegarde pendant le pré-remplissage (pas de provider). */
+    if (provider == NULL)
+        return;
+    key = gtk_editable_get_text(GTK_EDITABLE(key_entry));
+    model = gtk_editable_get_text(GTK_EDITABLE(model_entry));
+    /* Pas de sauvegarde tant que le modèle est vide (évite d'écraser
+     * la config avec du vide pendant la saisie). */
+    if (model[0] == '\0')
+        return;
+    llm_config_save_provider(provider, key, model);
+}
+
+static GtkWidget *
+build_provider_form(const char *provider_name)
+{
+    GtkWidget *grid = gtk_grid_new();
+    GtkWidget *key_lbl = gtk_label_new("Clé API :");
+    GtkWidget *key_entry = gtk_entry_new();
+    GtkWidget *model_lbl = gtk_label_new("Modèle par défaut :");
+    GtkWidget *model_entry = gtk_entry_new();
+    LlmConfig *cfg = llm_config_load();
+
+    gtk_widget_set_halign(key_lbl, GTK_ALIGN_START);
+    gtk_widget_set_halign(model_lbl, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(key_entry, TRUE);
+    gtk_widget_set_hexpand(model_entry, TRUE);
+    /* La clé est un secret : affichage masqué. */
+    gtk_entry_set_visibility(GTK_ENTRY(key_entry), FALSE);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry), "sk-or-v1-…");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry), "stealth/ox-alpha");
+
+    if (cfg != NULL && g_strcmp0(cfg->provider, provider_name) == 0) {
+        if (cfg->api_key != NULL)
+            gtk_editable_set_text(GTK_EDITABLE(key_entry), cfg->api_key);
+        if (cfg->model != NULL)
+            gtk_editable_set_text(GTK_EDITABLE(model_entry), cfg->model);
+    }
+    llm_config_free(cfg);
+
+    g_object_set_data_full(G_OBJECT(key_entry), "provider",
+                           g_strdup(provider_name), g_free);
+    g_object_set_data(G_OBJECT(model_entry), "provider-key-entry", key_entry);
+    g_signal_connect(key_entry, "changed",
+                     G_CALLBACK(on_provider_field_changed), NULL);
+    g_signal_connect(model_entry, "changed",
+                     G_CALLBACK(on_provider_field_changed), NULL);
+
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+    gtk_widget_set_margin_start(grid, 24);
+    gtk_widget_set_margin_top(grid, 6);
+    gtk_widget_set_margin_bottom(grid, 6);
+    gtk_grid_attach(GTK_GRID(grid), key_lbl, 0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), key_entry, 1, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), model_lbl, 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), model_entry, 1, 1, 1, 1);
+    return grid;
+}
+
 static GtkWidget *
 build_settings(App *app G_GNUC_UNUSED)
 {
@@ -2722,7 +2822,7 @@ build_settings(App *app G_GNUC_UNUSED)
         { "OpenAi-Compatible", "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
         { "HyperCharm",        "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
         { "OpenCode",          "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
-        { "OpenRouter",        "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+        { "OpenRouter",        NULL, NULL, 0 }, /* formulaire provider */
     };
     static const SettingsSection llm_subs[] = {
         { "Harness",    "(à venir : agent, boucle d'exécution…)", NULL, 0 },
@@ -2759,6 +2859,8 @@ create_piece(const char *id, App *app)
         w = build_roots_panel(app);
     else if (strcmp(id, "bash") == 0)
         w = bash_panel_new(app->roots, app->multi_paths);
+    else if (strcmp(id, "llm") == 0)
+        w = llm_tile_new(app->llm_cfg);
     else if (strcmp(id, "settings") == 0) {
         w = build_settings(app);
     } else {
@@ -2836,7 +2938,7 @@ build_tile_menu(Layout *node, App *app)
     GtkWidget  *pop;
     GtkWidget  *menu;
     GPtrArray  *acts;
-    const char *pieces[] = { "editor", "explorer", "bash", "empty" };
+    const char *pieces[] = { "editor", "explorer", "bash", "llm", "empty" };
     gsize       i;
 
     pop = gtk_popover_new();
@@ -3459,7 +3561,7 @@ build_modal_menu(App *app, ModalCtx *ctx)
 {
     GtkWidget  *pop = gtk_popover_new();
     GtkWidget  *menu = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    const char *pieces[] = { "editor", "explorer", "bash", "empty" };
+    const char *pieces[] = { "editor", "explorer", "bash", "llm", "empty" };
 
     gtk_widget_set_margin_start(menu, 8);
     gtk_widget_set_margin_end(menu, 8);
@@ -3921,6 +4023,7 @@ main(int argc, char **argv)
     app->dirty = dirty_store_new();
     app->files = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
                                        per_file_free);
+    app->llm_cfg = llm_config_load();
 
     /* NON_UNIQUE : chaque processus est sa propre application — sinon
      * l'enfant délègue son activation au primaire (même ID D-Bus) et
@@ -3944,6 +4047,7 @@ main(int argc, char **argv)
     g_hash_table_destroy(app->files); /* libère chaque PerFile */
     layout_free(app->layout);
     dirty_store_free(app->dirty);
+    llm_config_free(app->llm_cfg);
     g_free(app);
 
     return status;

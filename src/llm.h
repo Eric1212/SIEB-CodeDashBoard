@@ -1,0 +1,48 @@
+/*
+ * llm.h : tuile LLM — chat avec un provider OpenAI-compatible.
+ *
+ * Config par session : ~/.config/cdb/<NNN>/llm.json
+ *   {
+ *     "providers": {
+ *       "OpenRouter": {
+ *         "api_url":      "https://openrouter.ai/api/v1",
+ *         "api_key":      "sk-or-…",
+ *         "default_model": "stealth/ox-alpha"
+ *       }
+ *     },
+ *     "active": { "provider": "OpenRouter", "model": "stealth/ox-alpha" }
+ *   }
+ *
+ * Schéma providers inspiré du « openai_compatible » de Zed
+ * (~/.config/zed/settings.json).
+ */
+
+#ifndef CDB_LLM_H
+#define CDB_LLM_H
+
+#include <gtk/gtk.h>
+
+/* Configuration LLM chargée depuis llm.json (possédée par App). */
+typedef struct {
+    char *provider;        /* nom du provider actif ("OpenRouter") */
+    char *model;           /* modèle actif ("stealth/ox-alpha") */
+    char *api_url;         /* base API du provider actif */
+    char *api_key;         /* clé du provider actif */
+} LlmConfig;
+
+/* Charge ~/.config/cdb/<NNN>/llm.json ; NULL si absent/invalide
+ * (la tuile affiche alors un message d'aide au lieu du chat). */
+LlmConfig *llm_config_load(void);
+
+void llm_config_free(LlmConfig *cfg);
+
+/* Crée/met à jour le provider dans llm.json (api_key + default_model),
+ * en préservant les autres providers ; positionne aussi « active ».
+ * Crée le fichier s'il n'existe pas. */
+void llm_config_save_provider(const char *provider, const char *api_key,
+                              const char *default_model);
+
+/* Crée la VUE de la tuile « llm » (historique + saisie). */
+GtkWidget *llm_tile_new(const LlmConfig *cfg);
+
+#endif /* CDB_LLM_H */
