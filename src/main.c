@@ -2844,6 +2844,9 @@ build_tile_wrapper(Layout *node, App *app, GtkWidget *content)
                    node->id != NULL ? node->id : "(null)", (void *)content);
 
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    /* Taille minimale d'une tuile : 100×100 px (le paned parent ne peut
+     * pas réduire davantage — shrink désactivé dans render_layout_node). */
+    gtk_widget_set_size_request(box, 100, 100);
     if (g_getenv("SIEB_DEBUG") != NULL)
         g_signal_connect(box, "destroy", G_CALLBACK(trace_destroy), app);
     /* Barre de titre compacte : un GtkHeaderBar fait ~51 px de haut — avec
@@ -2905,6 +2908,9 @@ render_layout_node(Layout *node, App *app)
                             render_layout_node(node->b, app));
     gtk_paned_set_resize_start_child(GTK_PANED(content), TRUE);
     gtk_paned_set_resize_end_child(GTK_PANED(content), TRUE);
+    /* Pas de réduction sous la taille minimale des tuiles (100×100). */
+    gtk_paned_set_shrink_start_child(GTK_PANED(content), FALSE);
+    gtk_paned_set_shrink_end_child(GTK_PANED(content), FALSE);
     /* Le drag de la poignée met à jour la fraction du modèle (persistée
      * par layout_save) — sans quoi le re-rendu reviendrait aux valeurs
      * par défaut. */
