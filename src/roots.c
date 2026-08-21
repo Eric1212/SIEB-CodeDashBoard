@@ -466,3 +466,94 @@ roots_delete_recursive(const char *path)
     g_dir_close(dir);
     return g_rmdir(path) == 0 && ok;
 }
+/* ------------------------------------------------ */
+/* Projet courant (pour les panneaux bash)           */
+/* ------------------------------------------------ */
+
+/* TRUE si path est le projet lui-même ou un chemin dedans. */
+static gboolean
+path_in_project(const char *path, const char *project)
+{
+    size_t len = strlen(project);
+
+    if (strncmp(path, project, len) != 0)
+        return FALSE;
+    return path[len] == '\0' || path[len] == '/';
+}
+
+/* Cherche le projet (RootEntry PROJECT) contenant path : projet racine
+ * direct, ou projet enfant d'une structure. Ref +1, ou NULL. */
+static RootEntry *
+find_project_for_path(GListStore *roots, const char *path)
+{
+    guint n;
+
+    if (roots == NULL || path == NULL)
+        return NULL;
+    n = g_list_model_get_n_items(G_LIST_MODEL(roots));
+    for (guint i = 0; i < n; i++) {
+        RootEntry *e = g_list_model_get_item(G_LIST_MODEL(roots), i);
+
+        if (e->kind == ROOT_PROJECT) {
+            gboolean hit = path_in_project(path, e->path);
+
+            if (hit)
+                return e; /* ref transférée à l'appelant */
+            g_object_unref(e);
+            continue;
+        }
+        {
+            guint m = e->children != NULL
+                          ? g_list_model_get_n_items(G_LIST_MODEL(e->children))
+                          : 0;
+            RootEntry *found = NULL;
+
+            for (guint j = 0; j < m && found == NULL; j++) {
+                RootEntry *pr =
+                    g_list_model_get_item(G_LIST_MODEL(e->children), j);
+
+                if (path_in_project(path, pr->path))
+                    found = pr; /* ref conservée */
+                else
+                    g_object_unref(pr);
+            }
+            g_object_unref(e);
+            if (found != NULL)
+                return found;
+        }
+    }
+    return NULL;
+}
+
+char *
+roots_current_project(GListStore *roots, GHashTable *multi_paths)
+{
+    GHashTableIter iter;
+    gpointer       key;
+    char          *inside = NULL;
+    char          *exact  = NULL;
+
+    if (roots == NULL || multi_paths == NULL ||
+        g_hash_table_size(multi_paths) == 0)
+        return NULL;
+    g_hash_table_iter_init(&iter, multi_paths);
+    while (g_hash_table_iter_next(&iter, &key, NULL) && exact == NULL) {
+        const char *path = key;
+        RootEntry  *pr = find_project_for_path(roots, path);
+
+        if (pr != NULL) {
+            if (strcmp(path, pr->path) == 0) {
+                g_free(exact);
+                exact = g_strdup(pr->path); /* prioritaire, on sort */
+            } else if (inside == NULL) {
+                inside = g_strdup(pr->path);
+            }
+            g_object_unref(pr);
+        }
+    }
+    if (exact != NULL) {
+        g_free(inside);
+        return exact;
+    }
+    return inside; /* NULL si rien */
+}

@@ -74,4 +74,10 @@ void roots_remove(GListStore *roots, RootEntry *entry);
  * Retourne FALSE en cas d'échec. */
 gboolean roots_delete_recursive(const char *path);
 
+/* Le projet courant d'après la sélection (multi_paths : chemins choisis
+ * dans l'explorateur) : un projet sélectionné directement est prioritaire
+ * sur un fichier DANS un projet ; les structures ne comptent jamais.
+ * Retourne un chemin g_strdup (à libérer) ou NULL si rien de résoluble. */
+char *roots_current_project(GListStore *roots, GHashTable *multi_paths);
+
 #endif /* SIEB_ROOTS_H */

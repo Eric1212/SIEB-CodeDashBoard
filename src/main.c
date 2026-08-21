@@ -17,6 +17,7 @@
 #include "fslist.h"
 #include "dirty.h"
 #include "diffbar.h"
+#include "bashpanel.h"
 #include "layout.h"
 
 /* Un fichier ouvert garde son propre buffer (l'historique undo survit à la
@@ -2614,6 +2615,7 @@ typedef struct {
 /* Crée la VUE d'une pièce. Les morceaux (editor/explorer) ont un état
  * unique partagé (buffer / modèle+sélection) qui survit aux tuiles ;
  * chaque tuile obtient sa propre vue sur cet état. */
+
 static GtkWidget *
 create_piece(const char *id, App *app)
 {
@@ -2623,6 +2625,8 @@ create_piece(const char *id, App *app)
         w = build_editor(app);
     else if (strcmp(id, "explorer") == 0)
         w = build_roots_panel(app);
+    else if (strcmp(id, "bash") == 0)
+        w = bash_panel_new(app->roots, app->multi_paths);
     else {
         /* Vide : emplacement réservé, prêt à recevoir un morceau (Phase 2). */
         w = gtk_label_new("Vide\n(emplacement réservé)");
@@ -2698,7 +2702,7 @@ build_tile_menu(Layout *node, App *app)
     GtkWidget  *pop;
     GtkWidget  *menu;
     GPtrArray  *acts;
-    const char *pieces[] = { "editor", "explorer", "empty" };
+    const char *pieces[] = { "editor", "explorer", "bash", "empty" };
     gsize       i;
 
     pop = gtk_popover_new();

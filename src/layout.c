@@ -319,6 +319,8 @@ layout_name(const char *id)
         return "Éditeur";
     if (strcmp(id, "explorer") == 0)
         return "Explorateur";
+    if (strcmp(id, "bash") == 0)
+        return "Bash";
     if (strcmp(id, "empty") == 0)
         return "Vide";
     return id;
