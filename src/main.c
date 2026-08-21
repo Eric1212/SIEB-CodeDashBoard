@@ -139,8 +139,6 @@ static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
 static void update_style_scheme(App *app);
 static void render_layout(App *app);
 static void set_paned_positions(App *app);
-static void on_paned_position(GObject *paned, GParamSpec *pspec,
-                              gpointer data);
 static GtkWidget *build_editor(App *app);
 static GtkWidget *build_roots_panel(App *app);
 
@@ -2913,56 +2911,11 @@ render_layout_node(Layout *node, App *app)
     /* Pas de réduction sous la taille minimale des tuiles (100×100). */
     gtk_paned_set_shrink_start_child(GTK_PANED(content), FALSE);
     gtk_paned_set_shrink_end_child(GTK_PANED(content), FALSE);
-    /* Le drag de la poignée met à jour la fraction du modèle (persistée
-     * par layout_save) — sans quoi le re-rendu reviendrait aux valeurs
-     * par défaut. */
-    g_object_set_data(G_OBJECT(content), "sieb-app", app);
-    g_signal_connect(content, "notify::position",
-                     G_CALLBACK(on_paned_position), node);
-    /* PAS de wrapper sur les blocs : une barre par niveau de split
-     * s'empilait (4 barres au-dessus d'une tuile profonde = 1/3 de page).
-     * Les actions de groupe sont dans le menu des tuiles. */
+    /* PAS de handler notify::position ici : les positions sont lues une
+     * seule fois à la fermeture (collect_fractions_walk) — suivre les
+     * notifications en continu sauvegardait les valeurs d'allocation
+     * internes de GTK (fractions corrompues). */
     return content;
-}
-
-/* Save différé du layout : le drag de poignée émet notify::position en
- * continu ; on persiste une seule fois à la fin du mouvement. */
-static guint layout_save_idle = 0;
-
-static gboolean
-layout_save_idle_cb(gpointer data)
-{
-    App *app = data;
-
-    layout_save_idle = 0;
-    layout_save(app->layout);
-    return G_SOURCE_REMOVE;
-}
-
-static void
-on_paned_position(GObject *paned, GParamSpec G_GNUC_UNUSED *pspec,
-                  gpointer data)
-{
-    Layout    *node = data;
-    GtkPaned  *p = GTK_PANED(paned);
-    App       *app = NULL;
-    int        total;
-    double     fraction;
-
-    total = (node->kind == LAYOUT_HSPLIT)
-                ? gtk_widget_get_width(GTK_WIDGET(p))
-                : gtk_widget_get_height(GTK_WIDGET(p));
-    if (total <= 0)
-        return;
-    fraction = (double)gtk_paned_get_position(p) / (double)total;
-    node->fraction = CLAMP(fraction, 0.05, 0.95);
-
-    /* App pour le save différé : retrouvé via le handler d'action ? Non —
-     * on passe par l'état global du contexte GTK : le data du notify est
-     * le nœud ; on stocke app dans le widget pour le retrouver. */
-    app = g_object_get_data(G_OBJECT(p), "sieb-app");
-    if (app != NULL && layout_save_idle == 0)
-        layout_save_idle = g_idle_add(layout_save_idle_cb, app);
 }
 
 /* Applique les fractions persistées aux poignées (après allocation). */
@@ -3017,11 +2970,21 @@ set_paned_positions(App *app)
         set_paned_positions_walk(app->layout_root, app->layout);
 }
 
-/* À chaque affichage (1er ou après re-rendu), on réapplique les fractions. */
+/* À l'émission de « map », l'allocation n'a pas encore eu lieu : les
+ * largeurs/hauteurs valent 0 et set_paned_positions sautait tout — les
+ * fractions sauvegardées n'étaient JAMAIS restaurées au boot. On applique
+ * à la prochaine itération de la boucle, une fois les tailles allouées. */
+static gboolean
+apply_positions_idle(gpointer data)
+{
+    set_paned_positions((App *)data);
+    return G_SOURCE_REMOVE;
+}
+
 static void
 on_layout_map(GtkWidget G_GNUC_UNUSED *widget, gpointer data)
 {
-    set_paned_positions((App *)data);
+    g_idle_add(apply_positions_idle, data);
 }
 
 /* Reconstruit l'arbre paned depuis le modèle et l'insère dans le holder.
@@ -3159,13 +3122,44 @@ window_state_save(App *app)
     g_object_unref(builder);
 }
 
+/* Fermeture : lecture des positions RÉELLES des poignées dans le modèle,
+ * sauvegarde du layout + de l'état de la fenêtre. */
+static void
+collect_fractions_walk(GtkWidget *widget, Layout *node)
+{
+    GtkWidget *paned_w;
+    GtkPaned  *paned;
+    int        total;
+
+    if (node == NULL || node->kind == LAYOUT_TILE)
+        return;
+    paned_w = find_paned_widget(widget);
+    if (paned_w == NULL)
+        return;
+    paned = GTK_PANED(paned_w);
+    total = (node->kind == LAYOUT_HSPLIT)
+                ? gtk_widget_get_width(paned_w)
+                : gtk_widget_get_height(paned_w);
+    if (total > 0)
+        node->fraction = CLAMP((double)gtk_paned_get_position(paned) / total,
+                               0.05, 0.95);
+    collect_fractions_walk(gtk_paned_get_start_child(paned), node->a);
+    collect_fractions_walk(gtk_paned_get_end_child(paned), node->b);
+}
+
 /* Fermeture (clic sur X / gtk_window_close) : sauvegarde de l'état puis
  * laisse la fenêtre se fermer. C'est LE point de sauvegarde : au signal
  * ::shutdown de l'application, la fenêtre est déjà finalisée. */
 static gboolean
 on_close_request(GtkWindow G_GNUC_UNUSED *win, gpointer data)
 {
-    window_state_save(data);
+    App *app = data;
+
+    if (app->layout_root != NULL && app->layout != NULL) {
+        collect_fractions_walk(app->layout_root, app->layout);
+        layout_save(app->layout);
+    }
+    window_state_save(app);
     return FALSE; /* la fermeture continue */
 }
 
@@ -3441,10 +3435,6 @@ main(int argc, char **argv)
     g_object_unref(gtk_app);
     if (app->diff_timer != 0)
         g_source_remove(app->diff_timer);
-    if (layout_save_idle != 0) {
-        g_source_remove(layout_save_idle);
-        layout_save_idle = 0;
-    }
     if (app->tree_model != NULL)
         g_object_unref(app->tree_model);
     if (app->selection != NULL)
