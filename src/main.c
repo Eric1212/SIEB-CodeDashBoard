@@ -13,6 +13,7 @@
 #include <gtksourceview/gtksource.h>
 #include <adwaita.h>
 #include <glib/gstdio.h>
+#include <json-glib/json-glib.h>
 #include "roots.h"
 #include "fslist.h"
 #include "dirty.h"
@@ -131,6 +132,7 @@ static void create_roots_state(App *app);
 static GtkWidget *build_roots_view(App *app);
 static gboolean test_split_idle(gpointer data);
 static gboolean test_grid_idle(gpointer data);
+static gboolean test_close_idle(gpointer data);
 static gboolean test_quit_idle(gpointer data);
 static void recompute_dirty(App *app);
 static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
@@ -3054,6 +3056,119 @@ render_layout(App *app)
     trace_state(app, "render_layout: fin");
 }
 
+/* ------------------------------------------------ */
+/* Persistance de la fenêtre (taille + état)         */
+/*                                                   */
+/* Wayland interdit le positionnement ; la taille et */
+/* les états maximisé/fullscreen sont restaurables.  */
+/* ------------------------------------------------ */
+
+static char *
+window_state_path(void)
+{
+    return g_build_filename(g_get_user_config_dir(), "siebcodedashboard",
+                            "window.json", NULL);
+}
+
+static void
+window_state_load(App *app)
+{
+    char       *path = window_state_path();
+    JsonParser *parser;
+    JsonObject *obj;
+
+    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
+        g_free(path);
+        return;
+    }
+    parser = json_parser_new();
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        (obj = json_node_get_object(json_parser_get_root(parser))) != NULL) {
+        if (json_object_has_member(obj, "width") &&
+            json_object_has_member(obj, "height")) {
+            int w = (int)json_object_get_int_member(obj, "width");
+            int h = (int)json_object_get_int_member(obj, "height");
+
+            if (w > 0 && h > 0)
+                gtk_window_set_default_size(app->win, w, h);
+        }
+        /* Les états s'appliquent au map de la fenêtre. */
+        if (json_object_has_member(obj, "fullscreen") &&
+            json_object_get_boolean_member(obj, "fullscreen"))
+            gtk_window_fullscreen(app->win);
+        else if (json_object_has_member(obj, "maximized") &&
+                 json_object_get_boolean_member(obj, "maximized"))
+            gtk_window_maximize(app->win);
+    }
+    g_object_unref(parser);
+    g_free(path);
+}
+
+static void
+window_state_save(App *app)
+{
+    JsonBuilder *builder;
+    JsonNode    *root_node;
+    gchar       *text;
+    char        *dir;
+    int          w, h;
+
+    /* Taille réelle allouée (Wayland : pas de position à sauver). */
+    w = gtk_widget_get_width(GTK_WIDGET(app->win));
+    h = gtk_widget_get_height(GTK_WIDGET(app->win));
+
+    /* Garde-fou : fenêtre jamais mappée (arrêt précoce) ou taille
+     * absurde → ne pas écraser l'état précédent avec de la bouillie. */
+    if (!gtk_widget_get_mapped(GTK_WIDGET(app->win)) ||
+        w < 200 || h < 200)
+        return;
+
+    builder = json_builder_new();
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "width");
+    json_builder_add_int_value(builder, w);
+    json_builder_set_member_name(builder, "height");
+    json_builder_add_int_value(builder, h);
+    json_builder_set_member_name(builder, "maximized");
+    json_builder_add_boolean_value(builder,
+                                   gtk_window_is_maximized(app->win));
+    json_builder_set_member_name(builder, "fullscreen");
+    json_builder_add_boolean_value(builder,
+                                   gtk_window_is_fullscreen(app->win));
+    json_builder_end_object(builder);
+
+    dir = g_path_get_dirname(window_state_path());
+    g_mkdir_with_parents(dir, 0755);
+    g_free(dir);
+
+    root_node = json_builder_get_root(builder);
+    text = json_to_string(root_node, TRUE);
+    {
+        char     *path = window_state_path();
+        GError   *error = NULL;
+
+        if (!g_file_set_contents(path, text, -1, &error)) {
+            g_printerr("SIEB - CodeDashBoard: écriture window.json : %s\n",
+                       error->message);
+            g_error_free(error);
+        }
+        g_free(path);
+    }
+    g_free(text);
+    json_node_unref(root_node);
+    g_object_unref(builder);
+}
+
+/* Fermeture (clic sur X / gtk_window_close) : sauvegarde de l'état puis
+ * laisse la fenêtre se fermer. C'est LE point de sauvegarde : au signal
+ * ::shutdown de l'application, la fenêtre est déjà finalisée. */
+static gboolean
+on_close_request(GtkWindow G_GNUC_UNUSED *win, gpointer data)
+{
+    window_state_save(data);
+    return FALSE; /* la fermeture continue */
+}
+
 static void
 on_activate(GtkApplication *gtk_app, gpointer data)
 {
@@ -3066,6 +3181,9 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     app->win = GTK_WINDOW(gtk_application_window_new(gtk_app));
     gtk_window_set_title(app->win, "SIEB - CodeDashBoard");
     gtk_window_set_default_size(app->win, 1280, 800);
+    window_state_load(app);
+    g_signal_connect(app->win, "close-request",
+                     G_CALLBACK(on_close_request), app);
 
     /* CSS applicatif : titres de tuiles discrets (10 pt). */
     {
@@ -3167,6 +3285,11 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     }
 
     gtk_window_present(app->win);
+
+    /* MODE TEST (debug) : SIEB_TEST_CLOSE=1 ferme la fenêtre après 2 s
+     * (équivalent du clic sur X : passe par close-request). */
+    if (g_getenv("SIEB_TEST_CLOSE") != NULL)
+        g_timeout_add(2000, test_close_idle, app->win);
 
     /* MODE TEST (debug) : SIEB_TEST_SPLIT=1 reproduit le crash du split —
      * split horizontal du root dans un idle, puis quitte après 2 s. */
@@ -3282,6 +3405,14 @@ test_grid_idle(gpointer data)
     layout_retile(app->layout->b->a->b, "editor");    /* C */
     layout_retile(app->layout->b->b, "editor");       /* F */
     render_layout(app);
+    return G_SOURCE_REMOVE;
+}
+
+/* MODE TEST (debug) : voir SIEB_TEST_CLOSE dans on_activate. */
+static gboolean
+test_close_idle(gpointer data)
+{
+    gtk_window_close(GTK_WINDOW(data));
     return G_SOURCE_REMOVE;
 }
 
