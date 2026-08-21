@@ -7,8 +7,8 @@
  * fermées avec elle.
  */
 
-#ifndef SIEB_MODAL_H
-#define SIEB_MODAL_H
+#ifndef CDB_MODAL_H
+#define CDB_MODAL_H
 
 #include <gtk/gtk.h>
 
@@ -21,4 +21,4 @@
 gboolean modal_open(GtkWindow *parent, int *count, GtkWidget *titlebar,
                     GtkWidget *content, GtkWindow **win_out);
 
-#endif /* SIEB_MODAL_H */
+#endif /* CDB_MODAL_H */

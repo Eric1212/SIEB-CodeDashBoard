@@ -85,8 +85,7 @@ session_other_instance_running(void)
 char *
 session_dir(void)
 {
-    return g_build_filename(g_get_user_config_dir(), "siebcodedashboard",
-                            NULL);
+    return g_build_filename(g_get_user_config_dir(), "cdb", NULL);
 }
 
 static char *
@@ -200,7 +199,7 @@ session_spawn_new(int n)
     self[r] = '\0';
 
     g_snprintf(num, sizeof(num), "%03d", n);
-    env_set = g_strdup_printf("SIEB_SESSION=%s", num);
+    env_set = g_strdup_printf("CDB_SESSION=%s", num);
 
     /* environ + notre variable. */
     while (environ[envc] != NULL)
@@ -339,7 +338,7 @@ session_pick_dialog(GtkWindow *parent)
 gboolean
 session_init(void)
 {
-    const char *env = g_getenv("SIEB_SESSION");
+    const char *env = g_getenv("CDB_SESSION");
 
     if (env != NULL && env[0] != '\0') {
         char *end;

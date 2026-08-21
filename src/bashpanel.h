@@ -3,8 +3,8 @@
  * VTE (vrais shells interactifs). Pièce du layout, id "bash".
  */
 
-#ifndef SIEB_BASHPANEL_H
-#define SIEB_BASHPANEL_H
+#ifndef CDB_BASHPANEL_H
+#define CDB_BASHPANEL_H
 
 #include <gtk/gtk.h>
 #include "roots.h"
@@ -14,4 +14,4 @@
  * spawn via roots/multi_paths), sinon $HOME. */
 GtkWidget *bash_panel_new(GListStore *roots, GHashTable *multi_paths);
 
-#endif /* SIEB_BASHPANEL_H */
+#endif /* CDB_BASHPANEL_H */

@@ -6,7 +6,7 @@
  * Un Root de projet est un dossier de travail ouvert dans l'IDE
  * (ex: /home/eric/dev/alvalllm), comme dans Zed.
  *
- * Persistance : ~/.config/siebcodedashboard/roots.json
+ * Persistance : ~/.config/cdb/roots.json
  */
 
 #include "roots.h"
@@ -15,7 +15,7 @@
 #include <glib/gstdio.h>
 #include <stdio.h>
 
-#define SIEB_ROOTS_FILE  "roots.json"
+#define CDB_ROOTS_FILE  "roots.json"
 
 /* Prototypes internes (définies plus bas dans le fichier). */
 static gboolean root_in_any_children(GListStore *roots, const char *path);
@@ -79,7 +79,7 @@ root_entry_new(RootKind kind, const char *path)
 static char *
 roots_config_path(void)
 {
-    return session_config_path(SIEB_ROOTS_FILE);
+    return session_config_path(CDB_ROOTS_FILE);
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,7 +176,7 @@ roots_load(void)
 
     parser = json_parser_new();
     if (!json_parser_load_from_file(parser, path, &error)) {
-        g_printerr("SIEBCodeDashboard: roots.json: %s\n", error->message);
+        g_printerr("CDB: roots.json: %s\n", error->message);
         g_error_free(error);
         g_object_unref(parser);
         g_free(path);
@@ -434,7 +434,7 @@ roots_remove(GListStore *roots, RootEntry *entry)
         }
         g_object_unref(e);
     }
-    g_printerr("SIEBCodeDashboard: root introuvable: %s\n", entry->path);
+    g_printerr("CDB: root introuvable: %s\n", entry->path);
 }
 
 /* Suppression récursive d'un dossier : ne suit pas les liens symboliques

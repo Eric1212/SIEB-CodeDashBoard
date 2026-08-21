@@ -1,5 +1,5 @@
 /*
- * SIEB - CodeDashBoard
+ * CodeDashBoard (CDB) — SIEB
  *
  * Fenêtre GTK4 + GtkSourceView 5 : HeaderBar avec ouverture de fichier,
  * panneau latéral "Dossiers" (roots de structure / roots de projet,
@@ -161,8 +161,8 @@ static GtkWidget *build_roots_panel(App *app);
 static void
 load_file(App *app, const char *path)
 {
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: load_file path=%s\n", path);
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: load_file path=%s\n", path);
 
     GtkSourceLanguageManager *lang_mgr;
     GtkSourceLanguage        *language;
@@ -211,7 +211,7 @@ load_file(App *app, const char *path)
         } else {
             /* Chargement propre : la référence est le contenu disque. */
             if (!g_file_get_contents(path, &content, &len, &error)) {
-                g_printerr("SIEB - CodeDashBoard: %s\n", error->message);
+                g_printerr("CDB: %s\n", error->message);
                 g_error_free(error);
                 g_object_unref(pf->buffer);
                 g_free(pf);
@@ -330,7 +330,7 @@ update_modified_indicator(App *app)
             gtk_label_set_text(app->header_file, title);
         g_free(title);
     } else {
-        gtk_window_set_title(app->win, "Code Dash Board by SIEB");
+        gtk_window_set_title(app->win, "CodeDashBoard");
         if (app->header_file != NULL)
             gtk_label_set_text(app->header_file, "");
     }
@@ -476,7 +476,7 @@ update_diff(App *app)
         siebd_diff_compute(app->saved_content, buffer_text(app), ranges, &total);
     else
         total = 0;
-    siebd_diff_bar_set_ranges(SIEBD_DIFF_BAR(app->diffbar), ranges, total);
+    cdb_diff_bar_set_ranges(CDB_DIFF_BAR(app->diffbar), ranges, total);
     g_ptr_array_free(ranges, TRUE);
 }
 
@@ -494,8 +494,8 @@ on_save_activated(GSimpleAction G_GNUC_UNUSED *action,
     if (app->current_file == NULL)
         return; /* demo : pas de fichier à sauvegarder */
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: save -> %s\n", app->current_file);
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: save -> %s\n", app->current_file);
 
     gtk_text_buffer_get_start_iter(GTK_TEXT_BUFFER(app->buffer), &start);
     gtk_text_buffer_get_end_iter(GTK_TEXT_BUFFER(app->buffer), &end);
@@ -619,8 +619,8 @@ on_row_setup(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
     g_signal_connect(gesture, "pressed", G_CALLBACK(on_row_pressed), data);
     gtk_widget_add_controller(expander, GTK_EVENT_CONTROLLER(gesture));
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: row setup (gesture bouton 3 attaché)\n");
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: row setup (gesture bouton 3 attaché)\n");
 }
 
 static void
@@ -659,7 +659,7 @@ on_row_bind(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
     gtk_label_set_text(GTK_LABEL(indicator), dirty ? "●" : "");
     gtk_tree_expander_set_list_row(GTK_TREE_EXPANDER(expander), row);
     /* pos+1 : l'index 0 est valide, GUINT_TO_POINTER(0) == NULL. */
-    g_object_set_data(G_OBJECT(expander), "sieb-pos",
+    g_object_set_data(G_OBJECT(expander), "cdb-pos",
                       GUINT_TO_POINTER(gtk_list_item_get_position(item) + 1));
 }
 
@@ -687,13 +687,13 @@ on_remove_root_clicked(GtkButton *button, gpointer data)
     App *app = data;
 
     if (app->pending_remove != NULL) {
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: suppression de « %s »\n", app->pending_remove->path);
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: suppression de « %s »\n", app->pending_remove->path);
         roots_remove(app->roots, app->pending_remove);
         roots_save(app->roots);
         app->pending_remove = NULL;
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: MUTATION unselect_all from %s\n", G_STRFUNC);
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: MUTATION unselect_all from %s\n", G_STRFUNC);
         gtk_selection_model_unselect_all(GTK_SELECTION_MODEL(app->selection));
     }
     gtk_popover_popdown(GTK_POPOVER(gtk_widget_get_parent(GTK_WIDGET(button))));
@@ -719,8 +719,8 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
     gboolean        is_dir;
     RootEntry      *entry = NULL;
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: clic droit capté (row=%p)\n", (void *)row);
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: clic droit capté (row=%p)\n", (void *)row);
 
     if (row == NULL)
         return;
@@ -853,8 +853,8 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
                          G_CALLBACK(on_remove_popover_closed), NULL);
         gtk_popover_popup(GTK_POPOVER(popover));
 
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: popover popup demandé pour « %s »\n", dir_path);
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: popover popup demandé pour « %s »\n", dir_path);
     }
     } /* fin bloc sélection multiple */
 }
@@ -1227,8 +1227,8 @@ on_new_entry_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
             }
         }
         if (error_msg == NULL) {
-            if (g_getenv("SIEB_DEBUG") != NULL)
-                g_printerr("SIEB: création « %s » dans « %s »\n",
+            if (g_getenv("CDB_DEBUG") != NULL)
+                g_printerr("CDB: création « %s » dans « %s »\n",
                            name, d->dir_path);
             mark_parent_dirty(d->app, d->dir_path);
             rebuild_explorer(d->app);
@@ -1512,7 +1512,7 @@ on_pick_folder_finished(GObject *source, GAsyncResult *res, gpointer data)
     file = gtk_file_dialog_select_folder_finish(dialog, res, &error);
     if (error != NULL) {
         if (!g_error_matches(error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_DISMISSED))
-            g_printerr("SIEB - CodeDashBoard: %s\n", error->message);
+            g_printerr("CDB: %s\n", error->message);
         g_error_free(error);
         return;
     }
@@ -1624,7 +1624,7 @@ build_roots_panel(App *app)
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_vexpand(scrolled, TRUE);
-    if (g_getenv("SIEB_DEBUG") != NULL)
+    if (g_getenv("CDB_DEBUG") != NULL)
         g_signal_connect(scrolled, "destroy", G_CALLBACK(trace_destroy), app);
     app->explorer_scrolled = scrolled;
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled),
@@ -1646,9 +1646,9 @@ on_selection_changed(GtkSelectionModel *model, guint position, guint n_items,
 {
     App *app = data;
 
-    if (g_getenv("SIEB_DEBUG") != NULL) {
+    if (g_getenv("CDB_DEBUG") != NULL) {
         GtkBitset *bits = gtk_selection_model_get_selection(model);
-        g_printerr("SIEB: sélection -> %lu éléments (changed pos=%u n=%u)\n",
+        g_printerr("CDB: sélection -> %lu éléments (changed pos=%u n=%u)\n",
                    (unsigned long)gtk_bitset_get_size(bits), position, n_items);
         gtk_bitset_unref(bits);
     }
@@ -1733,7 +1733,7 @@ selection_sync_from_model(App *app)
     gtk_bitset_unref(bits);
 }
 
-/* Position d'une ligne : GtkTreeListRow de l'expander, sinon sieb-pos
+/* Position d'une ligne : GtkTreeListRow de l'expander, sinon cdb-pos
  * (index + 1, car GUINT_TO_POINTER(0) == NULL). */
 static guint
 explorer_pos_from_widget(GtkWidget *w)
@@ -1750,7 +1750,7 @@ explorer_pos_from_widget(GtkWidget *w)
             return gtk_tree_list_row_get_position(row);
     }
 
-    tagged = g_object_get_data(G_OBJECT(w), "sieb-pos");
+    tagged = g_object_get_data(G_OBJECT(w), "cdb-pos");
     if (tagged != NULL)
         return GPOINTER_TO_UINT(tagged) - 1;
 
@@ -1768,12 +1768,12 @@ explorer_pos_at(GtkWidget *view, double x, double y)
     for (GtkWidget *w = pick; w != NULL; w = gtk_widget_get_parent(w)) {
         guint pos = explorer_pos_from_widget(w);
 
-        if (g_getenv("SIEB_DEBUG") != NULL) {
+        if (g_getenv("CDB_DEBUG") != NULL) {
             const char *parent_type = w != NULL ? G_OBJECT_TYPE_NAME(w) : "NULL";
             gpointer tagged = w != NULL
-                ? g_object_get_data(G_OBJECT(w), "sieb-pos") : NULL;
+                ? g_object_get_data(G_OBJECT(w), "cdb-pos") : NULL;
             guint tagged_pos = tagged != NULL ? GPOINTER_TO_UINT(tagged) - 1 : GTK_INVALID_LIST_POSITION;
-            g_printerr("SIEB: pick_walk widget=%s sieb-pos=%u pos=%u\n",
+            g_printerr("CDB: pick_walk widget=%s cdb-pos=%u pos=%u\n",
                        parent_type, tagged_pos, pos);
         }
 
@@ -1788,8 +1788,8 @@ explorer_pos_at(GtkWidget *view, double x, double y)
         }
     }
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: pick=%s — pas de pos\n",
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: pick=%s — pas de pos\n",
                    pick != NULL ? G_OBJECT_TYPE_NAME(pick) : "NULL");
     return GTK_INVALID_LIST_POSITION;
 }
@@ -1835,8 +1835,8 @@ on_primary_pressed(GtkGestureClick *gesture,
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 
     if (pos == GTK_INVALID_LIST_POSITION) {
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: Ctrl+clic hors item\n");
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: Ctrl+clic hors item\n");
         return;
     }
 
@@ -1850,11 +1850,11 @@ on_primary_pressed(GtkGestureClick *gesture,
             anchor = pos;
         lo = MIN(anchor, pos);
         n = MAX(anchor, pos) - lo + 1;
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: Shift+clic plage [%u, %u] (unselect_rest=%d)\n",
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: Shift+clic plage [%u, %u] (unselect_rest=%d)\n",
                        lo, lo + n - 1, unselect_rest);
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: MUTATION select_range lo=%u n=%u unselect_rest=%d from %s\n",
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: MUTATION select_range lo=%u n=%u unselect_rest=%d from %s\n",
                        lo, n, unselect_rest, G_STRFUNC);
         gtk_selection_model_select_range(GTK_SELECTION_MODEL(app->selection),
                                          lo, n, unselect_rest);
@@ -1863,12 +1863,12 @@ on_primary_pressed(GtkGestureClick *gesture,
     }
 
     /* Ctrl : toggle de la ligne, le reste de la sélection est conservé. */
-    if (g_getenv("SIEB_DEBUG") != NULL) {
+    if (g_getenv("CDB_DEBUG") != NULL) {
         GtkBitset *bits = gtk_selection_model_get_selection(
             GTK_SELECTION_MODEL(app->selection));
         gboolean was_selected = gtk_selection_model_is_selected(
             GTK_SELECTION_MODEL(app->selection), pos);
-        g_printerr("SIEB: Ctrl+clic toggle pos=%u avant: size=%lu is_selected=%d",
+        g_printerr("CDB: Ctrl+clic toggle pos=%u avant: size=%lu is_selected=%d",
                    pos, (unsigned long)gtk_bitset_get_size(bits), was_selected);
         gtk_bitset_unref(bits);
         if (app->tree_model != NULL) {
@@ -1897,7 +1897,7 @@ on_primary_pressed(GtkGestureClick *gesture,
             guint n = (guint)gtk_bitset_get_size(all);
             guint i = 0;
             GtkBitsetIter it;
-            g_printerr("SIEB: Ctrl+clic bitset complet size=%lu:", (unsigned long)n);
+            g_printerr("CDB: Ctrl+clic bitset complet size=%lu:", (unsigned long)n);
             if (gtk_bitset_iter_init_first(&it, all, &i)) {
                 do {
                     const char *label = "<unknown>";
@@ -1935,16 +1935,16 @@ on_primary_pressed(GtkGestureClick *gesture,
             g_hash_table_remove(app->multi_paths, path);
         else
             g_hash_table_add(app->multi_paths, path);
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: Ctrl+clic -> multi_paths size=%lu\n",
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: Ctrl+clic -> multi_paths size=%lu\n",
                        (unsigned long)g_hash_table_size(app->multi_paths));
         selection_apply_from_paths(app);
     }
 
-    if (g_getenv("SIEB_DEBUG") != NULL) {
+    if (g_getenv("CDB_DEBUG") != NULL) {
         GtkBitset *bits = gtk_selection_model_get_selection(
             GTK_SELECTION_MODEL(app->selection));
-        g_printerr("SIEB: Ctrl+clic toggle pos=%u après: size=%lu\n",
+        g_printerr("CDB: Ctrl+clic toggle pos=%u après: size=%lu\n",
                    pos, (unsigned long)gtk_bitset_get_size(bits));
         gtk_bitset_unref(bits);
     }
@@ -1963,8 +1963,8 @@ on_primary_released(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
     /* Se fier au press, pas à l'état actuel : Ctrl peut être relâché
      * avant le bouton, la vue ferait alors un select exclusif. */
     if (app->last_click_mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) {
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: release CLAIMÉ (mods=0x%x) — pas d'écrasement\n",
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: release CLAIMÉ (mods=0x%x) — pas d'écrasement\n",
                        app->last_click_mods);
         gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
     }
@@ -1981,18 +1981,18 @@ on_row_activate(GtkListView *view, guint position, gpointer data)
     GtkSelectionModel *model = gtk_list_view_get_model(view);
     GtkTreeListRow    *row = g_list_model_get_item(G_LIST_MODEL(model), position);
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: activate pos=%u (mods=%u)\n", position,
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: activate pos=%u (mods=%u)\n", position,
                    app->last_click_mods);
 
-    if (row != NULL && g_getenv("SIEB_DEBUG") != NULL) {
+    if (row != NULL && g_getenv("CDB_DEBUG") != NULL) {
         gpointer item = gtk_tree_list_row_get_item(row);
         if (g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY)) {
             RootEntry *e = item;
-            g_printerr("SIEB: activate path=root:%s\n", e->path);
+            g_printerr("CDB: activate path=root:%s\n", e->path);
         } else {
             FileEntry *f = item;
-            g_printerr("SIEB: activate path=%s%s\n", f->path,
+            g_printerr("CDB: activate path=%s%s\n", f->path,
                        f->is_dir ? "/" : "");
         }
     }
@@ -2004,8 +2004,8 @@ on_row_activate(GtkListView *view, guint position, gpointer data)
             g_object_unref(row);
         return;
     }
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: activate -> ouverture fichier\n");
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: activate -> ouverture fichier\n");
 
     if (row == NULL)
         return;
@@ -2040,8 +2040,8 @@ select_row(App *app, GtkTreeListRow *row)
                         ? ((RootEntry *)item)->path
                         : ((FileEntry *)item)->path;
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: select_row (open) reset multi -> %s\n", path);
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: select_row (open) reset multi -> %s\n", path);
 
     g_hash_table_remove_all(app->multi_paths);
     g_hash_table_add(app->multi_paths, g_strdup(path));
@@ -2214,8 +2214,8 @@ descend_path(App *app, const char *path, gboolean select_last)
 static void
 reveal_path(App *app, const char *file_path)
 {
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: reveal_path path=%s\n", file_path);
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: reveal_path path=%s\n", file_path);
     descend_path(app, file_path, TRUE);
 }
 
@@ -2250,7 +2250,7 @@ collect_expanded(GListModel *model, GPtrArray *paths)
 /* ÉTAT de l'explorateur : modèle + sélection. Créé une seule fois, partagé
  * par toutes les vues « explorer » ; retirer une tuile ne détruit rien.
  * La sélection multi (app->multi_paths) est la source de vérité. */
-/* Trace d'état (SIEB_DEBUG) : adresses + refcounts des objets d'état
+/* Trace d'état (CDB_DEBUG) : adresses + refcounts des objets d'état
  * partagés — permet de voir quand tree_model/selection deviennent
  * invalides (double-unref / use-after-free). */
 static void
@@ -2258,9 +2258,9 @@ trace_destroy(GtkWidget *w, gpointer data)
 {
     App *app = data;
 
-    if (g_getenv("SIEB_DEBUG") == NULL)
+    if (g_getenv("CDB_DEBUG") == NULL)
         return;
-    g_printerr("SIEB: destroy %s @%p (refs selection=%d)\n",
+    g_printerr("CDB: destroy %s @%p (refs selection=%d)\n",
                G_OBJECT_TYPE_NAME(w), (void *)w,
                app->selection != NULL
                    ? (int)((GObject *)app->selection)->ref_count : -1);
@@ -2269,9 +2269,9 @@ trace_destroy(GtkWidget *w, gpointer data)
 static void
 trace_state(App *app, const char *where)
 {
-    if (g_getenv("SIEB_DEBUG") == NULL)
+    if (g_getenv("CDB_DEBUG") == NULL)
         return;
-    g_printerr("SIEB: [%s] tree_model=%p selection=%p (refs=%d) roots=%p "
+    g_printerr("CDB: [%s] tree_model=%p selection=%p (refs=%d) roots=%p "
                "layout=%p\n",
                where, (void *)app->tree_model, (void *)app->selection,
                app->selection != NULL ? (int)((GObject *)app->selection)->ref_count
@@ -2326,8 +2326,8 @@ build_roots_view(App *app)
      * jamais libérées (fuite bornée par le nombre de vues créées, l'état
      * reste vivant pour toute la durée de vie de l'application). */
     g_object_ref(app->selection);
-    if (g_getenv("SIEB_DEBUG") != NULL) {
-        g_printerr("SIEB: build_roots_view selection refs apres new=%d\n",
+    if (g_getenv("CDB_DEBUG") != NULL) {
+        g_printerr("CDB: build_roots_view selection refs apres new=%d\n",
                    app->selection != NULL
                        ? (int)((GObject *)app->selection)->ref_count : -1);
         g_signal_connect(view, "destroy", G_CALLBACK(trace_destroy), app);
@@ -2362,8 +2362,8 @@ rebuild_explorer(App *app)
     if (app->tree_model != NULL)
         collect_expanded(G_LIST_MODEL(app->tree_model), expanded);
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: rebuild_explorer (dossiers ouverts=%u)\n",
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: rebuild_explorer (dossiers ouverts=%u)\n",
                    expanded->len);
 
     /* L'ancien état (modèle + sélection) est remplacé : on libère nos
@@ -2381,8 +2381,8 @@ rebuild_explorer(App *app)
     if (app->explorer_scrolled != NULL) {
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(app->explorer_scrolled),
                                       build_roots_view(app));
-        if (g_getenv("SIEB_DEBUG") != NULL)
-            g_printerr("SIEB: rebuild_explorer vue créée (n_items=%u)\n",
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: rebuild_explorer vue créée (n_items=%u)\n",
                        g_list_model_get_n_items(G_LIST_MODEL(app->tree_model)));
     }
 
@@ -2420,8 +2420,8 @@ update_style_scheme(App *app)
     if (scheme != NULL)
         gtk_source_buffer_set_style_scheme(app->buffer, scheme);
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: schéma = %s (dark=%d)\n", name,
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: schéma = %s (dark=%d)\n", name,
                    adw_style_manager_get_dark(style_mgr));
 }
 
@@ -2489,7 +2489,7 @@ center_paned(GtkWidget G_GNUC_UNUSED *widget, GdkFrameClock G_GNUC_UNUSED *clock
     return G_SOURCE_REMOVE; /* une seule fois */
 }
 
-/* Debug (SIEB_DEBUG=1) : répartition verticale des allocations. */
+/* Debug (CDB_DEBUG=1) : répartition verticale des allocations. */
 static gboolean
 dump_allocations(gpointer data)
 {
@@ -2497,7 +2497,7 @@ dump_allocations(gpointer data)
     GtkWidget *root = gtk_window_get_child(app->win);
 
     fprintf(stderr,
-            "SIEB: win %dx%d | root %dx%d | layout %dx%d | statusbar %dx%d\n",
+            "CDB: win %dx%d | root %dx%d | layout %dx%d | statusbar %dx%d\n",
             gtk_widget_get_width(GTK_WIDGET(app->win)),
             gtk_widget_get_height(GTK_WIDGET(app->win)),
             gtk_widget_get_width(root), gtk_widget_get_height(root),
@@ -2516,7 +2516,7 @@ on_first_map(GtkWidget G_GNUC_UNUSED *widget, gpointer data)
     if (!app->centered) {
         app->centered = TRUE;
         gtk_widget_add_tick_callback(GTK_WIDGET(app->win), center_paned, app, NULL);
-        if (g_getenv("SIEB_DEBUG") != NULL)
+        if (g_getenv("CDB_DEBUG") != NULL)
             g_timeout_add(500, dump_allocations, app);
     }
 }
@@ -2572,7 +2572,7 @@ build_editor(App *app)
 
     /* VUE : une par tuile, attachée au buffer partagé. */
     view = gtk_source_view_new_with_buffer(app->buffer);
-    if (g_getenv("SIEB_DEBUG") != NULL)
+    if (g_getenv("CDB_DEBUG") != NULL)
         g_signal_connect(view, "destroy", G_CALLBACK(trace_destroy), app);
     app->source_view = view;
     gtk_source_view_set_show_line_numbers(GTK_SOURCE_VIEW(view), TRUE);
@@ -2606,7 +2606,7 @@ build_editor(App *app)
      * utilisable). */
     overlay = gtk_overlay_new();
     gtk_overlay_set_child(GTK_OVERLAY(overlay), scrolled);
-    app->diffbar = siebd_diff_bar_new();
+    app->diffbar = cdb_diff_bar_new();
     gtk_widget_set_halign(app->diffbar, GTK_ALIGN_END);
     gtk_widget_set_valign(app->diffbar, GTK_ALIGN_FILL);
     gtk_overlay_add_overlay(GTK_OVERLAY(overlay), app->diffbar);
@@ -2650,8 +2650,8 @@ create_piece(const char *id, App *app)
         gtk_widget_set_valign(w, GTK_ALIGN_CENTER);
     }
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: create_piece id=%s -> %p\n",
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: create_piece id=%s -> %p\n",
                    id != NULL ? id : "(null)", (void *)w);
     return w;
 }
@@ -2855,15 +2855,15 @@ build_tile_wrapper(Layout *node, App *app, GtkWidget *content)
      * menu des tuiles (section « Groupe »). */
     title = layout_name(node->id);
 
-    if (g_getenv("SIEB_DEBUG") != NULL)
-        g_printerr("SIEB: tile id=%s widget=%p\n",
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: tile id=%s widget=%p\n",
                    node->id != NULL ? node->id : "(null)", (void *)content);
 
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     /* Taille minimale d'une tuile : 100×100 px (le paned parent ne peut
      * pas réduire davantage — shrink désactivé dans render_layout_node). */
     gtk_widget_set_size_request(box, 100, 100);
-    if (g_getenv("SIEB_DEBUG") != NULL)
+    if (g_getenv("CDB_DEBUG") != NULL)
         g_signal_connect(box, "destroy", G_CALLBACK(trace_destroy), app);
     /* Barre de titre compacte : un GtkHeaderBar fait ~51 px de haut — avec
      * les tuiles/blocs empilés (et un niveau de barre par split), les
@@ -3024,7 +3024,7 @@ render_layout(App *app)
     trace_state(app, "render_layout: apres unparent");
 
     app->layout_root = render_layout_node(app->layout, app);
-    if (g_getenv("SIEB_DEBUG") != NULL)
+    if (g_getenv("CDB_DEBUG") != NULL)
         g_signal_connect(app->layout_root, "destroy",
                          G_CALLBACK(trace_destroy), app);
     gtk_widget_set_vexpand(app->layout_root, TRUE);
@@ -3126,7 +3126,7 @@ window_state_save(App *app)
         GError   *error = NULL;
 
         if (!g_file_set_contents(path, text, -1, &error)) {
-            g_printerr("SIEB - CodeDashBoard: écriture window.json : %s\n",
+            g_printerr("CDB: écriture window.json : %s\n",
                        error->message);
             g_error_free(error);
         }
@@ -3212,11 +3212,11 @@ on_new_window_activated(GSimpleAction G_GNUC_UNUSED *action,
     App *app = data;
 
     if (!modal_open_empty(app))
-        g_warning("SIEB: limite de %d modales atteinte", MODAL_MAX);
+        g_warning("CDB: limite de %d modales atteinte", MODAL_MAX);
 }
 
 /* New Session : ouvre juste un nouveau PID du binaire (spawn sans
- * SIEB_SESSION) — le nouveau processus suit la logique standard de
+ * CDB_SESSION) — le nouveau processus suit la logique standard de
  * lancement (000 si seul, dialogue numéro sinon). */
 static void
 on_new_session_activated(GSimpleAction G_GNUC_UNUSED *action,
@@ -3234,7 +3234,7 @@ on_new_session_activated(GSimpleAction G_GNUC_UNUSED *action,
     (void)app;
     r = readlink("/proc/self/exe", self, sizeof(self) - 1);
     if (r <= 0) {
-        g_warning("SIEB: readlink /proc/self/exe échoué");
+        g_warning("CDB: readlink /proc/self/exe échoué");
         return;
     }
     self[r] = '\0';
@@ -3258,7 +3258,7 @@ on_new_session_activated(GSimpleAction G_GNUC_UNUSED *action,
         posix_spawnattr_destroy(&attr);
         g_free(envp);
         if (rc != 0)
-            g_warning("SIEB: échec du spawn de la nouvelle session");
+            g_warning("CDB: échec du spawn de la nouvelle session");
     }
 }
 
@@ -3363,14 +3363,14 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     GtkWidget *sep;
     AdwStyleManager *style_mgr;
 
-    /* Session (000-999) : SIEB_SESSION, sinon 000 si aucune autre
+    /* Session (000-999) : CDB_SESSION, sinon 000 si aucune autre
      * instance, sinon dialogue — ici, GTK est initialisé (display
      * disponible pour le dialogue). Annulé = quitter sans fenêtre. */
     if (!session_init())
         return;
 
     app->win = GTK_WINDOW(gtk_application_window_new(gtk_app));
-    gtk_window_set_title(app->win, "SIEB - CodeDashBoard");
+    gtk_window_set_title(app->win, "CodeDashBoard");
     gtk_window_set_default_size(app->win, 1280, 800);
     window_state_load(app);
     g_signal_connect(app->win, "close-request",
@@ -3444,7 +3444,7 @@ on_activate(GtkApplication *gtk_app, gpointer data)
 
         /* Bouton « nouvelle fenêtre » : son menu porte l'isolation de
          * processus — Nouvelle fenêtre (modale, même processus) et
-         * Nouvelle session (dialogue numéro puis spawn avec SIEB_SESSION,
+         * Nouvelle session (dialogue numéro puis spawn avec CDB_SESSION,
          * qui court-circuite le dialogue dans la nouvelle instance). */
         {
             GtkWidget *new_win_btn = gtk_menu_button_new();
@@ -3475,7 +3475,7 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         GtkWidget *sep1 = gtk_label_new("::");
         GtkWidget *sep2 = gtk_label_new("::");
         GtkWidget *sep3 = gtk_label_new("::");
-        GtkWidget *sig = gtk_label_new("Code Dash Board by SIEB");
+        GtkWidget *sig = gtk_label_new("CodeDashBoard by SIEB");
 
         gtk_widget_set_valign(title_box, GTK_ALIGN_CENTER);
         gtk_widget_set_valign(sep1, GTK_ALIGN_CENTER);
@@ -3583,31 +3583,31 @@ on_activate(GtkApplication *gtk_app, gpointer data)
 
     gtk_window_present(app->win);
 
-    /* MODE TEST (debug) : SIEB_TEST_CLOSE=1 ferme la fenêtre après 2 s
+    /* MODE TEST (debug) : CDB_TEST_CLOSE=1 ferme la fenêtre après 2 s
      * (équivalent du clic sur X : passe par close-request). */
-    if (g_getenv("SIEB_TEST_CLOSE") != NULL)
+    if (g_getenv("CDB_TEST_CLOSE") != NULL)
         g_timeout_add(2000, test_close_idle, app->win);
-    /* MODE TEST (debug) : SIEB_TEST_MODAL=1 ouvre 5 modales (la 5e doit
+    /* MODE TEST (debug) : CDB_TEST_MODAL=1 ouvre 5 modales (la 5e doit
      * être refusée). */
-    if (g_getenv("SIEB_TEST_MODAL") != NULL)
+    if (g_getenv("CDB_TEST_MODAL") != NULL)
         g_timeout_add(1000, test_modal_idle, app);
 
-    /* MODE TEST (debug) : SIEB_TEST_SPLIT=1 reproduit le crash du split —
+    /* MODE TEST (debug) : CDB_TEST_SPLIT=1 reproduit le crash du split —
      * split horizontal du root dans un idle, puis quitte après 2 s. */
-    if (g_getenv("SIEB_TEST_SPLIT") != NULL) {
+    if (g_getenv("CDB_TEST_SPLIT") != NULL) {
         g_idle_add(test_split_idle, app);
         g_timeout_add(2000, test_quit_idle, gtk_app);
     }
-    /* MODE TEST (debug) : SIEB_TEST_GRID=1 construit l'arrangement
+    /* MODE TEST (debug) : CDB_TEST_GRID=1 construit l'arrangement
      * A:B:C / A:B:C / D:B:C / E:F:F par les opérations du modèle
      * (comme le menu des tuiles/blocs), avec re-rendu à chaque étape. */
-    if (g_getenv("SIEB_TEST_GRID") != NULL) {
+    if (g_getenv("CDB_TEST_GRID") != NULL) {
         g_idle_add(test_grid_idle, app);
         g_timeout_add(2500, test_quit_idle, gtk_app);
     }
 }
 
-/* MODE TEST (debug) : voir SIEB_TEST_SPLIT dans on_activate. */
+/* MODE TEST (debug) : voir CDB_TEST_SPLIT dans on_activate. */
 static Layout *test_first_tile(Layout *n)
 {
     return n->kind == LAYOUT_TILE ? n : test_first_tile(n->a);
@@ -3659,7 +3659,7 @@ test_quit_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-/* MODE TEST (debug) : voir SIEB_TEST_GRID dans on_activate. Construit le
+/* MODE TEST (debug) : voir CDB_TEST_GRID dans on_activate. Construit le
  * pavage V( H(A,H(D,E)), H(V(B,C),F) ) — « A:B:C/A:B:C/D:B:C/E:F:F » — en
  * n'utilisant que layout_split/layout_retile sur tuiles ET blocs. */
 static gboolean
@@ -3709,7 +3709,7 @@ test_grid_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-/* MODE TEST (debug) : voir SIEB_TEST_CLOSE dans on_activate. */
+/* MODE TEST (debug) : voir CDB_TEST_CLOSE dans on_activate. */
 static gboolean
 test_close_idle(gpointer data)
 {
@@ -3717,7 +3717,7 @@ test_close_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-/* MODE TEST (debug) : SIEB_TEST_MODAL=1 ouvre 5 fenêtres vides après
+/* MODE TEST (debug) : CDB_TEST_MODAL=1 ouvre 5 fenêtres vides après
  * 1 s — la 5e doit être refusée (limite MODAL_MAX=4). */
 static gboolean
 test_modal_idle(gpointer data)
@@ -3725,7 +3725,7 @@ test_modal_idle(gpointer data)
     App *app = data;
 
     for (int i = 0; i < 5; i++)
-        g_printerr("SIEB: modal %d -> %s\n", i + 1,
+        g_printerr("CDB: modal %d -> %s\n", i + 1,
                    modal_open_empty(app) ? "ouverte" : "REFUSÉE");
     return G_SOURCE_REMOVE;
 }
@@ -3747,7 +3747,7 @@ main(int argc, char **argv)
     /* NON_UNIQUE : chaque processus est sa propre application — sinon
      * l'enfant délègue son activation au primaire (même ID D-Bus) et
      * meurt, en perturbant la fenêtre du parent. */
-    gtk_app = GTK_APPLICATION(adw_application_new("org.sieb.code-dashboard",
+    gtk_app = GTK_APPLICATION(adw_application_new("org.sieb.cdb",
                                                   G_APPLICATION_NON_UNIQUE));
     g_signal_connect(gtk_app, "activate", G_CALLBACK(on_activate), app);
 

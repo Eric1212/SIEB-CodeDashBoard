@@ -120,7 +120,7 @@ on_spawn_finished(VteTerminal G_GNUC_UNUSED *term, GPid G_GNUC_UNUSED pid,
                   GError *err, gpointer G_GNUC_UNUSED user_data)
 {
     if (err != NULL) {
-        g_printerr("SIEB: bash spawn échoué : %s\n", err->message);
+        g_printerr("CDB: bash spawn échoué : %s\n", err->message);
         g_error_free(err);
     }
 }

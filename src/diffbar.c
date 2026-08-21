@@ -283,21 +283,21 @@ done:
 /* Widget                                                              */
 /* ------------------------------------------------------------------ */
 
-struct _SiebdDiffBar {
+struct _CdbDiffBar {
     GtkWidget  parent_instance;
     GPtrArray *ranges;   /* SiebdDiffRange* (g_free) */
     guint      total;
 };
 
-G_DEFINE_TYPE(SiebdDiffBar, siebd_diff_bar, GTK_TYPE_WIDGET)
+G_DEFINE_TYPE(CdbDiffBar, cdb_diff_bar, GTK_TYPE_WIDGET)
 
 static void
-siebd_diff_bar_finalize(GObject *object)
+cdb_diff_bar_finalize(GObject *object)
 {
-    SiebdDiffBar *bar = SIEBD_DIFF_BAR(object);
+    CdbDiffBar *bar = CDB_DIFF_BAR(object);
 
     g_ptr_array_free(bar->ranges, TRUE);
-    G_OBJECT_CLASS(siebd_diff_bar_parent_class)->finalize(object);
+    G_OBJECT_CLASS(cdb_diff_bar_parent_class)->finalize(object);
 }
 
 static void
@@ -314,9 +314,9 @@ cairo_round_rect(cairo_t *cr, double x, double y, double w, double h, double r)
 }
 
 static void
-siebd_diff_bar_snapshot(GtkWidget *widget, GtkSnapshot *snapshot)
+cdb_diff_bar_snapshot(GtkWidget *widget, GtkSnapshot *snapshot)
 {
-    SiebdDiffBar *bar = SIEBD_DIFF_BAR(widget);
+    CdbDiffBar *bar = CDB_DIFF_BAR(widget);
     double        w = gtk_widget_get_width(widget);
     double        h = gtk_widget_get_height(widget);
     cairo_t      *cr;
@@ -350,17 +350,17 @@ siebd_diff_bar_snapshot(GtkWidget *widget, GtkSnapshot *snapshot)
 }
 
 static void
-siebd_diff_bar_class_init(SiebdDiffBarClass *klass)
+cdb_diff_bar_class_init(CdbDiffBarClass *klass)
 {
     GObjectClass   *gobject_class = G_OBJECT_CLASS(klass);
     GtkWidgetClass *widget_class = GTK_WIDGET_CLASS(klass);
 
-    gobject_class->finalize = siebd_diff_bar_finalize;
-    widget_class->snapshot = siebd_diff_bar_snapshot;
+    gobject_class->finalize = cdb_diff_bar_finalize;
+    widget_class->snapshot = cdb_diff_bar_snapshot;
 }
 
 static void
-siebd_diff_bar_init(SiebdDiffBar *bar)
+cdb_diff_bar_init(CdbDiffBar *bar)
 {
     bar->ranges = g_ptr_array_new_with_free_func(g_free);
     bar->total = 0;
@@ -370,13 +370,13 @@ siebd_diff_bar_init(SiebdDiffBar *bar)
 }
 
 GtkWidget *
-siebd_diff_bar_new(void)
+cdb_diff_bar_new(void)
 {
-    return GTK_WIDGET(g_object_new(SIEBD_TYPE_DIFF_BAR, NULL));
+    return GTK_WIDGET(g_object_new(CDB_TYPE_DIFF_BAR, NULL));
 }
 
 void
-siebd_diff_bar_set_ranges(SiebdDiffBar *bar, GPtrArray *ranges, guint total_lines)
+cdb_diff_bar_set_ranges(CdbDiffBar *bar, GPtrArray *ranges, guint total_lines)
 {
     g_ptr_array_set_size(bar->ranges, 0);
     for (guint i = 0; i < ranges->len; i++)

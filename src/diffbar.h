@@ -11,13 +11,13 @@
  *                       -> ex: « Je suis lion. » -> « J'aime les lions. »
  */
 
-#ifndef SIEB_DIFFBAR_H
-#define SIEB_DIFFBAR_H
+#ifndef CDB_DIFFBAR_H
+#define CDB_DIFFBAR_H
 
 #include <gtk/gtk.h>
 
-#define SIEBD_TYPE_DIFF_BAR (siebd_diff_bar_get_type())
-G_DECLARE_FINAL_TYPE(SiebdDiffBar, siebd_diff_bar, SIEBD, DIFF_BAR, GtkWidget)
+#define CDB_TYPE_DIFF_BAR (cdb_diff_bar_get_type())
+G_DECLARE_FINAL_TYPE(CdbDiffBar, cdb_diff_bar, CDB, DIFF_BAR, GtkWidget)
 
 /* Types de segment. */
 enum {
@@ -36,11 +36,11 @@ typedef struct {
 
 /* Crée la barre (largeur ~10 px, fond transparent, n'intercepte pas les
  * clics -> la scrollbar reste utilisable). */
-GtkWidget *siebd_diff_bar_new(void);
+GtkWidget *cdb_diff_bar_new(void);
 
 /* Remplace les segments affichés. total_lines = nombre de lignes du buffer
  * courant ; sert de dénominateur pour positionner les segments. */
-void siebd_diff_bar_set_ranges(SiebdDiffBar *bar, GPtrArray *ranges,
+void cdb_diff_bar_set_ranges(CdbDiffBar *bar, GPtrArray *ranges,
                                guint total_lines);
 
 /* Calcule les marqueurs de diff entre la référence (saved) et le buffer
@@ -50,4 +50,4 @@ void siebd_diff_bar_set_ranges(SiebdDiffBar *bar, GPtrArray *ranges,
 void siebd_diff_compute(const char *saved, const char *current,
                         GPtrArray *out, guint *total_lines);
 
-#endif /* SIEB_DIFFBAR_H */
+#endif /* CDB_DIFFBAR_H */

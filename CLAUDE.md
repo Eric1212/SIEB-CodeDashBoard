@@ -1,6 +1,9 @@
-# SIEBCodeDashboard
+# CodeDashBoard (CDB)
 
 IDE léger sous forme de Dashboard, orienté LLM.
+
+Nomenclature : **SIEB** = entreprise, **CodeDashBoard** = nom long,
+**CDB** = sigle (binaire, logs, app ID `org.sieb.cdb`).
 
 ## Vision
 
@@ -17,7 +20,7 @@ que de gedit (GTK3, fork libgedit).
 | **GTK4** (4.22) | UI | ✅ |
 | **GtkSourceView 5** (5.20) | Édition de code : coloration syntaxique, numéros de ligne, indentation auto | ✅ |
 | **libadwaita** (1.9) | Thème clair/sombre système : `AdwStyleManager` suit `color-scheme` via le portal (comme `RClotGenerator`) | ✅ |
-| **json-glib** (1.10) | Persistance JSON des roots (`~/.config/siebcodedashboard/roots.json`) | ✅ |
+| **json-glib** (1.10) | Persistance JSON des roots (`~/.config/cdb/roots.json`) | ✅ |
 | **NetSurf** | Rendu HTML intégré (le Dashboard affiche des pages web) | ⏳ jalon futur |
 | **ffsr** | Recherche de code que NetSurf ne couvre pas (projet `~/dev/ffsr`) | ⏳ jalon futur |
 | **alvalllm** | IA en intégration douce — pas d'ACP (projet `~/dev/alvalllm`) | ⏳ jalon futur |
@@ -29,7 +32,7 @@ GTK3, incompatible avec notre stack.
 ## Architecture
 
 ```
-~/dev/SIEBCodeDashboard/
+~/dev/SIEB-CodeDashBoard/
 ├── CLAUDE.md       # ce fichier
 ├── Makefile        # make / make run / make clean
 └── src/
@@ -76,7 +79,7 @@ GTK3, incompatible avec notre stack.
 ## Commandes
 
 ```sh
-make        # compilation (binaire : ./siebcdashboard)
+make        # compilation (binaire : ./cdb)
 make run    # compile puis lance
 make clean
 ```
@@ -84,5 +87,5 @@ make clean
 ## Debug
 
 ```sh
-SIEB_DEBUG=1 ./siebcdashboard   # dump des allocations + schéma de thème
+CDB_DEBUG=1 ./cdb   # dump des allocations + schéma de thème
 ```

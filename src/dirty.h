@@ -9,8 +9,8 @@
  * On persiste le tout dans dirty.json, robuste aux crash (debounce).
  */
 
-#ifndef SIEB_DIRTY_H
-#define SIEB_DIRTY_H
+#ifndef CDB_DIRTY_H
+#define CDB_DIRTY_H
 
 #include <glib.h>
 
@@ -58,4 +58,4 @@ void dirty_persist_now(DirtyStore *ds);
 /* Écrit dirty.json après ~1 s d'inactivité (debounce, robuste crash). */
 void dirty_schedule_persist(DirtyStore *ds);
 
-#endif /* SIEB_DIRTY_H */
+#endif /* CDB_DIRTY_H */

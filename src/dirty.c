@@ -1,7 +1,7 @@
 /*
  * Dirty : état des fichiers non sauvegardés (témoin + contenu en attente).
  *
- * Persistance : ~/.config/siebcodedashboard/dirty.json
+ * Persistance : ~/.config/cdb/dirty.json
  * Format : {"dirty":[{"path": "...", "content": "...", "baseline": "..."}]}
  */
 
@@ -10,14 +10,14 @@
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
 
-#define SIEB_DIRTY_FILE "dirty.json"
+#define CDB_DIRTY_FILE "dirty.json"
 
 #define DIRTY_PERSIST_DELAY_MS 1000
 
 static char *
 dirty_config_path(void)
 {
-    return session_config_path(SIEB_DIRTY_FILE);
+    return session_config_path(CDB_DIRTY_FILE);
 }
 
 static DirtyEntry *
@@ -57,7 +57,7 @@ dirty_store_new(void)
     parser = json_parser_new();
     if (!json_parser_load_from_file(parser, ds->file, &error)) {
         if (!g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT))
-            g_printerr("SIEB - CodeDashBoard: dirty.json : %s\n", error->message);
+            g_printerr("CDB: dirty.json : %s\n", error->message);
         g_error_free(error);
         g_object_unref(parser);
         return ds;
@@ -226,7 +226,7 @@ dirty_persist_now(DirtyStore *ds)
     root = json_builder_get_root(builder);
     text = json_to_string(root, TRUE);
     if (!g_file_set_contents(ds->file, text, -1, &error)) {
-        g_printerr("SIEB - CodeDashBoard: écriture dirty.json : %s\n",
+        g_printerr("CDB: écriture dirty.json : %s\n",
                    error->message);
         g_error_free(error);
     }

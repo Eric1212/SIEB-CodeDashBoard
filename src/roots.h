@@ -6,11 +6,11 @@
  * Un Root de projet est un dossier de travail ouvert dans l'IDE
  * (ex: /home/eric/dev/alvalllm), comme dans Zed.
  *
- * Persistance : ~/.config/siebcodedashboard/roots.json
+ * Persistance : ~/.config/cdb/roots.json
  */
 
-#ifndef SIEB_ROOTS_H
-#define SIEB_ROOTS_H
+#ifndef CDB_ROOTS_H
+#define CDB_ROOTS_H
 
 #include <gtk/gtk.h>
 
@@ -80,4 +80,4 @@ gboolean roots_delete_recursive(const char *path);
  * Retourne un chemin g_strdup (à libérer) ou NULL si rien de résoluble. */
 char *roots_current_project(GListStore *roots, GHashTable *multi_paths);
 
-#endif /* SIEB_ROOTS_H */
+#endif /* CDB_ROOTS_H */

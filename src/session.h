@@ -2,16 +2,16 @@
  * session.h : sessions isolées par numéro (000-999).
  *
  * Chaque session est un processus CDB indépendant avec son dossier de
- * config complet : ~/.config/siebcodedashboard/<NNN>/
+ * config complet : ~/.config/cdb/<NNN>/
  * (roots.json, dirty.json, layout.json, window.json, session.json).
  *
  * Le lancement direct du binaire ouvre 000 s'il n'existe aucune autre
- * instance ; sinon un dialogue demande le numéro. SIEB_SESSION=<NNN>
+ * instance ; sinon un dialogue demande le numéro. CDB_SESSION=<NNN>
  * court-circuite le dialogue (spawn depuis « New Session »).
  */
 
-#ifndef SIEB_SESSION_H
-#define SIEB_SESSION_H
+#ifndef CDB_SESSION_H
+#define CDB_SESSION_H
 
 #include <gtk/gtk.h>
 
@@ -22,16 +22,16 @@
  * module est initialisé une fois dans main avant toute use). */
 extern int sieb_session;
 
-/* Initialise la session : lit SIEB_SESSION si présent et valide ;
+/* Initialise la session : lit CDB_SESSION si présent et valide ;
  * sinon détecte les autres instances (même binaire) — 000 si aucune,
  * dialogue interactif sinon. Renvoie FALSE si annulé (quitter). */
 gboolean session_init(void);
 
 /* Chemin du fichier path DANS la session courante :
- * ~/.config/siebcodedashboard/<NNN>/<path>. g_strdup à libérer. */
+ * ~/.config/cdb/<NNN>/<path>. g_strdup à libérer. */
 char *session_config_path(const char *path);
 
-/* Racine de la session courante (~/.config/siebcodedashboard/<NNN>/).
+/* Racine de la session courante (~/.config/cdb/<NNN>/).
  * g_strdup à libérer. */
 char *session_dir(void);
 
@@ -49,4 +49,4 @@ gboolean session_other_instance_running(void);
 /* Dialogue modale : numéro de session (000-999). Renvoie -1 si annulé. */
 int session_pick_dialog(GtkWindow *parent);
 
-#endif /* SIEB_SESSION_H */
+#endif /* CDB_SESSION_H */

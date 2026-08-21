@@ -5,8 +5,8 @@
  * dossier sont scannés paresseusement, au dépliage (GtkTreeListModel).
  */
 
-#ifndef SIEB_FSLIST_H
-#define SIEB_FSLIST_H
+#ifndef CDB_FSLIST_H
+#define CDB_FSLIST_H
 
 #include <gtk/gtk.h>
 
@@ -41,4 +41,4 @@ GListStore *fs_scan_dir(const char *path);
 /* Suppression récursive (fichier, dossier, symlink). ENOENT ignoré. */
 gboolean fs_remove_recursive(const char *path);
 
-#endif /* SIEB_FSLIST_H */
+#endif /* CDB_FSLIST_H */

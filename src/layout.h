@@ -8,8 +8,8 @@
  * (editor/explorer) dont l'état vit dans App et survit aux retraits.
  */
 
-#ifndef SIEB_LAYOUT_H
-#define SIEB_LAYOUT_H
+#ifndef CDB_LAYOUT_H
+#define CDB_LAYOUT_H
 
 #include <glib.h>
 
@@ -39,7 +39,7 @@ void layout_free(Layout *node);
 /* Persistance (layout.json)                         */
 /* ------------------------------------------------ */
 
-/* Charge depuis ~/.config/siebcodedashboard/layout.json ; si absent ou
+/* Charge depuis ~/.config/cdb/layout.json ; si absent ou
  * invalide, renvoie le layout par défaut (explorateur | éditeur). */
 Layout *layout_load(void);
 
@@ -66,4 +66,4 @@ void layout_retile(Layout *node, const char *new_id);
 /* Nom lisible d'une pièce (pour l'affichage). */
 const char *layout_name(const char *id);
 
-#endif /* SIEB_LAYOUT_H */
+#endif /* CDB_LAYOUT_H */

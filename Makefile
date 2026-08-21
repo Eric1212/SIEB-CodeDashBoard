@@ -6,7 +6,7 @@ LIBS    := $(shell pkg-config --libs $(PKGS))
 
 SRC     := src/main.c src/roots.c src/fslist.c src/dirty.c src/diffbar.c src/bashpanel.c src/modal.c src/session.c src/layout.c
 OBJ     := $(SRC:.c=.o)
-TARGET  := siebcdashboard
+TARGET  := cdb
 
 all: $(TARGET)
 
