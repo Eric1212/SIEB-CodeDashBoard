@@ -6,10 +6,10 @@
  */
 
 #include "dirty.h"
+#include "session.h"
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
 
-#define SIEB_CONFIG_DIR "siebcodedashboard"
 #define SIEB_DIRTY_FILE "dirty.json"
 
 #define DIRTY_PERSIST_DELAY_MS 1000
@@ -17,9 +17,7 @@
 static char *
 dirty_config_path(void)
 {
-    const char *dir = g_get_user_config_dir();
-
-    return g_build_filename(dir, SIEB_CONFIG_DIR, SIEB_DIRTY_FILE, NULL);
+    return session_config_path(SIEB_DIRTY_FILE);
 }
 
 static DirtyEntry *

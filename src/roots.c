@@ -10,11 +10,11 @@
  */
 
 #include "roots.h"
+#include "session.h"
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
 #include <stdio.h>
 
-#define SIEB_CONFIG_DIR  "siebcodedashboard"
 #define SIEB_ROOTS_FILE  "roots.json"
 
 /* Prototypes internes (définies plus bas dans le fichier). */
@@ -79,11 +79,7 @@ root_entry_new(RootKind kind, const char *path)
 static char *
 roots_config_path(void)
 {
-    const char *dir = g_get_user_config_dir();
-
-    if (dir == NULL)
-        dir = g_get_home_dir();
-    return g_build_filename(dir, SIEB_CONFIG_DIR, SIEB_ROOTS_FILE, NULL);
+    return session_config_path(SIEB_ROOTS_FILE);
 }
 
 /* ------------------------------------------------------------------ */

@@ -8,18 +8,26 @@
  * Compilation : make
  */
 
+#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
 #include <gtksourceview/gtksource.h>
 #include <adwaita.h>
 #include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
+#include <spawn.h>
+#include <limits.h>
+#include <unistd.h>
+
+extern char **environ;
 #include "roots.h"
 #include "fslist.h"
 #include "dirty.h"
 #include "diffbar.h"
 #include "bashpanel.h"
 #include "modal.h"
+#include "session.h"
 #include "layout.h"
 
 /* Un fichier ouvert garde son propre buffer (l'historique undo survit à la
@@ -3037,8 +3045,7 @@ render_layout(App *app)
 static char *
 window_state_path(void)
 {
-    return g_build_filename(g_get_user_config_dir(), "siebcodedashboard",
-                            "window.json", NULL);
+    return session_config_path("window.json");
 }
 
 static void
@@ -3192,6 +3199,69 @@ typedef struct {
     const char *piece;
 } ModalPieceAction;
 
+static void on_new_window_activated(GSimpleAction *action, GVariant *param,
+                                    gpointer data);
+static void on_new_session_activated(GSimpleAction *action, GVariant *param,
+                                     gpointer data);
+static gboolean modal_open_empty(App *app);
+
+static void
+on_new_window_activated(GSimpleAction G_GNUC_UNUSED *action,
+                        GVariant G_GNUC_UNUSED *param, gpointer data)
+{
+    App *app = data;
+
+    if (!modal_open_empty(app))
+        g_warning("SIEB: limite de %d modales atteinte", MODAL_MAX);
+}
+
+/* New Session : ouvre juste un nouveau PID du binaire (spawn sans
+ * SIEB_SESSION) — le nouveau processus suit la logique standard de
+ * lancement (000 si seul, dialogue numéro sinon). */
+static void
+on_new_session_activated(GSimpleAction G_GNUC_UNUSED *action,
+                         GVariant G_GNUC_UNUSED *param, gpointer data)
+{
+    App       *app = data;
+    char       self[PATH_MAX];
+    ssize_t    r;
+    char      *argv[2];
+    posix_spawnattr_t attr;
+    pid_t      pid = -1;
+    char     **envp;
+    gsize      envc = 0, i;
+
+    (void)app;
+    r = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (r <= 0) {
+        g_warning("SIEB: readlink /proc/self/exe échoué");
+        return;
+    }
+    self[r] = '\0';
+
+    while (environ[envc] != NULL)
+        envc++;
+    envp = g_new(char *, envc + 1);
+    for (i = 0; i < envc; i++)
+        envp[i] = environ[i];
+    envp[envc] = NULL;
+
+    argv[0] = self;
+    argv[1] = NULL;
+    posix_spawnattr_init(&attr);
+    /* Détache l'enfant : nouvelle session POSIX (pas de terminal
+     * contrôleur), indépendant du cycle de vie du parent. */
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+    {
+        int rc = posix_spawn(&pid, self, NULL, &attr, argv, envp);
+
+        posix_spawnattr_destroy(&attr);
+        g_free(envp);
+        if (rc != 0)
+            g_warning("SIEB: échec du spawn de la nouvelle session");
+    }
+}
+
 static void
 on_modal_piece_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 {
@@ -3285,15 +3355,6 @@ modal_open_empty(App *app)
 }
 
 static void
-on_new_window_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
-{
-    App *app = data;
-
-    if (!modal_open_empty(app))
-        g_warning("SIEB: limite de %d modales atteinte", MODAL_MAX);
-}
-
-static void
 on_activate(GtkApplication *gtk_app, gpointer data)
 {
     App      *app = data;
@@ -3301,6 +3362,12 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     GtkWidget *statusbar;
     GtkWidget *sep;
     AdwStyleManager *style_mgr;
+
+    /* Session (000-999) : SIEB_SESSION, sinon 000 si aucune autre
+     * instance, sinon dialogue — ici, GTK est initialisé (display
+     * disponible pour le dialogue). Annulé = quitter sans fenêtre. */
+    if (!session_init())
+        return;
 
     app->win = GTK_WINDOW(gtk_application_window_new(gtk_app));
     gtk_window_set_title(app->win, "SIEB - CodeDashBoard");
@@ -3375,15 +3442,23 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         gtk_header_bar_pack_start(GTK_HEADER_BAR(header), sep);
         g_object_unref(menu);
 
-        /* Bouton « nouvelle fenêtre » : modale avec tuile vide à attribuer. */
+        /* Bouton « nouvelle fenêtre » : son menu porte l'isolation de
+         * processus — Nouvelle fenêtre (modale, même processus) et
+         * Nouvelle session (dialogue numéro puis spawn avec SIEB_SESSION,
+         * qui court-circuite le dialogue dans la nouvelle instance). */
         {
-            GtkWidget *new_win_btn =
-                gtk_button_new_from_icon_name("window-new-symbolic");
+            GtkWidget *new_win_btn = gtk_menu_button_new();
+            GMenu     *menu = g_menu_new();
 
+            g_menu_append(menu, "Nouvelle fenêtre", "win.new-window");
+            g_menu_append(menu, "Nouvelle session…", "win.new-session");
+            gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(new_win_btn),
+                                          "window-new-symbolic");
+            gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(new_win_btn),
+                                           G_MENU_MODEL(menu));
             gtk_widget_add_css_class(new_win_btn, "flat");
-            g_signal_connect(new_win_btn, "clicked",
-                             G_CALLBACK(on_new_window_clicked), app);
             gtk_header_bar_pack_start(GTK_HEADER_BAR(header), new_win_btn);
+            g_object_unref(menu);
         }
     }
     gtk_window_set_titlebar(app->win, header);
@@ -3431,6 +3506,8 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             { "add-structure", on_add_structure, NULL, NULL, NULL, { 0 } },
             { "add-project",   on_add_project,   NULL, NULL, NULL, { 0 } },
             { "save",          on_save_activated, NULL, NULL, NULL, { 0 } },
+            { "new-window",    on_new_window_activated, NULL, NULL, NULL, { 0 } },
+            { "new-session",   on_new_session_activated, NULL, NULL, NULL, { 0 } },
         };
         g_action_map_add_action_entries(G_ACTION_MAP(app->win), win_actions,
                                         G_N_ELEMENTS(win_actions), app);
@@ -3667,8 +3744,11 @@ main(int argc, char **argv)
     app->files = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
                                        per_file_free);
 
+    /* NON_UNIQUE : chaque processus est sa propre application — sinon
+     * l'enfant délègue son activation au primaire (même ID D-Bus) et
+     * meurt, en perturbant la fenêtre du parent. */
     gtk_app = GTK_APPLICATION(adw_application_new("org.sieb.code-dashboard",
-                                                  G_APPLICATION_DEFAULT_FLAGS));
+                                                  G_APPLICATION_NON_UNIQUE));
     g_signal_connect(gtk_app, "activate", G_CALLBACK(on_activate), app);
 
     status = g_application_run(G_APPLICATION(gtk_app), argc, argv);
