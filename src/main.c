@@ -48,6 +48,7 @@ typedef struct {
     GtkLabel          *status_pos;
     GtkLabel          *status_mod; /* témoin non sauvegardé (« ● ») */
     GtkWidget         *statusbar;
+    GtkLabel          *header_file; /* chemin courant dans la titlebar */
     RootEntry         *pending_remove;
     RootKind           pending_kind;
     gboolean           centered;
@@ -313,13 +314,17 @@ update_modified_indicator(App *app)
         gtk_label_set_text(app->status_mod, dirty ? "●" : "");
 
     if (app->current_file != NULL) {
-        char *title = g_strdup_printf("%s%s — SIEB - CodeDashBoard",
-                                      app->current_file, dirty ? "*" : "");
+        char *title = g_strdup_printf("%s%s", app->current_file,
+                                      dirty ? "*" : "");
 
         gtk_window_set_title(app->win, title);
+        if (app->header_file != NULL)
+            gtk_label_set_text(app->header_file, title);
         g_free(title);
     } else {
-        gtk_window_set_title(app->win, "SIEB - CodeDashBoard");
+        gtk_window_set_title(app->win, "Code Dash Board by SIEB");
+        if (app->header_file != NULL)
+            gtk_label_set_text(app->header_file, "");
     }
 }
 
@@ -3310,7 +3315,32 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         const char *data_css =
             ".tile-title { font-size: 10pt; }\n"
             "menubutton.tile-menu > button { font-size: 9pt; "
-            "padding: 0 4px; min-height: 0; }\n";
+            "padding: 0 4px; min-height: 0; }\n"
+            /* Titlebar : teintes uniformes, tout en 10 pt non gras. */
+            "headerbar { font-size: 10pt; font-weight: normal; }\n"
+            "headerbar .title { font-weight: normal; font-size: 10pt; }\n"
+            ".titlebar-brand { padding: 0; font-size: 10pt; "
+            "font-weight: normal; }\n"
+            "menubutton.titlebar-brand > button { background: none; "
+            "box-shadow: none; min-height: 0; min-width: 0; padding: 0 2px; "
+            "margin: 0; border: none; }\n"
+            "menubutton.titlebar-brand > button:hover:not(:checked) "
+            "{ background: none; }\n"
+            ".titlebar-sep { padding: 0 4px; font-size: 10pt; }\n"
+            ".titlebar-signature { font-size: 10pt; font-weight: normal; }\n"
+            ".titlebar-file { font-weight: normal; font-size: 10pt; }\n"
+            "headerbar { min-height: 0; padding: 0 8px; }\n"
+            "headerbar > box { min-height: 0; }\n"
+            "headerbar button { min-height: 0; min-width: 0; padding: 0 6px; "
+            "margin: 0; }\n"
+            "headerbar button > image { min-height: 0; min-width: 0; "
+            "-gtk-icon-size: 12px; }\n"
+            "headerbar windowcontrols { min-height: 0; }\n"
+            "headerbar windowcontrols > button { min-height: 0; "
+            "min-width: 0; padding: 0 4px; margin: 0; border: none; "
+            "border-radius: 0; }\n"
+            "headerbar windowcontrols > button > image { min-height: 12px; "
+            "min-width: 12px; -gtk-icon-size: 12px; }\n";
 
         gtk_css_provider_load_from_string(css, data_css);
         gtk_style_context_add_provider_for_display(
@@ -3320,19 +3350,79 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     }
 
     /* HeaderBar (sans bouton Ouvrir : l'explorateur suffit). */
+    /* Titlebar : [logo système] CDB(menu, vide) :: chemin — signature
+     * (titre de fenêtre en repli de la HeaderBar) :: boutons système.
+     * Pas de widget titre : la HeaderBar affiche gtk_window_get_title(),
+     * déjà tenu à jour par update_modified_indicator. */
     header = gtk_header_bar_new();
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
+    {
+        /* Menu « CDB » : vide pour l'instant (entrées à venir). */
+        GMenu     *menu = g_menu_new();
+        GtkWidget *menu_btn = gtk_menu_button_new();
+        GtkWidget *brand = gtk_label_new("CDB");
+        GtkWidget *sep = gtk_label_new("::");
+
+        gtk_widget_add_css_class(brand, "titlebar-brand");
+        gtk_widget_add_css_class(sep, "titlebar-sep");
+        gtk_widget_set_valign(sep, GTK_ALIGN_CENTER);
+        gtk_widget_add_css_class(menu_btn, "flat");
+        gtk_widget_add_css_class(menu_btn, "titlebar-brand");
+        gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_btn),
+                                       G_MENU_MODEL(menu));
+        gtk_menu_button_set_child(GTK_MENU_BUTTON(menu_btn), brand);
+        gtk_header_bar_pack_start(GTK_HEADER_BAR(header), menu_btn);
+        gtk_header_bar_pack_start(GTK_HEADER_BAR(header), sep);
+        g_object_unref(menu);
+
+        /* Bouton « nouvelle fenêtre » : modale avec tuile vide à attribuer. */
+        {
+            GtkWidget *new_win_btn =
+                gtk_button_new_from_icon_name("window-new-symbolic");
+
+            gtk_widget_add_css_class(new_win_btn, "flat");
+            g_signal_connect(new_win_btn, "clicked",
+                             G_CALLBACK(on_new_window_clicked), app);
+            gtk_header_bar_pack_start(GTK_HEADER_BAR(header), new_win_btn);
+        }
+    }
     gtk_window_set_titlebar(app->win, header);
 
-    /* Bouton « nouvelle fenêtre » : modale avec tuile vide à attribuer. */
+    /* Chemin + signature dans le widget titre (centré, non gras). */
     {
-        GtkWidget *new_win_btn =
-            gtk_button_new_from_icon_name("window-new-symbolic");
+        GtkWidget *title_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
 
-        gtk_widget_add_css_class(new_win_btn, "flat");
-        g_signal_connect(new_win_btn, "clicked",
-                         G_CALLBACK(on_new_window_clicked), app);
-        gtk_header_bar_pack_end(GTK_HEADER_BAR(header), new_win_btn);
+        /* Pas d'alignement par baseline : les labels sont centrés
+         * verticalement (le « :: » sinon paraît plus bas que les
+         * capitales de la signature). */
+        gtk_box_set_baseline_position(GTK_BOX(title_box),
+                                      GTK_BASELINE_POSITION_CENTER);
+        GtkWidget *sep1 = gtk_label_new("::");
+        GtkWidget *sep2 = gtk_label_new("::");
+        GtkWidget *sep3 = gtk_label_new("::");
+        GtkWidget *sig = gtk_label_new("Code Dash Board by SIEB");
+
+        gtk_widget_set_valign(title_box, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(sep1, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(sep2, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(sep3, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(sig, GTK_ALIGN_CENTER);
+
+        gtk_widget_add_css_class(sep1, "titlebar-sep");
+        gtk_widget_add_css_class(sep2, "titlebar-sep");
+        gtk_widget_add_css_class(sep3, "titlebar-sep");
+        gtk_widget_add_css_class(sig, "titlebar-signature");
+        app->header_file = GTK_LABEL(gtk_label_new(""));
+        gtk_label_set_ellipsize(app->header_file, PANGO_ELLIPSIZE_MIDDLE);
+        gtk_widget_set_valign(GTK_WIDGET(app->header_file), GTK_ALIGN_CENTER);
+        gtk_widget_add_css_class(GTK_WIDGET(app->header_file),
+                                 "titlebar-file");
+        gtk_box_append(GTK_BOX(title_box), sep1);
+        gtk_box_append(GTK_BOX(title_box), GTK_WIDGET(app->header_file));
+        gtk_box_append(GTK_BOX(title_box), sep2);
+        gtk_box_append(GTK_BOX(title_box), sig);
+        gtk_box_append(GTK_BOX(title_box), sep3);
+        gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title_box);
     }
 
     /* Actions du menu "+" du panneau Explorateur. */
