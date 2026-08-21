@@ -19,6 +19,7 @@
 #include "dirty.h"
 #include "diffbar.h"
 #include "bashpanel.h"
+#include "modal.h"
 #include "layout.h"
 
 /* Un fichier ouvert garde son propre buffer (l'historique undo survit à la
@@ -61,6 +62,7 @@ typedef struct {
     GtkWidget         *diffbar;
     guint              diff_timer; /* debounce du recalcul de diff */
     guint              render_idle; /* re-rendu différé (destruction sûre) */
+    int                modal_count; /* fenêtres-modales ouvertes (max 4) */
     /* Ignore les signaux pendant un chargement (évite un sale transitoire). */
     gboolean           suppress_dirty;
     /* Source de vérité de la multi-sélection : set de chemins (clés
@@ -133,6 +135,7 @@ static GtkWidget *build_roots_view(App *app);
 static gboolean test_split_idle(gpointer data);
 static gboolean test_grid_idle(gpointer data);
 static gboolean test_close_idle(gpointer data);
+static gboolean test_modal_idle(gpointer data);
 static gboolean test_quit_idle(gpointer data);
 static void recompute_dirty(App *app);
 static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
@@ -3163,6 +3166,128 @@ on_close_request(GtkWindow G_GNUC_UNUSED *win, gpointer data)
     return FALSE; /* la fermeture continue */
 }
 
+/* ------------------------------------------------ */
+/* Fenêtres-modales : tuile vide à attribuer         */
+/*                                                   */
+/* Une modale contient UNE tuile autonome (hors      */
+/* layout) qui attend qu'on lui attribue sa pièce    */
+/* via son menu (titlebar). Max 4 (MODAL_MAX).       */
+/* ------------------------------------------------ */
+
+typedef struct {
+    App       *app;
+    Layout    *node;      /* tuile autonome (parent NULL) */
+    GtkWindow *win;
+    GtkLabel  *title_lbl; /* label dans la titlebar de la modale */
+} ModalCtx;
+
+typedef struct {
+    App        *app;
+    ModalCtx   *ctx;
+    const char *piece;
+} ModalPieceAction;
+
+static void
+on_modal_piece_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    ModalPieceAction *act = data;
+    ModalCtx         *ctx = act->ctx;
+    GtkWidget        *pop =
+        gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
+
+    /* La tuile autonome change de pièce : titre + contenu suivent.
+     * L'ancien contenu est détruit par set_child. */
+    layout_retile(ctx->node, act->piece);
+    gtk_label_set_text(ctx->title_lbl, layout_name(act->piece));
+    gtk_window_set_title(ctx->win, layout_name(act->piece));
+    gtk_window_set_child(ctx->win, create_piece(act->piece, act->app));
+
+    if (pop != NULL)
+        gtk_popover_popdown(GTK_POPOVER(pop));
+}
+
+/* Menu d'une modale : uniquement « changer de pièce » (pas de split/
+ * remove — la tuile est hors layout). */
+static GtkWidget *
+build_modal_menu(App *app, ModalCtx *ctx)
+{
+    GtkWidget  *pop = gtk_popover_new();
+    GtkWidget  *menu = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    const char *pieces[] = { "editor", "explorer", "bash", "empty" };
+
+    gtk_widget_set_margin_start(menu, 8);
+    gtk_widget_set_margin_end(menu, 8);
+    gtk_widget_set_margin_top(menu, 6);
+    gtk_widget_set_margin_bottom(menu, 6);
+
+    for (gsize i = 0; i < G_N_ELEMENTS(pieces); i++) {
+        ModalPieceAction *a = g_new0(ModalPieceAction, 1);
+        GtkWidget        *b = gtk_button_new_with_label(
+                                     layout_name(pieces[i]));
+
+        a->app = app;
+        a->ctx = ctx;
+        a->piece = pieces[i];
+        gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+        if (strcmp(pieces[i], ctx->node->id) == 0)
+            gtk_widget_set_sensitive(b, FALSE); /* pièce actuelle */
+        g_signal_connect(b, "clicked",
+                         G_CALLBACK(on_modal_piece_clicked), a);
+        gtk_box_append(GTK_BOX(menu), b);
+    }
+    gtk_popover_set_child(GTK_POPOVER(pop), menu);
+    return pop;
+}
+
+/* Ouvre une fenêtre avec une tuile VIDE : elle attend l'attribution de
+ * sa pièce via le menu de sa titlebar. Renvoie FALSE à la limite. */
+static gboolean
+modal_open_empty(App *app)
+{
+    ModalCtx  *ctx = g_new0(ModalCtx, 1);
+    GtkWidget *content = create_piece("empty", app);
+    GtkWidget *titlebar = gtk_header_bar_new();
+    GtkWidget *lbl = gtk_label_new(layout_name("empty"));
+    GtkWidget *menu_btn = gtk_menu_button_new();
+    GtkWindow *win = NULL;
+
+    ctx->app = app;
+    ctx->node = layout_tile("empty"); /* autonome, hors layout */
+
+    gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(titlebar), TRUE);
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(titlebar), lbl);
+    ctx->title_lbl = GTK_LABEL(lbl);
+
+    gtk_widget_add_css_class(menu_btn, "flat");
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(menu_btn),
+                                  "open-menu-symbolic");
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(menu_btn),
+                                build_modal_menu(app, ctx));
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(titlebar), menu_btn);
+
+    if (!modal_open(app->win, &app->modal_count, titlebar, content, &win)) {
+        g_object_ref_sink(content);
+        g_object_unref(content);
+        g_object_ref_sink(titlebar);
+        g_object_unref(titlebar);
+        g_free(ctx);
+        return FALSE;
+    }
+    ctx->win = win;
+    /* Libère le contexte quand la fenêtre meurt. */
+    g_object_set_data_full(G_OBJECT(win), "modal-ctx", ctx, g_free);
+    return TRUE;
+}
+
+static void
+on_new_window_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    App *app = data;
+
+    if (!modal_open_empty(app))
+        g_warning("SIEB: limite de %d modales atteinte", MODAL_MAX);
+}
+
 static void
 on_activate(GtkApplication *gtk_app, gpointer data)
 {
@@ -3198,6 +3323,17 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     header = gtk_header_bar_new();
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
     gtk_window_set_titlebar(app->win, header);
+
+    /* Bouton « nouvelle fenêtre » : modale avec tuile vide à attribuer. */
+    {
+        GtkWidget *new_win_btn =
+            gtk_button_new_from_icon_name("window-new-symbolic");
+
+        gtk_widget_add_css_class(new_win_btn, "flat");
+        g_signal_connect(new_win_btn, "clicked",
+                         G_CALLBACK(on_new_window_clicked), app);
+        gtk_header_bar_pack_end(GTK_HEADER_BAR(header), new_win_btn);
+    }
 
     /* Actions du menu "+" du panneau Explorateur. */
     {
@@ -3284,6 +3420,10 @@ on_activate(GtkApplication *gtk_app, gpointer data)
      * (équivalent du clic sur X : passe par close-request). */
     if (g_getenv("SIEB_TEST_CLOSE") != NULL)
         g_timeout_add(2000, test_close_idle, app->win);
+    /* MODE TEST (debug) : SIEB_TEST_MODAL=1 ouvre 5 modales (la 5e doit
+     * être refusée). */
+    if (g_getenv("SIEB_TEST_MODAL") != NULL)
+        g_timeout_add(1000, test_modal_idle, app);
 
     /* MODE TEST (debug) : SIEB_TEST_SPLIT=1 reproduit le crash du split —
      * split horizontal du root dans un idle, puis quitte après 2 s. */
@@ -3407,6 +3547,19 @@ static gboolean
 test_close_idle(gpointer data)
 {
     gtk_window_close(GTK_WINDOW(data));
+    return G_SOURCE_REMOVE;
+}
+
+/* MODE TEST (debug) : SIEB_TEST_MODAL=1 ouvre 5 fenêtres vides après
+ * 1 s — la 5e doit être refusée (limite MODAL_MAX=4). */
+static gboolean
+test_modal_idle(gpointer data)
+{
+    App *app = data;
+
+    for (int i = 0; i < 5; i++)
+        g_printerr("SIEB: modal %d -> %s\n", i + 1,
+                   modal_open_empty(app) ? "ouverte" : "REFUSÉE");
     return G_SOURCE_REMOVE;
 }
 
