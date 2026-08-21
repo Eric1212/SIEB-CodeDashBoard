@@ -2765,6 +2765,58 @@ build_tile_menu(Layout *node, App *app)
         add_menu_button(menu, "Retirer cette tuile", r);
     }
 
+    /* Actions de GROUPE sur le bloc parent (les blocs n'ont pas de barre
+     * propre — une barre par niveau de split mangeait la page). */
+    if (node->parent != NULL) {
+        Layout *grp = node->parent;
+
+        gtk_box_append(GTK_BOX(menu),
+                       gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+        {
+            GtkWidget *lbl = gtk_label_new("Groupe");
+
+            gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+            gtk_widget_add_css_class(lbl, "dim-label");
+            gtk_box_append(GTK_BOX(menu), lbl);
+        }
+        for (int h = 0; h < 2; h++) {
+            TileAction *a = g_new0(TileAction, 1);
+
+            a->app = app;
+            a->node = grp;
+            a->horizontal = (h == 0);
+            a->piece = "empty"; /* le bloc n'a pas de pièce */
+            a->popover = pop;
+            g_ptr_array_add(acts, a);
+            add_menu_button(menu, h == 0 ? "Diviser le groupe horizontalement"
+                                         : "Diviser le groupe verticalement",
+                            a);
+        }
+        {
+            /* Réduire tout le groupe en LA pièce de cette tuile (l'état
+             * de la pièce survit dans App). */
+            TileAction *a = g_new0(TileAction, 1);
+
+            a->app = app;
+            a->node = grp;
+            a->change = TRUE;
+            a->piece = node->id;
+            a->popover = pop;
+            g_ptr_array_add(acts, a);
+            add_menu_button(menu, "Réduire le groupe à cette pièce", a);
+        }
+        if (grp->parent != NULL) {
+            TileAction *r = g_new0(TileAction, 1);
+
+            r->app = app;
+            r->node = grp;
+            r->remove = TRUE;
+            r->popover = pop;
+            g_ptr_array_add(acts, r);
+            add_menu_button(menu, "Retirer le groupe", r);
+        }
+    }
+
     gtk_popover_set_child(GTK_POPOVER(pop), menu);
     return pop;
 }
@@ -2777,11 +2829,11 @@ build_tile_wrapper(Layout *node, App *app, GtkWidget *content)
     GtkWidget *menu_btn;
     const char *title;
 
-    /* Vue fraîche par nœud : retirer une tuile ne détruit que la vue,
-     * l'état du morceau (buffer / modèle) survit dans App. Un bloc
-     * (sous-arbre) a aussi un wrapper : son menu permet de le diviser,
-     * de le réduire en pièce ou de le retirer. */
-    title = node->kind == LAYOUT_TILE ? layout_name(node->id) : "Bloc";
+    /* Vue fraîche par tuile : retirer une tuile ne détruit que la vue,
+     * l'état du morceau (buffer / modèle) survit dans App. Les blocs
+     * (sous-arbres) n'ont PAS de wrapper : leurs actions sont dans le
+     * menu des tuiles (section « Groupe »). */
+    title = layout_name(node->id);
 
     if (g_getenv("SIEB_DEBUG") != NULL)
         g_printerr("SIEB: tile id=%s widget=%p\n",
@@ -2790,21 +2842,38 @@ build_tile_wrapper(Layout *node, App *app, GtkWidget *content)
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     if (g_getenv("SIEB_DEBUG") != NULL)
         g_signal_connect(box, "destroy", G_CALLBACK(trace_destroy), app);
-    header = gtk_header_bar_new();
-    gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), FALSE);
+    /* Barre de titre compacte : un GtkHeaderBar fait ~51 px de haut — avec
+     * les tuiles/blocs empilés (et un niveau de barre par split), les
+     * barres mangeaient ~1/3 de la page. Une ligne label + menu suffit. */
+    header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_margin_start(header, 8);
+    gtk_widget_set_margin_end(header, 4);
+    gtk_widget_set_margin_top(header, 2);
+    gtk_widget_set_margin_bottom(header, 2);
     {
         GtkWidget *label = gtk_label_new(title);
 
+        /* Titre discret : 10 pt (une barre fine par tuile). */
+        gtk_widget_add_css_class(label, "tile-title");
         gtk_widget_set_halign(label, GTK_ALIGN_START);
-        gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), label);
+        gtk_widget_set_hexpand(label, TRUE); /* pousse « :: » à droite */
+        gtk_box_append(GTK_BOX(header), label);
     }
 
     menu_btn = gtk_menu_button_new();
     gtk_widget_add_css_class(menu_btn, "flat");
-    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(menu_btn), "open-menu-symbolic");
+    gtk_widget_add_css_class(menu_btn, "tile-menu");
+    /* « :: » seul (set_child remplace label+flèche internes). */
+    {
+        GtkWidget *grip = gtk_label_new("::");
+
+        gtk_widget_add_css_class(grip, "tile-title");
+        gtk_menu_button_set_child(GTK_MENU_BUTTON(menu_btn), grip);
+    }
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(menu_btn),
                                 build_tile_menu(node, app));
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), menu_btn);
+    gtk_widget_set_halign(menu_btn, GTK_ALIGN_END);
+    gtk_box_append(GTK_BOX(header), menu_btn);
 
     gtk_box_append(GTK_BOX(box), header);
     gtk_box_append(GTK_BOX(box), content);
@@ -2838,7 +2907,10 @@ render_layout_node(Layout *node, App *app)
     g_object_set_data(G_OBJECT(content), "sieb-app", app);
     g_signal_connect(content, "notify::position",
                      G_CALLBACK(on_paned_position), node);
-    return build_tile_wrapper(node, app, content);
+    /* PAS de wrapper sur les blocs : une barre par niveau de split
+     * s'empilait (4 barres au-dessus d'une tuile profonde = 1/3 de page).
+     * Les actions de groupe sont dans le menu des tuiles. */
+    return content;
 }
 
 /* Save différé du layout : le drag de poignée émet notify::position en
@@ -2984,6 +3056,21 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     app->win = GTK_WINDOW(gtk_application_window_new(gtk_app));
     gtk_window_set_title(app->win, "SIEB - CodeDashBoard");
     gtk_window_set_default_size(app->win, 1280, 800);
+
+    /* CSS applicatif : titres de tuiles discrets (10 pt). */
+    {
+        GtkCssProvider *css = gtk_css_provider_new();
+        const char *data_css =
+            ".tile-title { font-size: 10pt; }\n"
+            "menubutton.tile-menu > button { font-size: 9pt; "
+            "padding: 0 4px; min-height: 0; }\n";
+
+        gtk_css_provider_load_from_string(css, data_css);
+        gtk_style_context_add_provider_for_display(
+            gdk_display_get_default(), GTK_STYLE_PROVIDER(css),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_object_unref(css);
+    }
 
     /* HeaderBar (sans bouton Ouvrir : l'explorateur suffit). */
     header = gtk_header_bar_new();
