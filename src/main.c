@@ -144,12 +144,30 @@ static void update_diff(App *app);
 static gboolean item_is_dirty(App *app, gpointer item);
 static void create_roots_state(App *app);
 static GtkWidget *build_roots_view(App *app);
-static gboolean test_split_idle(gpointer data);
-static gboolean test_grid_idle(gpointer data);
+static gboolean test_layout_idle(gpointer data);
+static void     test_grid_sequence(App *app);
+static void     test_split_sequence(App *app);
 static gboolean test_close_idle(gpointer data);
 static gboolean test_modal_idle(gpointer data);
 static gboolean test_settings_step(gpointer data);
 static gboolean test_quit_idle(gpointer data);
+
+/* Délai entre pas des scénarios de test (ms). Volontairement court :
+ * l'app est légère, les tests se comptent en ms — pas en secondes. */
+static guint
+cdb_test_delay(void)
+{
+    static guint ms = 0;
+
+    if (ms == 0) {
+        const char *e = g_getenv("CDB_TEST_DELAY");
+
+        ms = e != NULL ? (guint)g_ascii_strtoll(e, NULL, 10) : 150;
+        if (ms < 50 || ms > 500)
+            ms = 150;
+    }
+    return ms;
+}
 static void recompute_dirty(App *app);
 static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
 static void update_style_scheme(App *app);
@@ -4192,30 +4210,29 @@ on_activate(GtkApplication *gtk_app, gpointer data)
 
     gtk_window_present(app->win);
 
-    /* MODE TEST (debug) : CDB_TEST_CLOSE=1 ferme la fenêtre après 2 s
-     * (équivalent du clic sur X : passe par close-request). */
-    if (g_getenv("CDB_TEST_CLOSE") != NULL)
-        g_timeout_add(2000, test_close_idle, app->win);
-    /* MODE TEST (debug) : CDB_TEST_MODAL=1 ouvre 5 modales (la 5e doit
-     * être refusée). */
-    if (g_getenv("CDB_TEST_MODAL") != NULL)
-        g_timeout_add(1000, test_modal_idle, app);
-    /* MODE TEST (debug) : CDB_TEST_SETTINGS=1 ouvre/ferme settings ×2. */
-    if (g_getenv("CDB_TEST_SETTINGS") != NULL)
-        g_timeout_add(1000, test_settings_step, app);
+    /* Scénarios de test : déclenchement immédiat, pas courts
+     * (cdb_test_delay), sortie automatique — la suite entière se
+     * compte en centaines de ms. */
+    {
+        guint tms = cdb_test_delay();
 
-    /* MODE TEST (debug) : CDB_TEST_SPLIT=1 reproduit le crash du split —
-     * split horizontal du root dans un idle, puis quitte après 2 s. */
-    if (g_getenv("CDB_TEST_SPLIT") != NULL) {
-        g_idle_add(test_split_idle, app);
-        g_timeout_add(2000, test_quit_idle, gtk_app);
-    }
-    /* MODE TEST (debug) : CDB_TEST_GRID=1 construit l'arrangement
-     * A:B:C / A:B:C / D:B:C / E:F:F par les opérations du modèle
-     * (comme le menu des tuiles/blocs), avec re-rendu à chaque étape. */
-    if (g_getenv("CDB_TEST_GRID") != NULL) {
-        g_idle_add(test_grid_idle, app);
-        g_timeout_add(2500, test_quit_idle, gtk_app);
+        /* CDB_TEST_CLOSE=1 : ferme la fenêtre (close-request → save). */
+        if (g_getenv("CDB_TEST_CLOSE") != NULL)
+            g_timeout_add(tms * 2, test_close_idle, app->win);
+        /* CDB_TEST_MODAL=1 : 5 modales (la 5e doit être refusée). */
+        if (g_getenv("CDB_TEST_MODAL") != NULL) {
+            g_timeout_add(tms, test_modal_idle, app);
+            g_timeout_add(tms * 3, test_quit_idle, gtk_app);
+        }
+        /* CDB_TEST_SETTINGS=1 : ouvre/ferme Settings ×2. */
+        if (g_getenv("CDB_TEST_SETTINGS") != NULL)
+            g_timeout_add(tms, test_settings_step, app);
+        /* CDB_TEST_LAYOUT=1 (alias SPLIT/GRID) : pavage complet puis
+         * rounds de churn ; CDB_TEST_REPEAT=N ajoute des tours. */
+        if (g_getenv("CDB_TEST_LAYOUT") != NULL ||
+            g_getenv("CDB_TEST_SPLIT") != NULL ||
+            g_getenv("CDB_TEST_GRID") != NULL)
+            g_idle_add(test_layout_idle, app);
     }
 }
 
@@ -4225,14 +4242,14 @@ static Layout *test_first_tile(Layout *n)
     return n->kind == LAYOUT_TILE ? n : test_first_tile(n->a);
 }
 
-static gboolean
-test_split_idle(gpointer data)
+static void
+test_split_sequence(App *app)
 {
-    App *app = data;
     Layout *t;
 
     /* SÉQUENCE STRESS : split+retile+remove enchaînés, avec re-rendu à
-     * chaque étape (comme les clics du user). */
+     * chaque étape (comme les clics du user). PAS de layout_save : ne
+     * pas écraser le layout.json du user. */
     t = test_first_tile(app->layout);
     app->layout = layout_split(app->layout, t, TRUE, t->id);
     render_layout(app);
@@ -4242,7 +4259,6 @@ test_split_idle(gpointer data)
         layout_retile(t, "explorer");
     else
         layout_retile(t, "editor");
-    /* PAS de layout_save : ne pas écraser le layout.json du user. */
     render_layout(app);
 
     t = test_first_tile(app->layout);
@@ -4258,9 +4274,24 @@ test_split_idle(gpointer data)
     t = test_first_tile(app->layout);
     if (t->parent != NULL) {
         app->layout = layout_remove(app->layout, t);
-        /* PAS de layout_save : ne pas écraser le layout.json du user. */
         render_layout(app);
     }
+}
+
+/* Scénario LAYOUT (fusion GRID+SPLIT) : pavage complet puis rounds de
+ * churn. CDB_TEST_REPEAT=N ajoute des tours (chasse aux courses). */
+static gboolean
+test_layout_idle(gpointer data)
+{
+    App      *app = data;
+    const char *rep = g_getenv("CDB_TEST_REPEAT");
+    int       rounds = rep != NULL ? atoi(rep) : 1;
+
+    test_grid_sequence(app);
+    for (int r = 0; r < rounds; r++)
+        test_split_sequence(app);
+    g_timeout_add(cdb_test_delay(), test_quit_idle,
+                  g_application_get_default());
     return G_SOURCE_REMOVE;
 }
 
@@ -4274,10 +4305,9 @@ test_quit_idle(gpointer data)
 /* MODE TEST (debug) : voir CDB_TEST_GRID dans on_activate. Construit le
  * pavage V( H(A,H(D,E)), H(V(B,C),F) ) — « A:B:C/A:B:C/D:B:C/E:F:F » — en
  * n'utilisant que layout_split/layout_retile sur tuiles ET blocs. */
-static gboolean
-test_grid_idle(gpointer data)
+static void
+test_grid_sequence(App *app)
 {
-    App    *app = data;
     Layout *t;
 
     /* 1. V : 2 colonnes (editor|editor). */
@@ -4318,7 +4348,6 @@ test_grid_idle(gpointer data)
     layout_retile(app->layout->b->a->b, "editor");    /* C */
     layout_retile(app->layout->b->b, "editor");       /* F */
     render_layout(app);
-    return G_SOURCE_REMOVE;
 }
 
 /* MODE TEST (debug) : voir CDB_TEST_CLOSE dans on_activate. */
@@ -4355,7 +4384,7 @@ test_settings_step(gpointer data)
         g_getenv("CDB_TEST_SETTINGS_DELAY")
             ? (int)g_ascii_strtoll(g_getenv("CDB_TEST_SETTINGS_DELAY"),
                                    NULL, 10)
-            : 500;
+            : 80;
 
     switch (step++) {
     case 0:
