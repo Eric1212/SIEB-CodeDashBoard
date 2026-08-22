@@ -253,6 +253,135 @@ llm_model_allowed(const char *filter, const char *id)
     return ok;
 }
 
+/* Noms des providers connus : clés de la map « providers ». */
+char **
+llm_config_provider_names(void)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonObject *root, *provs;
+    char      **names = NULL;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        root = json_node_get_object(json_parser_get_root(parser));
+
+        if (json_object_has_member(root, "providers")) {
+            provs = json_object_get_object_member(root, "providers");
+
+            if (provs != NULL) {
+                GList *members = json_object_get_members(provs);
+                guint  n = g_list_length(members);
+                guint  i = 0;
+
+                names = g_new0(char *, n + 1);
+                for (GList *l = members; l != NULL; l = l->next)
+                    names[i++] = g_strdup(l->data);
+            }
+        }
+    }
+    g_object_unref(parser);
+    g_free(path);
+    return names;
+}
+
+/* Bascule provider + modèle actifs : écrit « active » et rafraîchit la
+ * config vivante (api_url/api_key repris du provider choisi). Les clés
+ * des autres providers sont préservées. */
+void
+llm_config_switch_active(LlmConfig *cfg, const char *provider,
+                         const char *model)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonObject *root = NULL, *active;
+    JsonNode   *work = NULL;
+    JsonGenerator *gen;
+    gchar      *text;
+    GError     *error = NULL;
+    JsonObject *provs = NULL, *prov = NULL;
+    const char *new_url = NULL;
+    char       *new_key = NULL;
+
+    if (cfg == NULL || provider == NULL || model == NULL) {
+        g_object_unref(parser);
+        g_free(path);
+        return;
+    }
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        work = json_node_copy(json_parser_get_root(parser));
+        root = json_node_get_object(work);
+    } else {
+        root = json_object_new();
+        work = json_node_new(JSON_NODE_OBJECT);
+        json_node_set_object(work, root);
+    }
+
+    /* api_url/api_key du provider choisi (s'il est déjà connu). */
+    if (json_object_has_member(root, "providers") &&
+        json_object_get_object_member(root, "providers") != NULL) {
+        provs = json_object_get_object_member(root, "providers");
+
+        if (json_object_has_member(provs, provider))
+            prov = json_object_get_object_member(provs, provider);
+    }
+    if (prov != NULL && json_object_has_member(prov, "api_url")) {
+        const char *u = json_object_get_string_member(prov, "api_url");
+
+        new_url = (u != NULL && u[0] != '\0') ? u
+                    : llm_provider_default_url(provider);
+    } else {
+        new_url = llm_provider_default_url(provider);
+    }
+    new_key = (prov != NULL && json_object_has_member(prov, "api_key"))
+                  ? g_strdup(json_object_get_string_member(prov,
+                                                           "api_key"))
+                  : g_strdup("");
+
+    /* active.{provider,model} — les providers ne sont pas touchés. */
+    active = json_object_new();
+    json_object_set_string_member(active, "provider", provider);
+    json_object_set_string_member(active, "model", model);
+    json_object_set_object_member(root, "active", active);
+
+    /* COPIE immédiate : la chaîne vit dans l'arbre JSON qui sera libéré
+     * plus bas (json_node_unref) — garder le pointeur serait un UAF. */
+    {
+        char *url_copy = (new_url != NULL) ? g_strdup(new_url) : NULL;
+
+        gen = json_generator_new();
+        text = json_to_string(work, TRUE);
+        if (!g_file_set_contents(path, text, -1, &error)) {
+            g_printerr("SIEB: écriture switch active : %s\n",
+                       error->message);
+            g_error_free(error);
+        }
+        g_free(text);
+        g_object_unref(gen);
+        json_node_unref(work);
+        g_object_unref(parser);
+        g_free(path);
+
+        /* Rafraîchit la config vivante pour les prochains envois. */
+        g_free(cfg->provider);
+        cfg->provider = g_strdup(provider);
+        g_free(cfg->model);
+        cfg->model = g_strdup(model);
+        if (url_copy != NULL && url_copy[0] != '\0') {
+            g_free(cfg->api_url);
+            cfg->api_url = url_copy;
+        } else {
+            g_free(url_copy); /* pas d'URL connue : on garde l'actuelle */
+        }
+        g_free(cfg->api_key);
+        cfg->api_key = new_key; /* possession transférée */
+    }
+}
+
 void
 llm_config_free(LlmConfig *cfg)
 {
@@ -443,16 +572,29 @@ typedef struct {
     GtkTextMark *reply_mark;/* marque de fin de la réponse en streaming */
     GArray      *history;   /* LlmMsg[] : fil de conversation envoyé */
     GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
-    GtkWidget   *model_pop; /* popover listant /models du provider */
-    GtkWidget   *model_list;/* listbox des modèles */
-    char       **models;    /* ids récupérés (copie possédée) */
+    GtkWidget   *model_pop; /* popover : recherche + sections provider */
+    GtkWidget   *model_search; /* filtre live des rangées */
+    GtkWidget   *rows_box;  /* conteneur vertical des sections */
+    GPtrArray   *sections;  /* ModelSection[] par provider */
+    gboolean     menu_built;/* popover peuplé au premier ouvert */
+    GActionGroup *actions;  /* pour « Configurer… » (ref ; emprunté sinon) */
 } LlmTile;
+
+/* Une section de provider dans le sélecteur : en-tête + listbox. */
+typedef struct {
+    char      *provider;
+    GtkWidget *header;
+    GtkWidget *list;    /* GtkListBox single-click */
+    char     **models;  /* ids récupérés (copie possédée) */
+} ModelSection;
 
 static void on_llm_send_clicked(GtkButton *btn, gpointer data);
 static void llm_stream_read(GObject *source, GAsyncResult *res, gpointer data);
 static void llm_scroll_to_end(LlmTile *t);
 static void on_llm_scroll(GtkAdjustment *adj, gpointer data);
-static void llm_models_refresh(LlmTile *t);
+static void llm_model_section_refresh(LlmTile *t, ModelSection *sec);
+static void llm_model_menu_apply_filter(LlmTile *t);
+static void llm_model_menu_ensure(LlmTile *t);
 
 static void
 llm_tile_free(gpointer data)
@@ -474,86 +616,245 @@ llm_tile_free(gpointer data)
     }
     /* cfg EMPRUNTÉE à App (app->llm_cfg) : PAS libérée ici — main()
      * la libère une seule fois en fin de programme. */
-    g_strfreev(t->models);
+    if (t->sections != NULL)
+        g_ptr_array_unref(t->sections); /* libère les ModelSection */
+    if (t->actions != NULL)
+        g_object_unref(t->actions);
     g_free(t);
 }
 
-/* Choix d'un modèle dans le popover de la tuile : bascule immédiate
- * (mémoire) + persistance en « active » de llm.json. */
+/* Libère une section de provider (free func du GPtrArray). */
 static void
-on_llm_model_picked(GtkListBox G_GNUC_UNUSED *lb, GtkListBoxRow *row,
-                    gpointer data)
+model_section_free(gpointer data)
 {
-    LlmTile    *t = data;
-    const char *id = g_object_get_data(G_OBJECT(row), "model-id");
+    ModelSection *sec = data;
 
-    if (id == NULL || t->cfg == NULL)
-        return;
-    g_free(t->cfg->model);
-    t->cfg->model = g_strdup(id);
-    gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn), id);
-    llm_config_save_provider(t->cfg->provider,
-                             t->cfg->api_key != NULL ? t->cfg->api_key : "",
-                             id);
-    gtk_popover_popdown(GTK_POPOVER(t->model_pop));
+    g_free(sec->provider);
+    g_strfreev(sec->models);
+    g_free(sec);
 }
 
-/* Reconstruit la liste des modèles du popover (filtre autorisés). */
-static void
-llm_models_refresh(LlmTile *t)
+/* La requête de recherche correspond-elle à l'id ? Vide = tout. */
+static gboolean
+llm_model_matches(const char *query, const char *id)
 {
-    char *filter = llm_config_get_allowed_models(t->cfg->provider);
+    char *q, *lid;
+    gboolean ok;
 
-    for (GtkWidget *child = gtk_widget_get_first_child(t->model_list);
+    if (query == NULL || query[0] == '\0')
+        return TRUE;
+    q = g_utf8_casefold(query, -1);
+    lid = g_utf8_casefold(id, -1);
+    ok = strstr(lid, q) != NULL;
+    g_free(q);
+    g_free(lid);
+    return ok;
+}
+
+/* Reconstruit les rangées d'une section : filtre « autorisés » +
+ * ✓ devant le modèle actif (provider ET id). */
+static void
+llm_model_section_refresh(LlmTile *t, ModelSection *sec)
+{
+    char *filter = llm_config_get_allowed_models(sec->provider);
+
+    for (GtkWidget *child = gtk_widget_get_first_child(sec->list);
          child != NULL; ) {
         GtkWidget *next = gtk_widget_get_next_sibling(child);
 
-        gtk_list_box_remove(GTK_LIST_BOX(t->model_list), child);
+        gtk_list_box_remove(GTK_LIST_BOX(sec->list), child);
         child = next;
     }
-    if (t->models != NULL) {
-        for (int i = 0; t->models[i] != NULL; i++) {
-            GtkWidget *lbl, *row;
+    if (sec->models != NULL) {
+        for (int i = 0; sec->models[i] != NULL; i++) {
+            const char *id = sec->models[i];
+            gboolean active = t->cfg != NULL &&
+                              strcmp(t->cfg->provider,
+                                     sec->provider) == 0 &&
+                              t->cfg->model != NULL &&
+                              strcmp(t->cfg->model, id) == 0;
 
-            if (!llm_model_allowed(filter, t->models[i]))
+            if (!llm_model_allowed(filter, id))
                 continue;
-            lbl = gtk_label_new(t->models[i]);
-            row = gtk_list_box_row_new();
-            gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-            gtk_widget_set_margin_start(lbl, 8);
-            gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
-            gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), lbl);
-            g_object_set_data_full(G_OBJECT(row), "model-id",
-                                   g_strdup(t->models[i]), g_free);
-            gtk_list_box_append(GTK_LIST_BOX(t->model_list), row);
+            {
+                GtkWidget *lbl;
+                GtkWidget *row;
+                char      *shown = active
+                                       ? g_strdup_printf("\u2713 %s", id)
+                                       : g_strdup(id);
+
+                lbl = gtk_label_new(shown);
+                row = gtk_list_box_row_new();
+                gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+                gtk_widget_set_margin_start(lbl, 8);
+                gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+                gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), lbl);
+                g_object_set_data_full(G_OBJECT(row), "model-id",
+                                       g_strdup(id), g_free);
+                g_object_set_data_full(G_OBJECT(row), "model-provider",
+                                       g_strdup(sec->provider), g_free);
+                gtk_list_box_append(GTK_LIST_BOX(sec->list), row);
+                g_free(shown);
+            }
         }
     }
     g_free(filter);
 }
 
-/* Réception de /models pour la tuile. La tuile peut avoir été détruite
- * pendant le vol de la requête (re-rendu du layout) : contexte à
- * pointeur faible sur la tuile, NULLé par GTK à sa mort. */
-typedef struct {
-    LlmTile   *t;      /* valide garanti : l'ancre est référencée */
-    GtkWidget *anchor; /* la box, ref possédée pendant le vol */
-} LlmModelsFetchCtx;
+/* Clic sur un modèle : bascule provider + modèle ensemble (persisté),
+ * rafraîchit tous les ✓ puis referme le popover. */
+static void
+on_llm_model_row_activated(GtkListBox G_GNUC_UNUSED *lb,
+                           GtkListBoxRow *row, gpointer data)
+{
+    LlmTile    *t = data;
+    const char *id = g_object_get_data(G_OBJECT(row), "model-id");
+    const char *prov = g_object_get_data(G_OBJECT(row), "model-provider");
+
+    if (id == NULL || prov == NULL || t->cfg == NULL)
+        return;
+    if (strcmp(prov, t->cfg->provider) == 0 &&
+        strcmp(id, t->cfg->model) == 0) {
+        gtk_popover_popdown(GTK_POPOVER(t->model_pop));
+        return; /* déjà actif */
+    }
+    llm_config_switch_active(t->cfg, prov, id);
+    gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn),
+                              t->cfg->model != NULL ? t->cfg->model : "?");
+    for (guint i = 0; i < t->sections->len; i++)
+        llm_model_section_refresh(t, g_ptr_array_index(t->sections, i));
+    llm_model_menu_apply_filter(t);
+    gtk_popover_popdown(GTK_POPOVER(t->model_pop));
+}
+
+/* Recherche live : masque les rangées non-correspondantes et les
+ * sections qui deviennent vides. */
+static void
+llm_model_menu_apply_filter(LlmTile *t)
+{
+    const char *q = gtk_editable_get_text(GTK_EDITABLE(t->model_search));
+
+    for (guint i = 0; i < t->sections->len; i++) {
+        ModelSection *sec = g_ptr_array_index(t->sections, i);
+        int           visible = 0;
+
+        for (GtkWidget *row = gtk_widget_get_first_child(sec->list);
+             row != NULL; row = gtk_widget_get_next_sibling(row)) {
+            const char *id = g_object_get_data(G_OBJECT(row),
+                                               "model-id");
+            gboolean show = llm_model_matches(
+                q, id != NULL ? id : "");
+
+            gtk_widget_set_visible(row, show);
+            if (show)
+                visible++;
+        }
+        gtk_widget_set_visible(sec->header, visible > 0);
+    }
+}
 
 static void
-on_llm_models_fetched(char **ids, gpointer data)
+on_llm_model_search_changed(GtkSearchEntry G_GNUC_UNUSED *entry,
+                            gpointer data)
 {
-    LlmModelsFetchCtx *ctx = data;
-    LlmTile           *t = ctx->t;
+    llm_model_menu_apply_filter(data);
+}
 
-    /* La ref sur l'ancre garantit que t est vivant ici, même si le
-     * layout a été re-rendu entre-temps (la tuile attendait en mémoire). */
-    if (t != NULL) {
-        g_strfreev(t->models);
-        t->models = ids != NULL ? g_strdupv(ids) : NULL;
-        llm_models_refresh(t);
+/* « Configurer… » : ouvre la fenêtre Settings (action de app->win). */
+static void
+on_llm_configure_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    LlmTile *t = data;
+
+    if (t->actions != NULL)
+        g_action_group_activate_action(t->actions, "settings", NULL);
+}
+
+/* Fetch des /models d'UNE section. La ref sur l'ancre garantit que la
+ * tuile est vivante au callback, même après un re-rendu du layout. */
+typedef struct {
+    LlmTile      *t;
+    GtkWidget    *anchor; /* ref possédée pendant le vol */
+    ModelSection *sec;
+} SectionFetchCtx;
+
+static void
+on_section_models_fetched(char **ids, gpointer data)
+{
+    SectionFetchCtx *ctx = data;
+
+    if (ctx->t != NULL && ctx->sec != NULL) {
+        g_strfreev(ctx->sec->models);
+        ctx->sec->models = ids != NULL ? g_strdupv(ids) : NULL;
+        llm_model_section_refresh(ctx->t, ctx->sec);
+        llm_model_menu_apply_filter(ctx->t);
     }
     g_object_unref(ctx->anchor); /* lâche l'ancre : teardown normal */
     g_free(ctx);
+}
+
+static void
+llm_model_pop_mapped(GtkWidget G_GNUC_UNUSED *w, gpointer data)
+{
+    LlmTile *t = data;
+
+    llm_model_menu_ensure(t);
+    /* Recherche réinitialisée à chaque ouverture. */
+    gtk_editable_set_text(GTK_EDITABLE(t->model_search), "");
+}
+
+/* Peuple le menu au premier affichage : une section par provider connu
+ * de llm.json, chacune fetchant ses /models (les sections apparaissent
+ * progressivement). */
+static void
+llm_model_menu_ensure(LlmTile *t)
+{
+    char **names;
+
+    if (t->menu_built)
+        return;
+    t->menu_built = TRUE;
+
+    names = llm_config_provider_names();
+    if (names == NULL) {
+        GtkWidget *lbl = gtk_label_new(
+            "Aucun provider configuré.\nSettings → LLM → Providers");
+
+        gtk_widget_add_css_class(lbl, "dim-label");
+        gtk_widget_set_margin_start(lbl, 8);
+        gtk_box_append(GTK_BOX(t->rows_box), lbl);
+        return;
+    }
+    for (int i = 0; names[i] != NULL; i++) {
+        ModelSection    *sec = g_new0(ModelSection, 1);
+        SectionFetchCtx *fctx;
+
+        sec->provider = g_strdup(names[i]);
+        sec->header = gtk_label_new(names[i]);
+        gtk_widget_add_css_class(sec->header, "dim-label");
+        gtk_widget_set_halign(sec->header, GTK_ALIGN_START);
+        gtk_widget_set_margin_start(sec->header, 8);
+        gtk_widget_set_margin_top(sec->header, 6);
+        sec->list = gtk_list_box_new();
+        gtk_list_box_set_selection_mode(GTK_LIST_BOX(sec->list),
+                                        GTK_SELECTION_NONE);
+        gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(sec->list),
+                                                  TRUE);
+        g_signal_connect(sec->list, "row-activated",
+                         G_CALLBACK(on_llm_model_row_activated), t);
+        g_ptr_array_add(t->sections, sec);
+
+        gtk_box_append(GTK_BOX(t->rows_box), sec->header);
+        gtk_box_append(GTK_BOX(t->rows_box), GTK_WIDGET(sec->list));
+
+        fctx = g_new0(SectionFetchCtx, 1);
+        fctx->t = t;
+        fctx->anchor = g_object_ref(t->model_pop);
+        fctx->sec = sec;
+        llm_models_fetch(sec->provider, on_section_models_fetched, fctx);
+    }
+    g_strfreev(names);
+    llm_model_menu_apply_filter(t);
 }
 
 /* Ajoute un échange à l'historique (role: "user"/"assistant"). */
@@ -944,13 +1245,14 @@ on_llm_entry_activate(GtkEntry G_GNUC_UNUSED *entry, gpointer data)
 }
 
 GtkWidget *
-llm_tile_new(const LlmConfig *cfg)
+llm_tile_new(const LlmConfig *cfg, GActionGroup *actions)
 {
     GtkWidget *box;
     GtkWidget *scroll;
     LlmTile   *t = g_new0(LlmTile, 1);
 
     t->cfg = (LlmConfig *)cfg;
+    t->actions = actions != NULL ? g_object_ref(actions) : NULL;
 
     if (cfg == NULL) {
         /* Pas de config : aide au lieu du chat. */
@@ -1004,30 +1306,48 @@ llm_tile_new(const LlmConfig *cfg)
         GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         GtkWidget *model_pop;
         GtkWidget *model_scroll;
+        GtkWidget *model_outer;
+        GtkWidget *configure;
 
-        /* Sélecteur de modèle : label = modèle actif, popover = /models
-         * du provider actif (chargé async). */
-        t->model_list = gtk_list_box_new();
-        gtk_list_box_set_selection_mode(GTK_LIST_BOX(t->model_list),
-                                        GTK_SELECTION_NONE);
-        gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(t->model_list),
-                                                  TRUE);
-        g_signal_connect(t->model_list, "row-activated",
-                         G_CALLBACK(on_llm_model_picked), t);
+        /* Sélecteur multi-provider : recherche + sections + Configurer.
+         * Peuplement paresseux au premier affichage du popover. */
+        t->sections = g_ptr_array_new_with_free_func(model_section_free);
+
+        t->model_search = gtk_search_entry_new();
+        gtk_entry_set_placeholder_text(GTK_ENTRY(t->model_search),
+                                       "Sélectionner un modèle…");
+        g_signal_connect(t->model_search, "search-changed",
+                         G_CALLBACK(on_llm_model_search_changed), t);
+
+        t->rows_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         model_scroll = gtk_scrolled_window_new();
         gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(model_scroll),
                                        GTK_POLICY_NEVER,
                                        GTK_POLICY_AUTOMATIC);
         gtk_scrolled_window_set_min_content_height(
-            GTK_SCROLLED_WINDOW(model_scroll), 24);
+            GTK_SCROLLED_WINDOW(model_scroll), 48);
         gtk_scrolled_window_set_max_content_height(
-            GTK_SCROLLED_WINDOW(model_scroll), 320);
+            GTK_SCROLLED_WINDOW(model_scroll), 380);
         gtk_scrolled_window_set_propagate_natural_height(
             GTK_SCROLLED_WINDOW(model_scroll), TRUE);
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(model_scroll),
-                                      t->model_list);
+                                      t->rows_box);
+
+        model_outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_box_append(GTK_BOX(model_outer), t->model_search);
+        gtk_box_append(GTK_BOX(model_outer), model_scroll);
+        configure = gtk_button_new_with_label("Configurer…");
+        gtk_widget_add_css_class(configure, "flat");
+        gtk_widget_set_halign(configure, GTK_ALIGN_FILL);
+        g_signal_connect(configure, "clicked",
+                         G_CALLBACK(on_llm_configure_clicked), t);
+        gtk_box_append(GTK_BOX(model_outer), configure);
+
         model_pop = gtk_popover_new();
-        gtk_popover_set_child(GTK_POPOVER(model_pop), model_scroll);
+        gtk_popover_set_child(GTK_POPOVER(model_pop), model_outer);
+        g_signal_connect(model_pop, "map",
+                         G_CALLBACK(llm_model_pop_mapped), t);
+        t->model_pop = model_pop;
 
         t->model_btn = gtk_menu_button_new();
         gtk_widget_add_css_class(t->model_btn, "flat");
@@ -1035,7 +1355,6 @@ llm_tile_new(const LlmConfig *cfg)
                                   cfg->model != NULL ? cfg->model : "?");
         gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->model_btn),
                                     model_pop);
-        t->model_pop = model_pop;
 
         gtk_widget_set_margin_start(row, 6);
         gtk_widget_set_margin_end(row, 6);
@@ -1050,17 +1369,6 @@ llm_tile_new(const LlmConfig *cfg)
         gtk_box_append(GTK_BOX(box), scroll);
         gtk_widget_set_vexpand(scroll, TRUE);
         gtk_box_append(GTK_BOX(box), row);
-    }
-
-    {
-        LlmModelsFetchCtx *ctx = g_new0(LlmModelsFetchCtx, 1);
-
-        ctx->t = t;
-        ctx->anchor = box;
-        /* Ref sur l'ancre pendant le vol : pas de fenêtre de course —
-         * la tuile ne peut pas être finalisée avant le callback. */
-        g_object_ref(box);
-        llm_models_fetch(cfg->provider, on_llm_models_fetched, ctx);
     }
 
     t->soup = soup_session_new();

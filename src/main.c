@@ -3180,7 +3180,7 @@ create_piece(const char *id, App *app)
     else if (strcmp(id, "bash") == 0)
         w = bash_panel_new(app->roots, app->multi_paths);
     else if (strcmp(id, "llm") == 0)
-        w = llm_tile_new(app->llm_cfg);
+        w = llm_tile_new(app->llm_cfg, G_ACTION_GROUP(app->win));
     else if (strcmp(id, "settings") == 0) {
         w = build_settings(app);
     } else {

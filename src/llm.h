@@ -64,7 +64,18 @@ void llm_config_set_allowed_models(const char *provider, const char *filter);
 /* TRUE si id passe le filtre (vide/tout, ou présent après trim). */
 gboolean llm_model_allowed(const char *filter, const char *id);
 
+/* Noms des providers connus (clés de la map « providers »).
+ * Tableau NULL-terminé à libérer (g_strfreev) ; NULL si aucun. */
+char **llm_config_provider_names(void);
+
+/* Bascule provider + modèle actifs : persiste « active » dans llm.json
+ * ET met cfg à jour en place (provider/model/api_url/api_key) — le
+ * prochain envoi partira chez le provider choisi. */
+void llm_config_switch_active(LlmConfig *cfg, const char *provider,
+                              const char *model);
+
 /* Crée la VUE de la tuile « llm » (historique + saisie). */
-GtkWidget *llm_tile_new(const LlmConfig *cfg);
+GtkWidget *llm_tile_new(const LlmConfig *cfg,
+                        GActionGroup *actions);
 
 #endif /* CDB_LLM_H */
