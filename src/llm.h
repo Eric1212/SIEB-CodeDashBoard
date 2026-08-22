@@ -78,11 +78,24 @@ gboolean llm_model_allowed(const char *filter, const char *id);
  * Tableau NULL-terminé à libérer (g_strfreev) ; NULL si aucun. */
 char **llm_config_provider_names(void);
 
-/* Bascule provider + modèle actifs : persiste « active » dans llm.json
- * ET met cfg à jour en place (provider/model/api_url/api_key) — le
- * prochain envoi partira chez le provider choisi. */
 void llm_config_switch_active(LlmConfig *cfg, const char *provider,
                               const char *model);
+
+/* Configuration du retry sur HTTP 429 (section Harness des settings,
+ * persistée dans llm.json : harness.retry_429 / max / delay_ms). */
+typedef struct {
+    gboolean retry;        /* réessayer automatiquement ? (défaut TRUE) */
+    int      max_retries;  /* 200 par défaut ; 0 = infini ; borne 5000 */
+    int      delay_ms;     /* attente entre essais (défaut 250 ; 10-100000) */
+} LlmRetry429;
+
+#define LLM_RETRY429_DEFAULTS     (LlmRetry429){ .retry = TRUE, .max_retries = 200, .delay_ms = 250 }
+
+/* Charge la config de retry ; applique les défauts si absente/invalide. */
+void llm_retry429_load(LlmRetry429 *out);
+
+/* Sauvegarde la config de retry (bornes forcées : 0-5000 et 10-100000). */
+void llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms);
 
 /* Crée la VUE de la tuile « llm » (historique + saisie). */
 GtkWidget *llm_tile_new(const LlmConfig *cfg,

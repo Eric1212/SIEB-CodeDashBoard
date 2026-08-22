@@ -471,6 +471,92 @@ llm_model_allowed(const char *filter, const char *id)
 }
 
 /* Noms des providers connus : clés de la map « providers ». */
+/* ------------------------------------------------ */
+/* Retry 429 (section Harness)                       */
+/* ------------------------------------------------ */
+
+void
+llm_retry429_load(LlmRetry429 *out)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+
+    *out = LLM_RETRY429_DEFAULTS;
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        JsonObject *root =
+            json_node_get_object(json_parser_get_root(parser));
+
+        if (root != NULL && json_object_has_member(root, "harness")) {
+            JsonObject *h =
+                json_object_get_object_member(root, "harness");
+
+            if (h != NULL) {
+                if (json_object_has_member(h, "retry_429"))
+                    out->retry = json_object_get_boolean_member(
+                        h, "retry_429");
+                if (json_object_has_member(h, "max_retries_429"))
+                    out->max_retries = (int)json_object_get_int_member(
+                        h, "max_retries_429");
+                if (json_object_has_member(h, "delay_ms_429"))
+                    out->delay_ms = (int)json_object_get_int_member(
+                        h, "delay_ms_429");
+            }
+        }
+    }
+    g_object_unref(parser);
+    g_free(path);
+}
+
+void
+llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonObject *root;
+    JsonNode   *work = NULL;
+    JsonObject *harness;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        work = json_node_copy(json_parser_get_root(parser));
+        root = json_node_get_object(work);
+    } else {
+        root = json_object_new();
+        work = json_node_new(JSON_NODE_OBJECT);
+        json_node_set_object(work, root);
+    }
+
+    if (!json_object_has_member(root, "harness") ||
+        json_object_get_object_member(root, "harness") == NULL)
+        json_object_set_object_member(root, "harness",
+                                      json_object_new());
+    harness = json_object_get_object_member(root, "harness");
+    json_object_set_boolean_member(harness, "retry_429", retry);
+    json_object_set_int_member(harness, "max_retries_429", max_retries);
+    json_object_set_int_member(harness, "delay_ms_429", delay_ms);
+
+    {
+        JsonGenerator *gen = json_generator_new();
+        gchar         *text = json_to_string(work, TRUE);
+        GError        *error = NULL;
+
+        json_generator_set_root(gen, work);
+        text = json_to_string(work, TRUE);
+        if (!g_file_set_contents(path, text, -1, &error)) {
+            g_printerr("SIEB: écriture retry429 : %s\n", error->message);
+            g_error_free(error);
+        }
+        g_free(text);
+        g_object_unref(gen);
+    }
+    json_node_unref(work);
+    g_object_unref(parser);
+    g_free(path);
+}
+
 char **
 llm_config_provider_names(void)
 {
@@ -1191,13 +1277,23 @@ typedef struct {
     char          pending[8192]; /* lignes SSE partielles */
     gsize         pending_len;
     int           done;         /* garde anti double-libération */
+    char         *url;          /* pour reconstruire les essais 429 */
+    char         *body;         /* corps JSON de la requête */
+    char         *auth;         /* header Authorization ou NULL */
+    int           attempt;      /* numéro d'essai courant (0 = premier) */
 } LlmRequest;
+
+static void llm_send_attempt(LlmRequest *req);
+static gboolean llm_retry_tick(gpointer data);
 
 /* Libère la requête une seule fois (les callbacks de complétion
  * peuvent arriver en double selon l'état du flux). */
 static void
 llm_request_free(LlmRequest *req)
 {
+    g_free(req->url);
+    g_free(req->body);
+    g_free(req->auth);
     if (req->done)
         return;
     req->done = 1;
@@ -1292,6 +1388,26 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
     {
         guint status = soup_message_get_status(req->msg);
 
+        if (status == 429) {
+            LlmRetry429 rc;
+            gboolean    infinite;
+
+            llm_retry429_load(&rc);
+            infinite = rc.max_retries == 0;
+
+            if (stream != NULL)
+                g_object_unref(stream); /* corps d'erreur consommé */
+
+            if (rc.retry && (infinite || req->attempt < rc.max_retries)) {
+                req->attempt++;
+                if (req->attempt == 1)
+                    hist_append(t,
+                        "\n[CDB] HTTP 429 — nouvelles tentatives en cours…\n");
+                g_timeout_add((guint)rc.delay_ms, llm_retry_tick, req);
+                return; /* busy reste actif ; req vit pour l'essai suivant */
+            }
+        }
+
         if (status != 200) {
             char msg[128];
             char err_body[1024] = "";
@@ -1319,34 +1435,60 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
                               NULL, llm_stream_read, req);
 }
 
-/* Construit et envoie la requête chat/completions (stream=true). */
+static void llm_send_attempt(LlmRequest *req);
+static gboolean llm_retry_tick(gpointer data);
+
+/* Un essai d'envoi : reconstruit un SoupMessage neuf depuis la
+ * requête stockée (la session possède le message après send_async,
+ * donc chaque tentative repart d'une instance fraîche). */
 static void
-llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
+llm_send_attempt(LlmRequest *req)
 {
-    SoupMessage *msg;
-    char        *url;
-    JsonBuilder *builder;
-    JsonNode    *root_node;
-    char        *body;
-    LlmRequest  *req = g_new0(LlmRequest, 1);
+    SoupMessage *msg = soup_message_new("POST", req->url);
 
-    url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
-    msg = soup_message_new("POST", url);
-    g_free(url);
-
-    /* Clé optionnelle (OpenCode Zen fonctionne sans) : on n'envoie
-     * l'Authorization que si elle existe. */
-    if (t->cfg->api_key != NULL && t->cfg->api_key[0] != '\0') {
-        char *auth = g_strdup_printf("Bearer %s", t->cfg->api_key);
-
+    if (req->auth != NULL)
         soup_message_headers_append(soup_message_get_request_headers(msg),
-                                    "Authorization", auth);
-        g_free(auth);
-    }
+                                    "Authorization", req->auth);
     soup_message_headers_append(soup_message_get_request_headers(msg),
                                 "Content-Type", "application/json");
     soup_message_headers_append(soup_message_get_request_headers(msg),
                                 "Accept", "text/event-stream");
+
+    soup_message_set_request_body_from_bytes(
+        msg, "application/json",
+        g_bytes_new_take((guint8 *)g_strdup(req->body),
+                         strlen(req->body)));
+
+    gtk_widget_set_sensitive(req->tile->send_btn, FALSE);
+    req->msg = msg; /* possédé par la session après send_async */
+    soup_session_send_async(req->tile->soup, msg, G_PRIORITY_DEFAULT,
+                            NULL, llm_send_done, req);
+}
+
+/* Tick de retry 429 : relance un essai après le délai configuré. */
+static gboolean
+llm_retry_tick(gpointer data)
+{
+    llm_send_attempt((LlmRequest *)data);
+    return G_SOURCE_REMOVE;
+}
+
+/* Construit et envoie la requête chat/completions (stream=true). */
+static void
+llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
+{
+    JsonBuilder *builder;
+    JsonNode    *root_node;
+    LlmRequest  *req = g_new0(LlmRequest, 1);
+
+    req->tile = t;
+    req->attempt = 0;
+    req->url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
+
+    /* Clé optionnelle (OpenCode Zen fonctionne sans) : on n'envoie
+     * l'Authorization que si elle existe. */
+    if (t->cfg->api_key != NULL && t->cfg->api_key[0] != '\0')
+        req->auth = g_strdup_printf("Bearer %s", t->cfg->api_key);
 
     builder = json_builder_new();
     json_builder_begin_object(builder);
@@ -1372,19 +1514,11 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     json_builder_end_array(builder);
     json_builder_end_object(builder);
     root_node = json_builder_get_root(builder);
-    body = json_to_string(root_node, FALSE);
+    req->body = json_to_string(root_node, FALSE);
     json_node_unref(root_node);
     g_object_unref(builder);
 
-    soup_message_set_request_body_from_bytes(
-        msg, "application/json",
-        g_bytes_new_take((guint8 *)body, strlen(body)));
-
-    gtk_widget_set_sensitive(t->send_btn, FALSE);
-    req->tile = t;
-    req->msg = msg; /* possédé par la session après send_async */
-    soup_session_send_async(t->soup, msg, G_PRIORITY_DEFAULT, NULL,
-                            llm_send_done, req);
+    llm_send_attempt(req);
 }
 
 static void

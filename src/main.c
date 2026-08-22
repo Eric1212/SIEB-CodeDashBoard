@@ -2682,6 +2682,7 @@ static void on_provider_field_changed(GtkEditable *editable, gpointer data);
 static void on_allowed_models_changed(GtkEditable *editable,
                                       gpointer data);
 static GtkWidget *build_provider_form(const char *provider_name);
+static GtkWidget *build_harness_form(void);
 
 static GtkWidget *
 build_settings_section(const SettingsSection *sec)
@@ -2721,6 +2722,8 @@ build_settings_section(const SettingsSection *sec)
         body = build_provider_form("OpenRouter");
     else if (g_strcmp0(sec->title, "OpenCode") == 0)
         body = build_provider_form("OpenCode");
+    else if (g_strcmp0(sec->title, "429") == 0)
+        body = build_harness_form();
     else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_widget_set_margin_start(body, 16);
@@ -3085,6 +3088,103 @@ model_suggest_attach(GtkWidget *model_entry, const char *provider_name,
     }
 }
 
+/* Application de l'état du formulaire Harness : sensibilité + save. */
+static void
+harness_apply(GtkWidget *src)
+{
+    GtkWidget *grid = gtk_widget_get_ancestor(src, GTK_TYPE_GRID);
+    GtkWidget *sw;
+    GtkWidget *spin_max;
+    GtkWidget *spin_delay;
+
+    if (grid == NULL)
+        return;
+    sw = GTK_WIDGET(g_object_get_data(G_OBJECT(grid), "h-sw"));
+    spin_max = GTK_WIDGET(g_object_get_data(G_OBJECT(grid), "h-max"));
+    spin_delay = GTK_WIDGET(g_object_get_data(G_OBJECT(grid), "h-delay"));
+    if (sw == NULL || spin_max == NULL || spin_delay == NULL)
+        return;
+
+    {
+        gboolean on = gtk_switch_get_active(GTK_SWITCH(sw));
+
+        gtk_widget_set_sensitive(spin_max, on);
+        gtk_widget_set_sensitive(spin_delay, on);
+        llm_config_save_retry429(
+            on,
+            (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_max)),
+            (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_delay)));
+    }
+}
+
+static void
+on_harness_switch_changed(GtkSwitch G_GNUC_UNUSED *sw,
+                          GParamSpec G_GNUC_UNUSED *pspec,
+                          gpointer G_GNUC_UNUSED data)
+{
+    harness_apply(GTK_WIDGET(sw));
+}
+
+static void
+on_harness_spin_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
+{
+    harness_apply(GTK_WIDGET(editable));
+}
+
+/* Formulaire Harness : politique de retry sur HTTP 429.
+ * Défauts : oui / 200 répétitions / 250 ms. */
+static GtkWidget *
+build_harness_form(void)
+{
+    GtkWidget     *grid = gtk_grid_new();
+    GtkWidget     *retry_lbl = gtk_label_new("Retry sur HTTP 429 :");
+    GtkWidget     *sw = gtk_switch_new();
+    GtkWidget     *max_lbl = gtk_label_new("Répétitions (0 = infini) :");
+    GtkWidget     *delay_lbl = gtk_label_new("Délai entre essais (ms) :");
+    GtkAdjustment *adj_max = gtk_adjustment_new(200, 0, 5000, 10, 100, 0);
+    GtkWidget     *spin_max = gtk_spin_button_new(adj_max, 10, 0);
+    GtkAdjustment *adj_d = gtk_adjustment_new(250, 10, 100000, 10, 1000, 0);
+    GtkWidget     *spin_delay = gtk_spin_button_new(adj_d, 10, 0);
+    LlmRetry429    rc;
+
+    llm_retry429_load(&rc);
+    gtk_switch_set_active(GTK_SWITCH(sw), rc.retry);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_max),
+                              (double)rc.max_retries);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin_delay),
+                              (double)rc.delay_ms);
+    gtk_widget_set_sensitive(spin_max, rc.retry);
+    gtk_widget_set_sensitive(spin_delay, rc.retry);
+
+    g_object_set_data_full(G_OBJECT(grid), "h-sw", sw, NULL);
+    g_object_set_data_full(G_OBJECT(grid), "h-max", spin_max, NULL);
+    g_object_set_data_full(G_OBJECT(grid), "h-delay", spin_delay, NULL);
+
+    g_signal_connect(sw, "notify::active",
+                     G_CALLBACK(on_harness_switch_changed), NULL);
+    g_signal_connect(spin_max, "changed",
+                     G_CALLBACK(on_harness_spin_changed), NULL);
+    g_signal_connect(spin_delay, "changed",
+                     G_CALLBACK(on_harness_spin_changed), NULL);
+
+    gtk_widget_set_halign(retry_lbl, GTK_ALIGN_START);
+    gtk_widget_set_halign(max_lbl, GTK_ALIGN_START);
+    gtk_widget_set_halign(delay_lbl, GTK_ALIGN_START);
+    gtk_widget_set_halign(sw, GTK_ALIGN_START); /* pilule native, pas étirée */
+    gtk_widget_set_hexpand(spin_max, TRUE);
+    gtk_widget_set_hexpand(spin_delay, TRUE);
+
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+    gtk_grid_attach(GTK_GRID(grid), retry_lbl, 0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), sw, 1, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), max_lbl, 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), spin_max, 1, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), delay_lbl, 0, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), spin_delay, 1, 2, 1, 1);
+    return grid;
+}
+
 static GtkWidget *
 build_provider_form(const char *provider_name)
 {
@@ -3166,8 +3266,11 @@ build_settings(App *app G_GNUC_UNUSED)
         { "OpenCode",          NULL, NULL, 0 }, /* formulaire provider */
         { "OpenRouter",        NULL, NULL, 0 }, /* formulaire provider */
     };
+    static const SettingsSection harness_subs[] = {
+        { "429", NULL, NULL, 0 }, /* formulaire retry */
+    };
     static const SettingsSection llm_subs[] = {
-        { "Harness",    "(à venir : agent, boucle d'exécution…)", NULL, 0 },
+        { "Harness",    NULL, harness_subs, G_N_ELEMENTS(harness_subs) },
         { "Tools",      "(à venir : outils exposés au modèle…)", NULL, 0 },
         { "Providers",  NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
     };
