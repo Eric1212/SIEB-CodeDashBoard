@@ -4,7 +4,7 @@ PKGS    := gtk4 gtksourceview-5 libadwaita-1 json-glib-1.0 vte-2.91-gtk4 libsoup
 CFLAGS  += $(shell pkg-config --cflags $(PKGS))
 LIBS    := $(shell pkg-config --libs $(PKGS))
 
-SRC     := src/main.c src/roots.c src/fslist.c src/dirty.c src/diffbar.c src/bashpanel.c src/modal.c src/session.c src/layout.c src/llm.c
+SRC     := src/main.c src/roots.c src/fslist.c src/dirty.c src/diffbar.c src/bashpanel.c src/modal.c src/session.c src/llm.c src/mdview.c src/layout.c
 OBJ     := $(SRC:.c=.o)
 TARGET  := cdb
 

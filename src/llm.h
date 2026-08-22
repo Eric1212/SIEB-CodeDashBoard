@@ -42,6 +42,28 @@ void llm_config_free(LlmConfig *cfg);
 void llm_config_save_provider(const char *provider, const char *api_key,
                               const char *default_model);
 
+/* Récupère la liste des modèles du provider (GET {api_url}/models).
+ * Async : cb(ids, user_data) sur la boucle principale — ids = tableau
+ * NULL-terminé POSSEDÉ par llm.c : valide uniquement PENDANT le
+ * callback, ne pas libérer. NULL si échec.
+ * Le callback peut toucher l'UI directement (contexte principal). */
+typedef void (*LlmModelsCallback)(char **ids, gpointer user_data);
+
+void llm_models_fetch(const char *provider, LlmModelsCallback cb,
+                      gpointer user_data);
+
+/* URL de base d'un provider connu ; NULL si inconnu. */
+const char *llm_provider_default_url(const char *provider);
+
+/* Filtre de modèles autorisés du provider (chaîne brute : liste séparée
+ * par virgules d'ids exacts). NULL/"" = tous les modèles.
+ * get : chaîne g_strdup à libérer ; NULL si absente. */
+char *llm_config_get_allowed_models(const char *provider);
+void llm_config_set_allowed_models(const char *provider, const char *filter);
+
+/* TRUE si id passe le filtre (vide/tout, ou présent après trim). */
+gboolean llm_model_allowed(const char *filter, const char *id);
+
 /* Crée la VUE de la tuile « llm » (historique + saisie). */
 GtkWidget *llm_tile_new(const LlmConfig *cfg);
 

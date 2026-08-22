@@ -148,6 +148,7 @@ static gboolean test_split_idle(gpointer data);
 static gboolean test_grid_idle(gpointer data);
 static gboolean test_close_idle(gpointer data);
 static gboolean test_modal_idle(gpointer data);
+static gboolean test_settings_step(gpointer data);
 static gboolean test_quit_idle(gpointer data);
 static void recompute_dirty(App *app);
 static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
@@ -2660,6 +2661,8 @@ typedef struct SettingsSection {
 static void on_settings_section_toggled(GtkToggleButton *btn, gpointer data);
 static GtkWidget *build_settings_section(const SettingsSection *sec);
 static void on_provider_field_changed(GtkEditable *editable, gpointer data);
+static void on_allowed_models_changed(GtkEditable *editable,
+                                      gpointer data);
 static GtkWidget *build_provider_form(const char *provider_name);
 
 static GtkWidget *
@@ -2698,6 +2701,8 @@ build_settings_section(const SettingsSection *sec)
     /* Corps : formulaire provider, sous-accordéons, ou placeholder. */
     if (g_strcmp0(sec->title, "OpenRouter") == 0)
         body = build_provider_form("OpenRouter");
+    else if (g_strcmp0(sec->title, "OpenCode") == 0)
+        body = build_provider_form("OpenCode");
     else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_widget_set_margin_start(body, 16);
@@ -2768,13 +2773,303 @@ on_provider_field_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
     llm_config_save_provider(provider, key, model);
 }
 
+/* ------------------------------------------------ */
+/* Suggestions de modèles depuis /models             */
+/*                                                   */
+/* GTK4 déprécie GtkEntryCompletion : popover maison */
+/* ancré au champ, rempli par llm_models_fetch.      */
+/* ------------------------------------------------ */
+
+typedef struct {
+    char     **ids;    /* NULL-terminé (g_strfreev), NULL si pas chargé */
+    GtkWidget *entry;
+    GtkWidget *popover;
+    GtkWidget *listbox;
+    GtkWidget *anchor;  /* grid du formulaire : parent LÉGITIME du popover */
+    char      *provider;
+} ModelSuggest;
+
+/* Contexte de fetch : la ref sur l'entry garantit que s reste vivant
+ * pendant le vol (la fenêtre peut fermer, l'entry attend le callback). */
+typedef struct {
+    ModelSuggest *s;
+    GtkWidget    *entry; /* ref possédée pendant le vol */
+} ModelFetchCtx;
+
+/* Refresh différé : reconstruire la liste PENDANT row-activated détruit
+ * la rangée cliquée sous les pieds du signal (liste « qui disparaît »).
+ * L'idle passe après la fin de l'émission ; on rouvre le popover pour
+ * enchaîner les multi-sélections. */
+static void     model_suggest_refresh(ModelSuggest *s);
+static void     model_suggest_popup(ModelSuggest *s);
+
+static gboolean
+model_suggest_refresh_idle(gpointer data)
+{
+    ModelSuggest *s = data;
+
+    model_suggest_refresh(s);
+    model_suggest_popup(s);
+    return G_SOURCE_REMOVE;
+}
+
+static void
+on_model_row_activated(GtkListBox G_GNUC_UNUSED *lb, GtkListBoxRow *row,
+                       gpointer data)
+{
+    ModelSuggest *s = data;
+    const char   *id = g_object_get_data(G_OBJECT(row), "model-id");
+    const char   *cur;
+    GString      *out;
+    gchar       **toks;
+    gboolean      had = FALSE;
+
+    if (id == NULL)
+        return;
+    cur = gtk_editable_get_text(GTK_EDITABLE(s->entry));
+
+    /* Bascule : réémet la liste virgule-sans l'id, puis l'ajoute s'il
+     * n'y était pas. */
+    out = g_string_new(NULL);
+    toks = g_strsplit(cur, ",", -1);
+    for (int i = 0; toks[i] != NULL; i++) {
+        char *tok = g_strstrip(toks[i]);
+
+        if (tok[0] == '\0')
+            continue;
+        if (strcmp(tok, id) == 0) {
+            had = TRUE;
+            continue;
+        }
+        g_string_append_printf(out, "%s%s", out->len > 0 ? ", " : "", tok);
+    }
+    if (!had)
+        g_string_append_printf(out, "%s%s", out->len > 0 ? ", " : "", id);
+    g_strfreev(toks);
+
+    gtk_editable_set_text(GTK_EDITABLE(s->entry), out->str);
+    g_string_free(out, TRUE);
+    /* set_text → changed → sauvegarde ; le refresh des ✓ passe à l'idle
+     * (voir ci-dessus) — pas de popdown : multi-sélection. */
+    g_idle_add(model_suggest_refresh_idle, s);
+}
+
+static void
+model_suggest_refresh(ModelSuggest *s)
+{
+    char *filter;
+
+    if (s->listbox == NULL)
+        return; /* fenêtre fermée : callbacks en vol ignorés */
+    filter = llm_config_get_allowed_models(s->provider);
+
+    /* Vide la liste puis une row par modèle autorisé. */
+    for (GtkWidget *child = gtk_widget_get_first_child(s->listbox);
+         child != NULL; ) {
+        GtkWidget *next = gtk_widget_get_next_sibling(child);
+
+        gtk_list_box_remove(GTK_LIST_BOX(s->listbox), child);
+        child = next;
+    }
+    if (s->ids != NULL) {
+        for (int i = 0; s->ids[i] != NULL; i++) {
+            GtkWidget *lbl, *row;
+            gboolean   allowed = llm_model_allowed(filter, s->ids[i]);
+            char      *shown;
+
+            /* TOUS les modèles restent visibles ici : c'est l'UI de
+             * sélection multiple (✓ = autorisé, clic = bascule). Le
+             * filtrage s'applique aux CONSOMMATEURS (tuile LLM). */
+            shown = allowed ? g_strdup_printf("\u2713 %s", s->ids[i])
+                            : g_strdup(s->ids[i]);
+            lbl = gtk_label_new(shown);
+            row = gtk_list_box_row_new();
+            gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+            gtk_widget_set_margin_start(lbl, 8);
+            gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+            gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), lbl);
+            g_object_set_data_full(G_OBJECT(row), "model-id",
+                                   g_strdup(s->ids[i]), g_free);
+            gtk_list_box_append(GTK_LIST_BOX(s->listbox), row);
+            g_free(shown);
+        }
+    }
+    g_free(filter);
+}
+
+static void
+on_models_fetched(char **ids, gpointer data)
+{
+    ModelFetchCtx *ctx = data;
+    ModelSuggest  *s = ctx->s;
+
+    /* La ref sur l'entry garantit que s est vivant ici. ids possédés
+     * par llm.c, libérés au retour du callback : on copie. */
+    if (s != NULL) {
+        g_strfreev(s->ids);
+        s->ids = ids != NULL ? g_strdupv(ids) : NULL;
+        model_suggest_refresh(s);
+    }
+    g_object_unref(ctx->entry); /* lâche l'ancre : teardown normal */
+    g_free(ctx);
+}
+
+static void
+model_suggest_popup(ModelSuggest *s)
+{
+    graphene_rect_t bounds;
+
+    if (s->popover == NULL || s->entry == NULL || s->anchor == NULL)
+        return; /* fenêtre fermée */
+    if (s->ids == NULL || s->ids[0] == NULL)
+        return;
+    /* Ancre sous le champ : rect dans les coordonnées de l'ancre
+     * (parent du popover). */
+    if (gtk_widget_compute_bounds(s->entry, s->anchor, &bounds)) {
+        GdkRectangle below = { (int)bounds.origin.x,
+                               (int)(bounds.origin.y +
+                                     bounds.size.height),
+                               (int)bounds.size.width, 1 };
+
+        gtk_popover_set_pointing_to(GTK_POPOVER(s->popover), &below);
+    }
+    gtk_popover_popup(GTK_POPOVER(s->popover));
+}
+
+static void
+on_model_entry_icon(GtkEntry G_GNUC_UNUSED *entry,
+                    gint G_GNUC_UNUSED icon_pos,
+                    GdkEvent G_GNUC_UNUSED *event, gpointer data)
+{
+    model_suggest_popup(data);
+}
+
+static void
+on_model_entry_focus(GtkEventControllerFocus G_GNUC_UNUSED *ctrl,
+                     gpointer data)
+{
+    ModelSuggest *s = data;
+
+    /* Champ vide → liste complète ; sinon le popup reste sur demande. */
+    if (s->ids != NULL &&
+        gtk_editable_get_text(GTK_EDITABLE(s->entry))[0] == '\0')
+        model_suggest_popup(data);
+}
+
+/* À la destruction de l'entry : invalide tout — des callbacks/idles en
+ * vol peuvent encore arriver (fetch /models, refresh différé). */
+static void
+on_model_entry_destroy(GtkWidget G_GNUC_UNUSED *entry, gpointer data)
+{
+    ModelSuggest *s = data;
+
+    s->popover = NULL;
+    s->listbox = NULL;
+    s->entry = NULL;
+}
+
+static void
+model_suggest_free(gpointer data)
+{
+    ModelSuggest *s = data;
+
+    g_strfreev(s->ids);
+    g_free(s->provider);
+    g_free(s);
+}
+
+/* Champ « Modèles autorisés » : le filtre se sauvegarde même vide
+ * (vide = tout autoriser) et ne touche jamais au provider/modèle actif. */
+static void
+on_allowed_models_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
+{
+    const char   *provider =
+        g_object_get_data(G_OBJECT(editable), "provider");
+    ModelSuggest *s = g_object_get_data(G_OBJECT(editable),
+                                        "model-suggest");
+
+    if (provider == NULL)
+        return;
+    llm_config_set_allowed_models(
+        provider, gtk_editable_get_text(GTK_EDITABLE(editable)));
+    /* La liste de suggestions suit le filtre en direct (différé idle :
+     * ne pas reconstruire pendant l'émission de changed). */
+    if (s != NULL)
+        g_idle_add(model_suggest_refresh_idle, s);
+}
+
+/* Attache les suggestions /models au champ modèle du provider. */
+static void
+model_suggest_attach(GtkWidget *model_entry, const char *provider_name,
+                     GtkWidget *anchor)
+{
+    ModelSuggest          *s = g_new0(ModelSuggest, 1);
+    GtkWidget             *scroll;
+    GtkEventController    *focus;
+
+    s->entry = model_entry;
+    s->anchor = anchor;
+    s->provider = g_strdup(provider_name);
+    s->listbox = gtk_list_box_new();
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(s->listbox),
+                                    GTK_SELECTION_NONE);
+    /* Clic SIMPLE = choix immédiat (row-activated sinon exige un
+     * double-clic — l'utilisateur croyait que ça « ne marchait pas »). */
+    gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(s->listbox),
+                                              TRUE);
+    g_signal_connect(s->listbox, "row-activated",
+                     G_CALLBACK(on_model_row_activated), s);
+
+    scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(scroll),
+                                               24);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(scroll),
+                                               320);
+    gtk_scrolled_window_set_propagate_natural_height(
+        GTK_SCROLLED_WINDOW(scroll), TRUE);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), s->listbox);
+
+    s->popover = gtk_popover_new();
+    /* Parent = grid du formulaire (conteneur légitime). L'ancrage sous
+     * le champ se fait au popup via pointing_to. */
+    gtk_widget_set_parent(s->popover, s->anchor);
+    gtk_popover_set_child(GTK_POPOVER(s->popover), scroll);
+
+    /* Icône cliquable + focus champ vide → popup. */
+    gtk_entry_set_icon_from_icon_name(GTK_ENTRY(model_entry),
+                                      GTK_ENTRY_ICON_SECONDARY,
+                                      "pan-down-symbolic");
+    g_signal_connect(model_entry, "icon-press",
+                     G_CALLBACK(on_model_entry_icon), s);
+    focus = gtk_event_controller_focus_new();
+    g_signal_connect(focus, "enter", G_CALLBACK(on_model_entry_focus), s);
+    gtk_widget_add_controller(model_entry, focus);
+    /* Le popover parenté manuellement doit être déparenté à la mort de
+     * l'entry (sinon finalisation cassée → segfault). */
+    g_signal_connect(model_entry, "destroy",
+                     G_CALLBACK(on_model_entry_destroy), s);
+
+    g_object_set_data_full(G_OBJECT(model_entry), "model-suggest", s,
+                           model_suggest_free);
+    {
+        ModelFetchCtx *ctx = g_new0(ModelFetchCtx, 1);
+
+        ctx->s = s;
+        ctx->entry = model_entry;
+        g_object_ref(model_entry); /* ref pendant le vol : pas de course */
+        llm_models_fetch(provider_name, on_models_fetched, ctx);
+    }
+}
+
 static GtkWidget *
 build_provider_form(const char *provider_name)
 {
     GtkWidget *grid = gtk_grid_new();
     GtkWidget *key_lbl = gtk_label_new("Clé API :");
     GtkWidget *key_entry = gtk_entry_new();
-    GtkWidget *model_lbl = gtk_label_new("Modèle par défaut :");
+    GtkWidget *model_lbl = gtk_label_new("Modèles autorisés :");
     GtkWidget *model_entry = gtk_entry_new();
     LlmConfig *cfg = llm_config_load();
 
@@ -2782,26 +3077,51 @@ build_provider_form(const char *provider_name)
     gtk_widget_set_halign(model_lbl, GTK_ALIGN_START);
     gtk_widget_set_hexpand(key_entry, TRUE);
     gtk_widget_set_hexpand(model_entry, TRUE);
-    /* La clé est un secret : affichage masqué. */
+    /* La clé est un secret : affichage masqué. OpenCode Zen marche
+     * SANS clé (placeholder différent). */
     gtk_entry_set_visibility(GTK_ENTRY(key_entry), FALSE);
-    gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry), "sk-or-v1-…");
-    gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry), "stealth/ox-alpha");
+    if (g_strcmp0(provider_name, "OpenCode") == 0) {
+        gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry),
+                                       "(optionnelle)");
+        gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
+                                       "(vide : tous les modèles)");
+    } else {
+        gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry), "sk-or-v1-…");
+        gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
+                                       "(vide : tous les modèles)");
+    }
 
     if (cfg != NULL && g_strcmp0(cfg->provider, provider_name) == 0) {
         if (cfg->api_key != NULL)
             gtk_editable_set_text(GTK_EDITABLE(key_entry), cfg->api_key);
-        if (cfg->model != NULL)
-            gtk_editable_set_text(GTK_EDITABLE(model_entry), cfg->model);
     }
     llm_config_free(cfg);
+    /* Préremplit le filtre (indépendant du provider actif). */
+    {
+        char *filter = llm_config_get_allowed_models(provider_name);
+
+        if (filter != NULL)
+            gtk_editable_set_text(GTK_EDITABLE(model_entry), filter);
+        g_free(filter);
+    }
 
     g_object_set_data_full(G_OBJECT(key_entry), "provider",
                            g_strdup(provider_name), g_free);
     g_object_set_data(G_OBJECT(model_entry), "provider-key-entry", key_entry);
+    /* Le champ modèle connaît SON provider dès la construction. */
+    g_object_set_data_full(G_OBJECT(model_entry), "provider",
+                           g_strdup(provider_name), g_free);
     g_signal_connect(key_entry, "changed",
                      G_CALLBACK(on_provider_field_changed), NULL);
+    /* Le champ modèles = FILTRE : sauvegarde même vide (tout autoriser),
+     * sans toucher au provider/modèle actifs. */
     g_signal_connect(model_entry, "changed",
-                     G_CALLBACK(on_provider_field_changed), NULL);
+                     G_CALLBACK(on_allowed_models_changed), NULL);
+
+    /* Suggestions de modèles depuis /models du provider : champ vide →
+     * liste complète (focus ou icône), le popup reste disponible ensuite. */
+    if (llm_provider_default_url(provider_name) != NULL)
+        model_suggest_attach(model_entry, provider_name, grid);
 
     gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
     gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
@@ -2821,7 +3141,7 @@ build_settings(App *app G_GNUC_UNUSED)
     static const SettingsSection provider_subs[] = {
         { "OpenAi-Compatible", "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
         { "HyperCharm",        "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
-        { "OpenCode",          "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+        { "OpenCode",          NULL, NULL, 0 }, /* formulaire provider */
         { "OpenRouter",        NULL, NULL, 0 }, /* formulaire provider */
     };
     static const SettingsSection llm_subs[] = {
@@ -3871,6 +4191,9 @@ on_activate(GtkApplication *gtk_app, gpointer data)
      * être refusée). */
     if (g_getenv("CDB_TEST_MODAL") != NULL)
         g_timeout_add(1000, test_modal_idle, app);
+    /* MODE TEST (debug) : CDB_TEST_SETTINGS=1 ouvre/ferme settings ×2. */
+    if (g_getenv("CDB_TEST_SETTINGS") != NULL)
+        g_timeout_add(1000, test_settings_step, app);
 
     /* MODE TEST (debug) : CDB_TEST_SPLIT=1 reproduit le crash du split —
      * split horizontal du root dans un idle, puis quitte après 2 s. */
@@ -4007,6 +4330,73 @@ test_modal_idle(gpointer data)
     for (int i = 0; i < 5; i++)
         g_printerr("CDB: modal %d -> %s\n", i + 1,
                    modal_open_empty(app) ? "ouverte" : "REFUSÉE");
+    return G_SOURCE_REMOVE;
+}
+
+/* MODE TEST (debug) : SIEB_TEST_SETTINGS=1 ouvre/ferme la fenêtre
+ * settings deux fois (reproduction du crash au X). */
+static gboolean
+test_settings_step(gpointer data)
+{
+    App              *app = data;
+    static int        step = 0;
+    /* CDB_TEST_SETTINGS_DELAY : délai d'ouverture→fermeture en ms
+     * (course avec le fetch /models). Défaut 500. */
+    const int         delay =
+        g_getenv("CDB_TEST_SETTINGS_DELAY")
+            ? (int)g_ascii_strtoll(g_getenv("CDB_TEST_SETTINGS_DELAY"),
+                                   NULL, 10)
+            : 500;
+
+    switch (step++) {
+    case 0:
+        g_action_group_activate_action(G_ACTION_GROUP(app->win),
+                                       "settings", NULL);
+        g_timeout_add(delay, test_settings_step, app);
+        break;
+    case 1:
+    case 3: {
+        /* Retrouve la fenêtre settings PAR TITRE avec une ref possédée
+         * pendant l'usage — jamais de pointeur brut entre les étapes
+         * (la fenêtre peut être détruite dès close). */
+        GtkWindow *swin = NULL;
+        GList     *l;
+
+        g_printerr("CDB: fermeture settings (%s)\n",
+                   step == 2 ? "1" : "2");
+        l = gtk_window_list_toplevels();
+        for (; l != NULL && swin == NULL; l = l->next) {
+            const char *title =
+                gtk_window_get_title(GTK_WINDOW(l->data));
+
+            if (l->data != app->win && title != NULL &&
+                strstr(title, "Settings") != NULL)
+                swin = g_object_ref(GTK_WINDOW(l->data));
+        }
+        g_list_free(l);
+        if (swin != NULL) {
+            gtk_window_close(swin);
+            g_object_unref(swin);
+        } else {
+            g_printerr("CDB: settings introuvable !\n");
+        }
+        if (step == 4) {
+            /* Dernière étape : quitte proprement (les outils d'analyse
+             * type valgrind doivent voir un exit normal). */
+            g_timeout_add(300, test_quit_idle,
+                          g_application_get_default());
+        } else {
+            g_timeout_add(delay, test_settings_step, app);
+        }
+        break;
+    }
+    case 2:
+        g_printerr("CDB: réouverture settings\n");
+        g_action_group_activate_action(G_ACTION_GROUP(app->win),
+                                       "settings", NULL);
+        g_timeout_add(delay, test_settings_step, app);
+        break;
+    }
     return G_SOURCE_REMOVE;
 }
 

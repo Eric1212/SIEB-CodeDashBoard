@@ -10,6 +10,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "llm.h"
 #include "session.h"
+#include "mdview.h"
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
@@ -23,6 +24,233 @@ static char *
 llm_config_path(void)
 {
     return session_config_path("llm.json");
+}
+
+/* URL de base d'un provider connu ; NULL si inconnu. */
+const char *
+llm_provider_default_url(const char *provider)
+{
+    if (g_strcmp0(provider, "OpenRouter") == 0)
+        return "https://openrouter.ai/api/v1";
+    if (g_strcmp0(provider, "OpenCode") == 0)
+        return "https://opencode.ai/zen/v1";
+    return NULL;
+}
+
+/* ------------------------------------------------ */
+/* Liste des modèles (GET {api_url}/models)          */
+/* ------------------------------------------------ */
+
+typedef struct {
+    LlmModelsCallback cb;
+    gpointer          user_data;
+    SoupSession      *soup;
+} ModelsFetch;
+
+static void
+models_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
+{
+    ModelsFetch *f = data;
+    GBytes      *bytes;
+    GError      *err = NULL;
+    char       **ids = NULL;
+
+    bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), res,
+                                              &err);
+    if (bytes != NULL) {
+        JsonParser *parser = json_parser_new();
+        gsize       len = g_bytes_get_size(bytes);
+
+        if (json_parser_load_from_data(parser, g_bytes_get_data(bytes, NULL),
+                                       (gssize)len, NULL)) {
+            JsonObject *root =
+                json_node_get_object(json_parser_get_root(parser));
+
+            if (root != NULL && json_object_has_member(root, "data")) {
+                JsonArray *arr = json_object_get_array_member(root, "data");
+                guint      n = json_array_get_length(arr);
+
+                ids = g_new0(char *, n + 1);
+                for (guint i = 0; i < n; i++) {
+                    JsonObject *m = json_array_get_object_element(arr, i);
+
+                    ids[i] = g_strdup(
+                        json_object_get_string_member(m, "id"));
+                }
+            }
+        }
+        g_object_unref(parser);
+        g_bytes_unref(bytes);
+    } else {
+        g_printerr("SIEB: /models échoué : %s\n", err->message);
+        g_error_free(err);
+    }
+
+    f->cb(ids, f->user_data);
+    g_strfreev(ids);
+    g_object_unref(f->soup);
+    g_free(f);
+}
+
+void
+llm_models_fetch(const char *provider, LlmModelsCallback cb,
+                 gpointer user_data)
+{
+    const char   *base = llm_provider_default_url(provider);
+    ModelsFetch  *f;
+    SoupMessage  *msg;
+    char         *url;
+
+    if (base == NULL || cb == NULL)
+        return;
+
+    f = g_new0(ModelsFetch, 1);
+    f->cb = cb;
+    f->user_data = user_data;
+    f->soup = soup_session_new();
+
+    url = g_strdup_printf("%s/models", base);
+    msg = soup_message_new("GET", url);
+    g_free(url);
+    /* La session possède msg après l'appel : NE PAS unref ici.
+     * Variante « read » : tout le corps en mémoire (les /models sont
+     * petits) — le finish correspondant est send_and_read_finish. */
+    soup_session_send_and_read_async(f->soup, msg, G_PRIORITY_DEFAULT,
+                                     NULL, models_fetch_done, f);
+}
+
+/* ------------------------------------------------ */
+/* Filtre de modèles autorisés                       */
+/* ------------------------------------------------ */
+
+/* Ouvre llm.json et renvoie l'objet du provider (ou NULL). root_node
+ * est copié : à libérer par l'appelant (json_node_unref) si non-NULL. */
+static JsonObject *
+llm_config_provider_object(const char *provider, JsonNode **root_node)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser;
+    JsonObject *root, *provs;
+
+    *root_node = NULL;
+    if (provider == NULL)
+        return NULL;
+    parser = json_parser_new();
+    if (!json_parser_load_from_file(parser, path, NULL)) {
+        g_object_unref(parser);
+        g_free(path);
+        return NULL;
+    }
+    g_free(path);
+    if (json_parser_get_root(parser) == NULL ||
+        !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        g_object_unref(parser);
+        return NULL;
+    }
+    root_node[0] = json_node_copy(json_parser_get_root(parser));
+    g_object_unref(parser);
+    root = json_node_get_object(*root_node);
+    if (!json_object_has_member(root, "providers"))
+        return NULL;
+    provs = json_object_get_object_member(root, "providers");
+    if (provs == NULL || !json_object_has_member(provs, provider))
+        return NULL;
+    return json_object_get_object_member(provs, provider);
+}
+
+char *
+llm_config_get_allowed_models(const char *provider)
+{
+    JsonObject *prov;
+    JsonNode   *root_node = NULL;
+    char       *filter;
+
+    prov = llm_config_provider_object(provider, &root_node);
+    filter = (prov != NULL && json_object_has_member(prov, "allowed_models"))
+                 ? g_strdup(json_object_get_string_member(prov,
+                                                          "allowed_models"))
+                 : NULL;
+    if (root_node != NULL)
+        json_node_unref(root_node);
+    return filter;
+}
+
+void
+llm_config_set_allowed_models(const char *provider, const char *filter)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonObject *root, *provs, *prov;
+    JsonNode   *work_root = NULL;
+    JsonGenerator *gen;
+    gchar      *text;
+    GError     *error = NULL;
+    gboolean    existed;
+
+    existed = json_parser_load_from_file(parser, path, NULL);
+    if (existed && json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        work_root = json_node_copy(json_parser_get_root(parser));
+        root = json_node_get_object(work_root);
+    } else {
+        root = json_object_new();
+        work_root = json_node_new(JSON_NODE_OBJECT);
+        json_node_set_object(work_root, root);
+    }
+    if (!json_object_has_member(root, "providers")) {
+        json_object_set_object_member(root, "providers", json_object_new());
+    } else if (json_object_get_object_member(root, "providers") == NULL) {
+        json_object_set_object_member(root, "providers", json_object_new());
+    }
+    provs = json_object_get_object_member(root, "providers");
+    prov = json_object_has_member(provs, provider)
+               ? json_object_get_object_member(provs, provider)
+               : NULL;
+    if (prov == NULL) {
+        prov = json_object_new();
+        json_object_set_string_member(prov, "api_url",
+                                      llm_provider_default_url(provider) !=
+                                              NULL
+                                          ? llm_provider_default_url(
+                                                provider)
+                                          : "");
+        json_object_set_string_member(prov, "api_key", "");
+        json_object_set_string_member(prov, "allowed_models", filter);
+        json_object_set_object_member(provs, provider, prov);
+    } else {
+        json_object_set_string_member(prov, "allowed_models", filter);
+    }
+
+    gen = json_generator_new();
+    json_generator_set_root(gen, work_root);
+    text = json_to_string(work_root, TRUE);
+    if (!g_file_set_contents(path, text, -1, &error)) {
+        g_printerr("SIEB: écriture allowed_models : %s\n", error->message);
+        g_error_free(error);
+    }
+    g_free(text);
+    g_object_unref(gen);
+    json_node_unref(work_root);
+    g_object_unref(parser);
+    g_free(path);
+}
+
+gboolean
+llm_model_allowed(const char *filter, const char *id)
+{
+    gchar **toks;
+    gboolean ok = FALSE;
+
+    if (filter == NULL || filter[0] == '\0')
+        return TRUE; /* pas de filtre : tout passe */
+    toks = g_strsplit(filter, ",", -1);
+    for (int i = 0; toks[i] != NULL && !ok; i++) {
+        char *tok = g_strstrip(toks[i]);
+
+        ok = tok[0] != '\0' && strcmp(tok, id) == 0;
+    }
+    g_strfreev(toks);
+    return ok;
 }
 
 void
@@ -105,8 +333,9 @@ llm_config_load(void)
         cfg->model = g_strdup("stealth/ox-alpha");
     }
 
-    /* Config incomplète = pas de chat. */
-    if (cfg->api_url == NULL || cfg->api_key == NULL || cfg->model == NULL) {
+    /* Config incomplète = pas de chat. La clé est OPTIONNELLE
+     * (providers gratuits type OpenCode Zen). */
+    if (cfg->api_url == NULL || cfg->model == NULL) {
         llm_config_free(cfg);
         cfg = NULL;
     }
@@ -158,11 +387,13 @@ llm_config_save_provider(const char *provider, const char *api_key,
     json_object_set_string_member(prov, "api_key", api_key);
     json_object_set_string_member(prov, "default_model", default_model);
 
-    /* URL par défaut si absente : OpenRouter. */
-    if (g_strcmp0(json_object_get_string_member(prov, "api_url"), "") == 0
-        && g_strcmp0(provider, "OpenRouter") == 0)
-        json_object_set_string_member(prov, "api_url",
-                                      "https://openrouter.ai/api/v1");
+/* URL par défaut si absente, selon le provider. */
+    if (g_strcmp0(json_object_get_string_member(prov, "api_url"), "") == 0) {
+        const char *def = llm_provider_default_url(provider);
+
+        if (def != NULL)
+            json_object_set_string_member(prov, "api_url", def);
+    }
 
     /* Provider actif + modèle actif. */
     {
@@ -211,12 +442,17 @@ typedef struct {
     GString     *reply;     /* réponse en cours d'accumulation */
     GtkTextMark *reply_mark;/* marque de fin de la réponse en streaming */
     GArray      *history;   /* LlmMsg[] : fil de conversation envoyé */
+    GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
+    GtkWidget   *model_pop; /* popover listant /models du provider */
+    GtkWidget   *model_list;/* listbox des modèles */
+    char       **models;    /* ids récupérés (copie possédée) */
 } LlmTile;
 
 static void on_llm_send_clicked(GtkButton *btn, gpointer data);
 static void llm_stream_read(GObject *source, GAsyncResult *res, gpointer data);
 static void llm_scroll_to_end(LlmTile *t);
 static void on_llm_scroll(GtkAdjustment *adj, gpointer data);
+static void llm_models_refresh(LlmTile *t);
 
 static void
 llm_tile_free(gpointer data)
@@ -238,7 +474,86 @@ llm_tile_free(gpointer data)
     }
     /* cfg EMPRUNTÉE à App (app->llm_cfg) : PAS libérée ici — main()
      * la libère une seule fois en fin de programme. */
+    g_strfreev(t->models);
     g_free(t);
+}
+
+/* Choix d'un modèle dans le popover de la tuile : bascule immédiate
+ * (mémoire) + persistance en « active » de llm.json. */
+static void
+on_llm_model_picked(GtkListBox G_GNUC_UNUSED *lb, GtkListBoxRow *row,
+                    gpointer data)
+{
+    LlmTile    *t = data;
+    const char *id = g_object_get_data(G_OBJECT(row), "model-id");
+
+    if (id == NULL || t->cfg == NULL)
+        return;
+    g_free(t->cfg->model);
+    t->cfg->model = g_strdup(id);
+    gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn), id);
+    llm_config_save_provider(t->cfg->provider,
+                             t->cfg->api_key != NULL ? t->cfg->api_key : "",
+                             id);
+    gtk_popover_popdown(GTK_POPOVER(t->model_pop));
+}
+
+/* Reconstruit la liste des modèles du popover (filtre autorisés). */
+static void
+llm_models_refresh(LlmTile *t)
+{
+    char *filter = llm_config_get_allowed_models(t->cfg->provider);
+
+    for (GtkWidget *child = gtk_widget_get_first_child(t->model_list);
+         child != NULL; ) {
+        GtkWidget *next = gtk_widget_get_next_sibling(child);
+
+        gtk_list_box_remove(GTK_LIST_BOX(t->model_list), child);
+        child = next;
+    }
+    if (t->models != NULL) {
+        for (int i = 0; t->models[i] != NULL; i++) {
+            GtkWidget *lbl, *row;
+
+            if (!llm_model_allowed(filter, t->models[i]))
+                continue;
+            lbl = gtk_label_new(t->models[i]);
+            row = gtk_list_box_row_new();
+            gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+            gtk_widget_set_margin_start(lbl, 8);
+            gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+            gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), lbl);
+            g_object_set_data_full(G_OBJECT(row), "model-id",
+                                   g_strdup(t->models[i]), g_free);
+            gtk_list_box_append(GTK_LIST_BOX(t->model_list), row);
+        }
+    }
+    g_free(filter);
+}
+
+/* Réception de /models pour la tuile. La tuile peut avoir été détruite
+ * pendant le vol de la requête (re-rendu du layout) : contexte à
+ * pointeur faible sur la tuile, NULLé par GTK à sa mort. */
+typedef struct {
+    LlmTile   *t;      /* valide garanti : l'ancre est référencée */
+    GtkWidget *anchor; /* la box, ref possédée pendant le vol */
+} LlmModelsFetchCtx;
+
+static void
+on_llm_models_fetched(char **ids, gpointer data)
+{
+    LlmModelsFetchCtx *ctx = data;
+    LlmTile           *t = ctx->t;
+
+    /* La ref sur l'ancre garantit que t est vivant ici, même si le
+     * layout a été re-rendu entre-temps (la tuile attendait en mémoire). */
+    if (t != NULL) {
+        g_strfreev(t->models);
+        t->models = ids != NULL ? g_strdupv(ids) : NULL;
+        llm_models_refresh(t);
+    }
+    g_object_unref(ctx->anchor); /* lâche l'ancre : teardown normal */
+    g_free(ctx);
 }
 
 /* Ajoute un échange à l'historique (role: "user"/"assistant"). */
@@ -260,8 +575,9 @@ hist_append(LlmTile *t, const char *text)
     gtk_text_buffer_insert(t->hist, &end, text, -1);
 }
 
-/* Remplace le contenu après reply_mark par la réponse accumulée
- * (le streaming réécrit la fin du buffer au fil des chunks). */
+/* Remplace le contenu après reply_mark par la réponse accumulée, rendue
+ * en Markdown (le streaming réécrit la fin du buffer au fil des chunks ;
+ * le parseur tolère le markdown incomplet). */
 static void
 hist_update_reply(LlmTile *t)
 {
@@ -271,7 +587,7 @@ hist_update_reply(LlmTile *t)
     gtk_text_buffer_get_end_iter(t->hist, &end);
     gtk_text_buffer_delete(t->hist, &start, &end);
     gtk_text_buffer_get_end_iter(t->hist, &end);
-    gtk_text_buffer_insert(t->hist, &end, t->reply->str, -1);
+    md_insert(t->hist, &end, t->reply->str);
     /* Suit le texte qui défile. */
     llm_scroll_to_end(t);
 }
@@ -490,22 +806,25 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     JsonBuilder *builder;
     JsonNode    *root_node;
     char        *body;
-    GString     *auth;
     LlmRequest  *req = g_new0(LlmRequest, 1);
 
     url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
     msg = soup_message_new("POST", url);
     g_free(url);
 
-    auth = g_string_new("Bearer ");
-    g_string_append(auth, t->cfg->api_key);
-    soup_message_headers_append(soup_message_get_request_headers(msg),
-                                "Authorization", auth->str);
+    /* Clé optionnelle (OpenCode Zen fonctionne sans) : on n'envoie
+     * l'Authorization que si elle existe. */
+    if (t->cfg->api_key != NULL && t->cfg->api_key[0] != '\0') {
+        char *auth = g_strdup_printf("Bearer %s", t->cfg->api_key);
+
+        soup_message_headers_append(soup_message_get_request_headers(msg),
+                                    "Authorization", auth);
+        g_free(auth);
+    }
     soup_message_headers_append(soup_message_get_request_headers(msg),
                                 "Content-Type", "application/json");
     soup_message_headers_append(soup_message_get_request_headers(msg),
                                 "Accept", "text/event-stream");
-    g_string_free(auth, TRUE);
 
     builder = json_builder_new();
     json_builder_begin_object(builder);
@@ -683,11 +1002,46 @@ llm_tile_new(const LlmConfig *cfg)
 
     {
         GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        GtkWidget *model_pop;
+        GtkWidget *model_scroll;
+
+        /* Sélecteur de modèle : label = modèle actif, popover = /models
+         * du provider actif (chargé async). */
+        t->model_list = gtk_list_box_new();
+        gtk_list_box_set_selection_mode(GTK_LIST_BOX(t->model_list),
+                                        GTK_SELECTION_NONE);
+        gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(t->model_list),
+                                                  TRUE);
+        g_signal_connect(t->model_list, "row-activated",
+                         G_CALLBACK(on_llm_model_picked), t);
+        model_scroll = gtk_scrolled_window_new();
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(model_scroll),
+                                       GTK_POLICY_NEVER,
+                                       GTK_POLICY_AUTOMATIC);
+        gtk_scrolled_window_set_min_content_height(
+            GTK_SCROLLED_WINDOW(model_scroll), 24);
+        gtk_scrolled_window_set_max_content_height(
+            GTK_SCROLLED_WINDOW(model_scroll), 320);
+        gtk_scrolled_window_set_propagate_natural_height(
+            GTK_SCROLLED_WINDOW(model_scroll), TRUE);
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(model_scroll),
+                                      t->model_list);
+        model_pop = gtk_popover_new();
+        gtk_popover_set_child(GTK_POPOVER(model_pop), model_scroll);
+
+        t->model_btn = gtk_menu_button_new();
+        gtk_widget_add_css_class(t->model_btn, "flat");
+        gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn),
+                                  cfg->model != NULL ? cfg->model : "?");
+        gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->model_btn),
+                                    model_pop);
+        t->model_pop = model_pop;
 
         gtk_widget_set_margin_start(row, 6);
         gtk_widget_set_margin_end(row, 6);
         gtk_widget_set_margin_top(row, 4);
         gtk_widget_set_margin_bottom(row, 6);
+        gtk_box_append(GTK_BOX(row), t->model_btn);
         gtk_widget_set_hexpand(t->entry, TRUE);
         gtk_box_append(GTK_BOX(row), t->entry);
         gtk_box_append(GTK_BOX(row), t->send_btn);
@@ -696,6 +1050,17 @@ llm_tile_new(const LlmConfig *cfg)
         gtk_box_append(GTK_BOX(box), scroll);
         gtk_widget_set_vexpand(scroll, TRUE);
         gtk_box_append(GTK_BOX(box), row);
+    }
+
+    {
+        LlmModelsFetchCtx *ctx = g_new0(LlmModelsFetchCtx, 1);
+
+        ctx->t = t;
+        ctx->anchor = box;
+        /* Ref sur l'ancre pendant le vol : pas de fenêtre de course —
+         * la tuile ne peut pas être finalisée avant le callback. */
+        g_object_ref(box);
+        llm_models_fetch(cfg->provider, on_llm_models_fetched, ctx);
     }
 
     t->soup = soup_session_new();
