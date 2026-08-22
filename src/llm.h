@@ -47,10 +47,20 @@ void llm_config_save_provider(const char *provider, const char *api_key,
  * NULL-terminé POSSEDÉ par llm.c : valide uniquement PENDANT le
  * callback, ne pas libérer. NULL si échec.
  * Le callback peut toucher l'UI directement (contexte principal). */
-typedef void (*LlmModelsCallback)(char **ids, gpointer user_data);
+/* Un modèle tel que renvoyé par /models. */
+typedef struct {
+    char *id;    /* slug technique (ex: "stealth/ox-alpha") */
+    char *name;  /* nom lisible fourni par le provider, NULL sinon */
+} LlmModelInfo;
+
+typedef void (*LlmModelsCallback)(LlmModelInfo *models, gpointer user_data);
 
 void llm_models_fetch(const char *provider, LlmModelsCallback cb,
                       gpointer user_data);
+
+/* Copie/libération de tableaux NULL-terminés (id==NULL). */
+LlmModelInfo *llm_models_copy(const LlmModelInfo *models);
+void llm_models_free(LlmModelInfo *models);
 
 /* URL de base d'un provider connu ; NULL si inconnu. */
 const char *llm_provider_default_url(const char *provider);

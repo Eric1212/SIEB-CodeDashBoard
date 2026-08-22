@@ -45,15 +45,215 @@ typedef struct {
     LlmModelsCallback cb;
     gpointer          user_data;
     SoupSession      *soup;
+    char             *provider;
 } ModelsFetch;
+
+LlmModelInfo *
+llm_models_copy(const LlmModelInfo *models)
+{
+    guint n = 0;
+
+    while (models[n].id != NULL)
+        n++;
+    LlmModelInfo *copy = g_new0(LlmModelInfo, n + 1);
+
+    for (guint i = 0; i < n; i++) {
+        copy[i].id = g_strdup(models[i].id);
+        copy[i].name = g_strdup(models[i].name);
+    }
+    return copy;
+}
+
+void
+llm_models_free(LlmModelInfo *models)
+{
+    if (models == NULL)
+        return;
+    for (guint i = 0; models[i].id != NULL; i++) {
+        g_free(models[i].id);
+        g_free(models[i].name);
+    }
+    g_free(models);
+}
+
+/* ------------------------------------------------ */
+/* models.dev : noms lisibles par provider           */
+/*                                                   */
+/* Certains providers (OpenCode Zen) ne renvoient    */
+/* aucun nom dans /models. Leur client puise les     */
+/* métadonnées dans models.dev/api.json : clé        */
+/* provider → { models : { slug : { name } } }.      */
+/* On charge ce JSON une fois, puis on enrichit les  */
+/* listes avant de livrer les callbacks.             */
+/* ------------------------------------------------ */
+
+static GHashTable *md_names = NULL;   /* <provider_lower, GHashTable<slug,name>> */
+static gboolean    md_started = FALSE;
+static GSList     *md_pending = NULL; /* requêtes en attente du chargement */
+
+typedef struct {
+    ModelsFetch  *f;
+    LlmModelInfo *models;
+} MdPending;
+
+static void md_deliver(ModelsFetch *f, LlmModelInfo *models);
+
+/* Complète les noms manquants depuis le cache models.dev. */
+static void
+md_enrich(LlmModelInfo *models, const char *provider)
+{
+    char       *key;
+    GHashTable *inner;
+
+    if (md_names == NULL || provider == NULL)
+        return;
+    key = g_ascii_strdown(provider, -1);
+    inner = g_hash_table_lookup(md_names, key);
+    g_free(key);
+    if (inner == NULL)
+        return;
+    for (guint i = 0; models[i].id != NULL; i++) {
+        if (models[i].name != NULL)
+            continue;
+        {
+            const char *nm = g_hash_table_lookup(inner,
+                                                 models[i].id);
+
+            if (nm != NULL)
+                models[i].name = g_strdup(nm);
+        }
+    }
+}
+
+static void
+md_deliver(ModelsFetch *f, LlmModelInfo *models)
+{
+    md_enrich(models, f->provider);
+    f->cb(models, f->user_data);
+    llm_models_free(models);
+    g_free(f->provider);
+    g_object_unref(f->soup);
+    g_free(f);
+}
+
+static MdPending *
+md_deferred_new(ModelsFetch *f, LlmModelInfo *models)
+{
+    MdPending *p = g_new0(MdPending, 1);
+
+    p->f = f;
+    p->models = models;
+    return p;
+}
+
+/* Réception de api.json : construit le cache <provider, slug→name>. */
+static void
+md_load_done(GObject *source, GAsyncResult *res,
+             gpointer G_GNUC_UNUSED data)
+{
+    GBytes *bytes;
+    GError *err = NULL;
+
+    bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), res,
+                                              &err);
+    if (bytes != NULL) {
+        JsonParser *parser = json_parser_new();
+        gsize       len = g_bytes_get_size(bytes);
+
+        if (json_parser_load_from_data(parser, g_bytes_get_data(bytes, NULL),
+                                       (gssize)len, NULL)) {
+            JsonObject *root =
+                json_node_get_object(json_parser_get_root(parser));
+
+            if (root != NULL) {
+                GList *pm = json_object_get_members(root);
+
+                md_names = g_hash_table_new_full(
+                    g_str_hash, g_str_equal, g_free,
+                    (GDestroyNotify)g_hash_table_unref);
+                for (GList *l = pm; l != NULL; l = l->next) {
+                    const char *pkey = l->data;
+                    JsonNode   *pn = json_object_get_member(root, pkey);
+                    JsonObject *po, *mo;
+                    char       *lk;
+                    GHashTable *inner;
+                    GList      *sm;
+
+                    if (pn == NULL || !JSON_NODE_HOLDS_OBJECT(pn))
+                        continue;
+                    po = json_node_get_object(pn);
+                    if (!json_object_has_member(po, "models"))
+                        continue;
+                    mo = json_object_get_object_member(po, "models");
+                    if (mo == NULL)
+                        continue;
+
+                    lk = g_ascii_strdown(pkey, -1);
+                    inner = g_hash_table_new_full(
+                        g_str_hash, g_str_equal, g_free, g_free);
+                    g_hash_table_replace(md_names, lk, inner);
+
+                    sm = json_object_get_members(mo);
+                    for (GList *s = sm; s != NULL; s = s->next) {
+                        const char *slug = s->data;
+                        JsonNode   *sn = json_object_get_member(mo,
+                                                                slug);
+                        JsonObject *so;
+
+                        if (sn == NULL || !JSON_NODE_HOLDS_OBJECT(sn))
+                            continue;
+                        so = json_node_get_object(sn);
+                        if (json_object_has_member(so, "name")) {
+                            const char *nm =
+                                json_object_get_string_member(so,
+                                                              "name");
+
+                            if (nm != NULL && nm[0] != '\0')
+                                g_hash_table_insert(inner,
+                                                    g_strdup(slug),
+                                                    g_strdup(nm));
+                        }
+                    }
+                }
+            }
+        }
+        g_object_unref(parser);
+        g_bytes_unref(bytes);
+    } else {
+        g_printerr("SIEB: models.dev échoué : %s\n", err->message);
+        g_error_free(err);
+    }
+
+    /* Livre tout ce qui attendait (avec ou sans enrichment). */
+    for (GSList *l = md_pending; l != NULL; l = l->next) {
+        MdPending *p = l->data;
+
+        md_deliver(p->f, p->models);
+        g_free(p);
+    }
+    g_slist_free(md_pending);
+    md_pending = NULL;
+}
+
+static void
+md_load_start(void)
+{
+    SoupSession *soup = soup_session_new();
+    SoupMessage *msg =
+        soup_message_new("GET", "https://models.dev/api.json");
+
+    /* Le message appartient à la session après l'appel. */
+    soup_session_send_and_read_async(soup, msg, G_PRIORITY_DEFAULT,
+                                     NULL, md_load_done, NULL);
+}
 
 static void
 models_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
 {
-    ModelsFetch *f = data;
-    GBytes      *bytes;
-    GError      *err = NULL;
-    char       **ids = NULL;
+    ModelsFetch   *f = data;
+    GBytes        *bytes;
+    GError        *err = NULL;
+    LlmModelInfo  *models = NULL;
 
     bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), res,
                                               &err);
@@ -70,12 +270,21 @@ models_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
                 JsonArray *arr = json_object_get_array_member(root, "data");
                 guint      n = json_array_get_length(arr);
 
-                ids = g_new0(char *, n + 1);
+                models = g_new0(LlmModelInfo, n + 1);
                 for (guint i = 0; i < n; i++) {
                     JsonObject *m = json_array_get_object_element(arr, i);
 
-                    ids[i] = g_strdup(
+                    /* Nom lisible si le provider en fournit un
+                     * (OpenRouter : « name »), sinon NULL → slug. */
+                    models[i].id = g_strdup(
                         json_object_get_string_member(m, "id"));
+                    if (json_object_has_member(m, "name")) {
+                        const char *nm =
+                            json_object_get_string_member(m, "name");
+
+                        if (nm != NULL && nm[0] != '\0')
+                            models[i].name = g_strdup(nm);
+                    }
                 }
             }
         }
@@ -86,10 +295,17 @@ models_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
         g_error_free(err);
     }
 
-    f->cb(ids, f->user_data);
-    g_strfreev(ids);
-    g_object_unref(f->soup);
-    g_free(f);
+    /* Livraison différée : enrichir d'abord depuis models.dev
+     * (certains providers — OpenCode Zen — ne renvoient aucun nom). */
+    if (!md_started) {
+        md_started = TRUE;
+        md_load_start();
+    }
+    if (md_names != NULL)
+        md_deliver(f, models);
+    else
+        md_pending = g_slist_append(md_pending,
+                                    md_deferred_new(f, models));
 }
 
 void
@@ -107,6 +323,7 @@ llm_models_fetch(const char *provider, LlmModelsCallback cb,
     f = g_new0(ModelsFetch, 1);
     f->cb = cb;
     f->user_data = user_data;
+    f->provider = g_strdup(provider);
     f->soup = soup_session_new();
 
     url = g_strdup_printf("%s/models", base);
@@ -582,10 +799,10 @@ typedef struct {
 
 /* Une section de provider dans le sélecteur : en-tête + listbox. */
 typedef struct {
-    char      *provider;
-    GtkWidget *header;
-    GtkWidget *list;    /* GtkListBox single-click */
-    char     **models;  /* ids récupérés (copie possédée) */
+    char          *provider;
+    GtkWidget     *header;
+    GtkWidget     *list;   /* GtkListBox single-click */
+    LlmModelInfo  *models; /* tableau NULL-terminé (copie possédée) */
 } ModelSection;
 
 static void on_llm_send_clicked(GtkButton *btn, gpointer data);
@@ -630,7 +847,7 @@ model_section_free(gpointer data)
     ModelSection *sec = data;
 
     g_free(sec->provider);
-    g_strfreev(sec->models);
+    llm_models_free(sec->models);
     g_free(sec);
 }
 
@@ -666,8 +883,8 @@ llm_model_section_refresh(LlmTile *t, ModelSection *sec)
         child = next;
     }
     if (sec->models != NULL) {
-        for (int i = 0; sec->models[i] != NULL; i++) {
-            const char *id = sec->models[i];
+        for (int i = 0; sec->models[i].id != NULL; i++) {
+            const char *id = sec->models[i].id;
             gboolean active = t->cfg != NULL &&
                               strcmp(t->cfg->provider,
                                      sec->provider) == 0 &&
@@ -679,9 +896,13 @@ llm_model_section_refresh(LlmTile *t, ModelSection *sec)
             {
                 GtkWidget *lbl;
                 GtkWidget *row;
+                const char *display = sec->models[i].name != NULL
+                                          ? sec->models[i].name
+                                          : id;
                 char      *shown = active
-                                       ? g_strdup_printf("\u2713 %s", id)
-                                       : g_strdup(id);
+                                       ? g_strdup_printf("\u2713 %s",
+                                                         display)
+                                       : g_strdup(display);
 
                 lbl = gtk_label_new(shown);
                 row = gtk_list_box_row_new();
@@ -779,13 +1000,13 @@ typedef struct {
 } SectionFetchCtx;
 
 static void
-on_section_models_fetched(char **ids, gpointer data)
+on_section_models_fetched(LlmModelInfo *models, gpointer data)
 {
     SectionFetchCtx *ctx = data;
 
     if (ctx->t != NULL && ctx->sec != NULL) {
-        g_strfreev(ctx->sec->models);
-        ctx->sec->models = ids != NULL ? g_strdupv(ids) : NULL;
+        llm_models_free(ctx->sec->models);
+        ctx->sec->models = models != NULL ? llm_models_copy(models) : NULL;
         llm_model_section_refresh(ctx->t, ctx->sec);
         llm_model_menu_apply_filter(ctx->t);
     }
@@ -1338,6 +1559,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions)
         gtk_box_append(GTK_BOX(model_outer), model_scroll);
         configure = gtk_button_new_with_label("Configurer…");
         gtk_widget_add_css_class(configure, "flat");
+        gtk_widget_add_css_class(configure, "llm-configure");
         gtk_widget_set_halign(configure, GTK_ALIGN_FILL);
         g_signal_connect(configure, "clicked",
                          G_CALLBACK(on_llm_configure_clicked), t);

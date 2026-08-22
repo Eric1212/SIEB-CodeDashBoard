@@ -2781,12 +2781,12 @@ on_provider_field_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
 /* ------------------------------------------------ */
 
 typedef struct {
-    char     **ids;    /* NULL-terminé (g_strfreev), NULL si pas chargé */
-    GtkWidget *entry;
-    GtkWidget *popover;
-    GtkWidget *listbox;
-    GtkWidget *anchor;  /* grid du formulaire : parent LÉGITIME du popover */
-    char      *provider;
+    LlmModelInfo *entries; /* tableau NULL-terminé (copie possédée) */
+    GtkWidget    *entry;
+    GtkWidget    *popover;
+    GtkWidget    *listbox;
+    GtkWidget    *anchor;  /* grid du formulaire : parent LÉGITIME du popover */
+    char         *provider;
 } ModelSuggest;
 
 /* Contexte de fetch : la ref sur l'entry garantit que s reste vivant
@@ -2871,17 +2871,21 @@ model_suggest_refresh(ModelSuggest *s)
         gtk_list_box_remove(GTK_LIST_BOX(s->listbox), child);
         child = next;
     }
-    if (s->ids != NULL) {
-        for (int i = 0; s->ids[i] != NULL; i++) {
+    if (s->entries != NULL) {
+        for (int i = 0; s->entries[i].id != NULL; i++) {
+            const char *id = s->entries[i].id;
+            const char *display = s->entries[i].name != NULL
+                                      ? s->entries[i].name
+                                      : id;
             GtkWidget *lbl, *row;
-            gboolean   allowed = llm_model_allowed(filter, s->ids[i]);
+            gboolean   allowed = llm_model_allowed(filter, id);
             char      *shown;
 
             /* TOUS les modèles restent visibles ici : c'est l'UI de
              * sélection multiple (✓ = autorisé, clic = bascule). Le
              * filtrage s'applique aux CONSOMMATEURS (tuile LLM). */
-            shown = allowed ? g_strdup_printf("\u2713 %s", s->ids[i])
-                            : g_strdup(s->ids[i]);
+            shown = allowed ? g_strdup_printf("\u2713 %s", display)
+                            : g_strdup(display);
             lbl = gtk_label_new(shown);
             row = gtk_list_box_row_new();
             gtk_widget_set_halign(lbl, GTK_ALIGN_START);
@@ -2889,7 +2893,7 @@ model_suggest_refresh(ModelSuggest *s)
             gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
             gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), lbl);
             g_object_set_data_full(G_OBJECT(row), "model-id",
-                                   g_strdup(s->ids[i]), g_free);
+                                   g_strdup(id), g_free);
             gtk_list_box_append(GTK_LIST_BOX(s->listbox), row);
             g_free(shown);
         }
@@ -2898,7 +2902,7 @@ model_suggest_refresh(ModelSuggest *s)
 }
 
 static void
-on_models_fetched(char **ids, gpointer data)
+on_models_fetched(LlmModelInfo *models, gpointer data)
 {
     ModelFetchCtx *ctx = data;
     ModelSuggest  *s = ctx->s;
@@ -2906,8 +2910,8 @@ on_models_fetched(char **ids, gpointer data)
     /* La ref sur l'entry garantit que s est vivant ici. ids possédés
      * par llm.c, libérés au retour du callback : on copie. */
     if (s != NULL) {
-        g_strfreev(s->ids);
-        s->ids = ids != NULL ? g_strdupv(ids) : NULL;
+        llm_models_free(s->entries);
+        s->entries = models != NULL ? llm_models_copy(models) : NULL;
         model_suggest_refresh(s);
     }
     g_object_unref(ctx->entry); /* lâche l'ancre : teardown normal */
@@ -2921,7 +2925,7 @@ model_suggest_popup(ModelSuggest *s)
 
     if (s->popover == NULL || s->entry == NULL || s->anchor == NULL)
         return; /* fenêtre fermée */
-    if (s->ids == NULL || s->ids[0] == NULL)
+    if (s->entries == NULL || s->entries[0].id == NULL)
         return;
     /* Ancre sous le champ : rect dans les coordonnées de l'ancre
      * (parent du popover). */
@@ -2951,7 +2955,7 @@ on_model_entry_focus(GtkEventControllerFocus G_GNUC_UNUSED *ctrl,
     ModelSuggest *s = data;
 
     /* Champ vide → liste complète ; sinon le popup reste sur demande. */
-    if (s->ids != NULL &&
+    if (s->entries != NULL &&
         gtk_editable_get_text(GTK_EDITABLE(s->entry))[0] == '\0')
         model_suggest_popup(data);
 }
@@ -2973,7 +2977,7 @@ model_suggest_free(gpointer data)
 {
     ModelSuggest *s = data;
 
-    g_strfreev(s->ids);
+    llm_models_free(s->entries);
     g_free(s->provider);
     g_free(s);
 }
@@ -3974,6 +3978,11 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         GtkCssProvider *css = gtk_css_provider_new();
         const char *data_css =
             ".tile-title { font-size: 10pt; }\n"
+            /* Bouton « Configurer… » du sélecteur LLM : même fine
+             * print que le reste — le style bouton par défaut rend le
+             * label en gras et casse la hiérarchie 10 px. */
+            "button.llm-configure { font-size: 10pt; "
+            "font-weight: normal; padding: 2px 6px; }\n"
             "menubutton.tile-menu > button { font-size: 9pt; "
             "padding: 0 4px; min-height: 0; }\n"
             /* Titlebar : teintes uniformes, tout en 10 pt non gras. */
