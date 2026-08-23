@@ -19,6 +19,7 @@ typedef struct {
     int        count;   /* onglets actifs */
     GListStore *roots;  /* pour résoudre le projet courant au spawn */
     GHashTable *multi_paths;
+    guint      first_spawn_idle; /* id du différé du 1er spawn (0 = aucun) */
 } BashPanel;
 
 /* ------------------------------------------------ */
@@ -403,6 +404,36 @@ bash_panel_ensure_tabs(guint count)
         bash_panel_add_tab(p);
 }
 
+/* Premier spawn DIFFÉRÉ d'un tick idle (fix race au boot) : au moment
+ * où on_activate crée les tuiles, multi_paths est encore vide — le boot
+ * ne remplit la sélection (dernier fichier ouvert) qu'APRÈS render_layout.
+ * Spawner tout de suite = shell dans $HOME (prompt « ~$ »). L'idle passe
+ * après la fin de on_activate : le projet courant est alors résolu. */
+static gboolean
+bash_first_spawn_idle(gpointer data)
+{
+    BashPanel *p = data;
+
+    p->first_spawn_idle = 0;
+    if (p->count == 0) /* un onglet manuel n'aurait rien changé */
+        bash_panel_add_tab(p);
+    bash_panel_update(p);
+    return G_SOURCE_REMOVE;
+}
+
+/* À la destruction du notebook : annule le spawn différé (sinon l'idle
+ * toucherait un BashPanel déjà libéré par set_data_full). */
+static void
+bash_panel_destroy(GtkWidget G_GNUC_UNUSED *w, gpointer data)
+{
+    BashPanel *p = data;
+
+    if (p->first_spawn_idle != 0) {
+        g_source_remove(p->first_spawn_idle);
+        p->first_spawn_idle = 0;
+    }
+}
+
 GtkWidget *
 bash_panel_new(GListStore *roots, GHashTable *multi_paths)
 {
@@ -422,6 +453,7 @@ bash_panel_new(GListStore *roots, GHashTable *multi_paths)
     g_object_add_weak_pointer(G_OBJECT(p->notebook),
                               (gpointer *)&cdb_first_panel);
     cdb_first_panel = p->notebook;
+    g_signal_connect(p->notebook, "destroy", G_CALLBACK(bash_panel_destroy), p);
 
     /* Bouton « + » : nouvel onglet (désactivé à la limite). */
     p->add_btn = gtk_button_new_from_icon_name("list-add-symbolic");
@@ -430,6 +462,7 @@ bash_panel_new(GListStore *roots, GHashTable *multi_paths)
     gtk_notebook_set_action_widget(GTK_NOTEBOOK(p->notebook), p->add_btn,
                                    GTK_PACK_START);
 
-    bash_panel_add_tab(p); /* au moins un terminal */
+    /* Au moins un terminal — mais SPAWN DIFFÉRÉ : voir bash_first_spawn_idle. */
+    p->first_spawn_idle = g_idle_add(bash_first_spawn_idle, p);
     return p->notebook;
 }
