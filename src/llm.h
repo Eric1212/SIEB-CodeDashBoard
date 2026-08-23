@@ -91,6 +91,12 @@ typedef struct {
 
 #define LLM_RETRY429_DEFAULTS     (LlmRetry429){ .retry = TRUE, .max_retries = 200, .delay_ms = 250 }
 
+/* Prompt d'initialisation (« Init-Prompt ») :
+ * raw = texte brut de prompts/default.txt (fallback défaut intégré),
+ * save = écriture (crée les dossiers). Chaînes à libérer. */
+char *llm_persona_raw(void);
+void  llm_persona_save(const char *text);
+
 /* Charge la config de retry ; applique les défauts si absente/invalide. */
 void llm_retry429_load(LlmRetry429 *out);
 

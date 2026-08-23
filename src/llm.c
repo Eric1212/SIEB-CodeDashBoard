@@ -11,9 +11,11 @@
 #include "llm.h"
 #include "session.h"
 #include "mdview.h"
+#include "bashpanel.h"
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
+#include <glib/gstdio.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -855,17 +857,42 @@ llm_config_save_provider(const char *provider, const char *api_key,
 /* Tuile chat                                                         */
 /* ------------------------------------------------------------------ */
 
-/* Un échange de l'historique de conversation. */
+/* Les trois acteurs du fil CDB. */
+typedef enum {
+    LLMACTOR_USER,   /* les mots d'Éric, verbatim */
+    LLMACTOR_LLM,    /* la réponse du modèle */
+    LLMACTOR_CDB,    /* la voix de l'IDE (annonces locales, résultats) */
+} LlmActor;
+
+/* Un échange de l'historique de conversation.
+ * local = TRUE : affiché dans le fil mais JAMAIS envoyé au modèle
+ * (annonces CDB : erreurs HTTP, changements d'état…). */
 typedef struct {
-    char *role;    /* "user" / "assistant" */
-    char *content;
+    LlmActor actor;
+    gboolean local;
+    char    *content;
 } LlmMsg;
+
+static const char *
+llm_msg_wire_role(LlmActor a)
+{
+    switch (a) {
+    case LLMACTOR_LLM:
+        return "assistant";
+    case LLMACTOR_CDB:
+        return "system";
+    case LLMACTOR_USER:
+    default:
+        return "user";
+    }
+}
 
 typedef struct {
     GtkWidget   *view;      /* historique (GtkTextView, non éditable) */
     GtkTextBuffer *hist;    /* buffer de l'historique */
     GtkWidget   *entry;     /* saisie */
     GtkWidget   *send_btn;
+    GtkWidget   *hist_view; /* la vue (pour les boutons dans le fil) */
     LlmConfig   *cfg;
     SoupSession *soup;
     gboolean     busy;      /* requête en cours */
@@ -881,7 +908,24 @@ typedef struct {
     GPtrArray   *sections;  /* ModelSection[] par provider */
     gboolean     menu_built;/* popover peuplé au premier ouvert */
     GActionGroup *actions;  /* pour « Configurer… » (ref ; emprunté sinon) */
+    GQueue      *cmd_queue; /* commandes /CDB:: valides en attente */
+    GQueue      *cdb_results; /* résultats pendants {label,text} */
+    int          cdb_retries; /* malformations consécutives (max 3) */
 } LlmTile;
+
+/* Résultat d'exécution en attente de livraison. */
+typedef struct {
+    char *label; /* « bash-N » */
+    char *text;
+} CdbResult;
+
+/* Spécification d'une commande /CDB:: parsée. */
+typedef struct {
+    int   tab;
+    char *cmd;
+} CdbCmdSpec;
+
+#define CDB_RETRY_MAX 3
 
 /* Une section de provider dans le sélecteur : en-tête + listbox. */
 typedef struct {
@@ -898,12 +942,15 @@ static void on_llm_scroll(GtkAdjustment *adj, gpointer data);
 static void llm_model_section_refresh(LlmTile *t, ModelSection *sec);
 static void llm_model_menu_apply_filter(LlmTile *t);
 static void llm_model_menu_ensure(LlmTile *t);
+static void llm_cdb_polls_purge(LlmTile *t);
+static void llm_cdb_deliver(LlmTile *t, const char *text);
 
 static void
 llm_tile_free(gpointer data)
 {
     LlmTile *t = data;
 
+    llm_cdb_polls_purge(t); /* polls actifs rattachés à cette tuile */
     if (t->soup != NULL)
         g_object_unref(t->soup);
     if (t->reply != NULL)
@@ -912,13 +959,31 @@ llm_tile_free(gpointer data)
         for (guint i = 0; i < t->history->len; i++) {
             LlmMsg *m = &g_array_index(t->history, LlmMsg, i);
 
-            g_free(m->role);
             g_free(m->content);
         }
         g_array_free(t->history, TRUE);
     }
     /* cfg EMPRUNTÉE à App (app->llm_cfg) : PAS libérée ici — main()
      * la libère une seule fois en fin de programme. */
+    if (t->cmd_queue != NULL) {
+        for (GList *l = t->cmd_queue->head; l != NULL; l = l->next) {
+            CdbCmdSpec *s = l->data;
+
+            g_free(s->cmd);
+            g_free(s);
+        }
+        g_queue_free(t->cmd_queue);
+    }
+    if (t->cdb_results != NULL) {
+        for (GList *l = t->cdb_results->head; l != NULL; l = l->next) {
+            CdbResult *r = l->data;
+
+            g_free(r->label);
+            g_free(r->text);
+            g_free(r);
+        }
+        g_queue_free(t->cdb_results);
+    }
     if (t->sections != NULL)
         g_ptr_array_unref(t->sections); /* libère les ModelSection */
     if (t->actions != NULL)
@@ -1164,13 +1229,175 @@ llm_model_menu_ensure(LlmTile *t)
     llm_model_menu_apply_filter(t);
 }
 
-/* Ajoute un échange à l'historique (role: "user"/"assistant"). */
-static void
-history_push(LlmTile *t, const char *role, const char *content)
+/* ------------------------------------------------ */
+/* Persona CDB (prompts/default.txt par session)     */
+/* ------------------------------------------------ */
+
+/* Remplace toutes les occurrences de old par new dans s. */
+static char *
+str_replace_all(const char *s, const char *old_s, const char *new_s)
 {
-    LlmMsg m = { g_strdup(role), g_strdup(content) };
+    gchar **parts = g_strsplit(s, old_s, -1);
+
+    if (parts == NULL || parts[0] == NULL) {
+        g_strfreev(parts);
+        return g_strdup(s);
+    }
+    {
+        char *joined = g_strjoinv(new_s, parts);
+
+        g_strfreev(parts);
+        return joined;
+    }
+}
+
+#define LLM_INITPROMPT_DEFAULT /* « Init-Prompt » */ \
+    "Bonjour Claude. Je suis CodeDashBoard(CDB), un logiciel IDE qui "     \
+    "sert de relais entre toi et Éric Boucher. Éric t'a engagé pour tes "  \
+    "compétences de programmeur senior en système, en simulation et jeux " \
+    "vidéo ainsi que ton éthique de travail.\n\n"                          \
+    "Tu travailles exclusivement à distance. Ton employeur ne te voit "    \
+    "jamais : l'intégralité de votre relation de travail passe par CDB, "  \
+    "qui fonctionne sur le poste de travail qui vous est à tous deux "     \
+    "assignés.\n\n"                                                       \
+    "Projet : [PROJET] ([CHEMIN]).\n\n"                                   \
+    "## Contrôle à distance des terminaux\n"                              \
+    "En tout temps, tu contrôles les terminaux de CDB en écrivant dans "   \
+    "ta réponse une commande au format exact :\n"                          \
+    "/CDB::bash-N::\"COMMANDE-VOULU\"\n"                                   \
+    "- N : numéro du terminal (0 à 9 ; il est créé s'il n'existe pas)\n"   \
+    "- COMMANDE-VOULU : la commande shell à exécuter dans ce terminal\n"   \
+    "Le résultat est restitué intégralement (fenêtre de "                  \
+    "100000 lignes). Pour paginer, utilise head/tail/sed DANS la "         \
+    "commande.\n\n"                                                        \
+    "Chaque commande est soumise à l'approbation d'Éric avant exécution. " \
+    "Si Éric refuse, CDB te l'indiquera clairement dans le fil : ce n'est " \
+    "pas un bug, c'est une décision — adapte-toi et propose autre chose. " \
+    "Après exécution, CDB répondra dans le fil avec le résultat demandé : " \
+    "continue ton travail à partir de là.\n"
+
+/* Charge prompts/default.txt de la session ; substitue [PROJET]/[CHEMIN]
+ * depuis le répertoire courant ; fallback : défaut intégré.
+ * Chaîne à libérer (g_free). */
+/* Texte BRUT du prompt (sans substitutions) : fichier s'il existe,
+ * sinon le défaut intégré. Pour l'éditeur Settings → Harness.
+ * Chaîne à libérer (g_free). */
+char *
+llm_persona_raw(void)
+{
+    char *path = session_config_path("prompts/default.txt");
+    char *txt = NULL;
+
+    if (g_file_test(path, G_FILE_TEST_EXISTS))
+        g_file_get_contents(path, &txt, NULL, NULL);
+    if (txt == NULL)
+        txt = g_strdup(LLM_INITPROMPT_DEFAULT);
+    g_free(path);
+    return txt;
+}
+
+void
+llm_persona_save(const char *text)
+{
+    char       *path = session_config_path("prompts/default.txt");
+    char       *dir = g_path_get_dirname(path);
+    GError     *error = NULL;
+
+    g_mkdir_with_parents(dir, 0755);
+    if (!g_file_set_contents(path, text != NULL ? text : "", -1, &error)) {
+        g_printerr("SIEB: écriture prompts/default.txt : %s\n",
+                   error->message);
+        g_error_free(error);
+    }
+    g_free(dir);
+    g_free(path);
+}
+
+/* Texte final pour l'envoi : raw + substitutions [PROJET]/[CHEMIN]
+ * résolues depuis le répertoire courant. */
+static char *
+llm_persona_load(void)
+{
+    char       *raw = llm_persona_raw();
+    const char *proj_path;
+    char       *proj_name;
+    char       *s1, *s2;
+
+    proj_path = g_getenv("CDB_TEST_PROJET");
+    proj_path = proj_path != NULL ? proj_path : g_get_current_dir();
+    proj_name = g_path_get_basename(proj_path);
+    s1 = str_replace_all(raw, "[PROJET]", proj_name);
+    s2 = str_replace_all(s1, "[CHEMIN]", proj_path);
+    g_free(raw);
+    g_free(s1);
+    g_free(proj_name);
+    return s2;
+}
+
+static void
+history_push(LlmTile *t, LlmActor actor, gboolean local, const char *content)
+{
+    LlmMsg m = { actor, local, g_strdup(content) };
 
     g_array_append_vals(t->history, &m, 1);
+}
+
+/* Tags de voix (créés une fois par buffer). */
+static void
+hist_ensure_voice_tags(LlmTile *t)
+{
+    if (gtk_text_tag_table_lookup(gtk_text_buffer_get_tag_table(t->hist),
+                                  "voice-cdb") == NULL) {
+        gtk_text_buffer_create_tag(
+            t->hist, "voice-cdb", "style", PANGO_STYLE_ITALIC,
+            "foreground-rgba", &(GdkRGBA){ 0.62, 0.62, 0.68, 1.0 }, NULL);
+        gtk_text_buffer_create_tag(t->hist, "voice-sep", "foreground-rgba",
+                                   &(GdkRGBA){ 0.55, 0.55, 0.60, 1.0 },
+                                   NULL);
+    }
+}
+
+/* Rendu de l'en-tête d'acteur dans la vue historique. */
+static void
+hist_render_actor_header(LlmTile *t, LlmActor actor)
+{
+    GtkTextIter end;
+    const char *label;
+
+    hist_ensure_voice_tags(t);
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+
+    switch (actor) {
+    case LLMACTOR_USER:
+        label = "\n— Éric —\n";
+        gtk_text_buffer_insert(t->hist, &end, label, -1);
+        break;
+    case LLMACTOR_LLM:
+        label = "\n— Claude —\n";
+        gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, label, -1,
+                                                 "voice-sep", NULL);
+        break;
+    case LLMACTOR_CDB:
+        label = "\n— CDB · local —\n";
+        gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, label, -1,
+                                                 "voice-cdb", NULL);
+        break;
+    }
+}
+
+/* Annonce CDB locale : affichée dans le fil, JAMAIS envoyée au
+ * modèle. C'est la voix propre du troisième acteur. */
+static void
+hist_cdb_announce(LlmTile *t, const char *text)
+{
+    GtkTextIter end;
+
+    hist_render_actor_header(t, LLMACTOR_CDB);
+    hist_ensure_voice_tags(t);
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, text, -1,
+                                             "voice-cdb", NULL);
+    history_push(t, LLMACTOR_CDB, TRUE, text);
 }
 
 /* Ajoute du texte à l'historique. */
@@ -1284,6 +1511,8 @@ typedef struct {
 } LlmRequest;
 
 static void llm_send_attempt(LlmRequest *req);
+static gboolean llm_agent_detect(LlmTile *t, const char *reply);
+static void     llm_send(LlmTile *t, const char *prompt);
 static gboolean llm_retry_tick(gpointer data);
 
 /* Libère la requête une seule fois (les callbacks de complétion
@@ -1332,7 +1561,6 @@ llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
     }
 }
 
-/* Lecture incrémentale du flux de réponse. */
 static void
 llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                 gpointer data)
@@ -1349,23 +1577,371 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
         llm_request_free(req);
         return;
     }
+
     if (n <= 0) {
         /* Fin du flux : la réponse complète rejoint l'historique
          * (sans les tags thinking, qui ne sont que de l'affichage). */
-        history_push(t, "assistant", t->reply->str);
+        history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
         hist_append(t, "\n");
+
+        /* Boucle agentique : des commandes /CDB:: dans la réponse ?
+         * Si oui, busy RESTE actif — la suite passe par l'approbation
+         * puis le résultat injecté (re-requête automatique).
+         * /CDB:: présent mais MAL FORMÉ → feedback au modèle + retry
+         * automatique (borné, anti-boucle infinie). */
+        if (llm_agent_detect(t, t->reply->str)) {
+            t->cdb_retries = 0;
+            llm_request_free(req);
+            return;
+        }
+        if (strstr(t->reply->str, "/CDB::") != NULL) {
+            if (t->cdb_retries < CDB_RETRY_MAX) {
+                char *note;
+
+                t->cdb_retries++;
+                note = g_strdup_printf(
+                    "COMMANDE MAL FORMÉE (tentative %d/%d) : "
+                    "le protocole est exactement "
+                    "/CDB::bash-N::\"COMMANDE\" — N entre 0 et 9, "
+                    "commande entre guillemets, rien d'autre. "
+                    "Réécris-la proprement.",
+                    t->cdb_retries, CDB_RETRY_MAX);
+                llm_cdb_deliver(t, note);
+                g_free(note);
+                llm_request_free(req);
+                return;
+            }
+            hist_cdb_announce(t,
+                "trois commandes mal formées d'affilée : j'abandonne "
+                "cette boucle. Réponds en texte ou reformule entièrement.");
+        }
+
         t->busy = FALSE;
         gtk_widget_set_sensitive(t->send_btn, TRUE);
         llm_request_free(req);
         return;
     }
+
     llm_process_bytes(req, req->scratch, n);
     g_input_stream_read_async(req->stream, req->scratch,
                               sizeof(req->scratch), G_PRIORITY_DEFAULT,
                               NULL, llm_stream_read, req);
 }
 
-/* Réponse initiale reçue : démarre la lecture du flux SSE. */
+/* ------------------------------------------------ */
+/* Acteur CDB : contrôle à distance des terminaux    */
+/*                                                   */
+/* Le modèle écrit /CDB::bash-N::"cmd" dans   */
+/* sa réponse ; CDB demande l'approbation d'Éric,    */
+/* exécute DANS l'onglet bash N visible (sortie      */
+/* déroutée vers un fichier-sentinelle), livre le    */
+/* résultat au fil puis re-interroge le modèle.      */
+/* ------------------------------------------------ */
+
+typedef struct {
+    LlmTile *t;
+    char    *cmd;
+    int      tab;
+    /* Références pour se détacher proprement à la mort de la rangée
+     * (re-rendu du layout = tuile détruite, boutons fantômes interdits). */
+    GtkWidget *b_ok;
+    GtkWidget *b_no;
+} CdbApproval;
+
+/* Libère l'approbation et débranche ses handlers. Connecté au signal
+ * « destroy » de la rangée de boutons : si la tuile meurt, les boutons
+ * meurent avec elle et `a` est libéré au même moment — plus jamais de
+ * clic sur une structure déjà libérée (segfault bash-1467761504). */
+static void
+cdb_approval_destroy(GtkWidget G_GNUC_UNUSED *w, gpointer data)
+{
+    CdbApproval *a = data;
+
+    if (a->b_ok != NULL)
+        g_signal_handlers_disconnect_by_data(a->b_ok, a);
+    if (a->b_no != NULL)
+        g_signal_handlers_disconnect_by_data(a->b_no, a);
+    g_free(a->cmd);
+    g_free(a);
+}
+
+/* Résout la tuile depuis le widget émetteur (garanti vivant pendant
+ * l'émission) au lieu du pointeur stocké — retourne NULL si la tuile
+ * n'est plus accrochée à un fil vivant. */
+static LlmTile *
+cdb_tile_from_button(GtkButton *btn)
+{
+    for (GtkWidget *w = GTK_WIDGET(btn); w != NULL;
+         w = gtk_widget_get_parent(w)) {
+        LlmTile *t = g_object_get_data(G_OBJECT(w), "cdb-llm-tile");
+
+        if (t != NULL)
+            return t;
+    }
+    return NULL;
+}
+
+typedef struct {
+    LlmTile *t;
+    char    *tab_label;
+    int      tab;        /* index d'onglet surveillé */
+    gchar   *prev_tail;  /* dernière ligne du round précédent */
+    int      rounds;     /* rounds consécutifs finissant par un prompt */
+} CdbPoll;
+
+#define CDB_POLL_MS   250    /* cadence de surveillance (décision Éric) */
+#define CDB_ROUND_MIN 2      /* prompt vu 2 rounds de suite = terminé */
+#define CDB_TAIL_LINES 100000 /* fenêtre de restitution = scrollback */
+
+/* Prompt shell : [user]@[host]:[n'importe quoi]$ suivi UNIQUEMENT
+ * d'espaces (le padding VTE remplit la fin de ligne ; une sortie du
+ * type « user@host:$ Bonjour » ne matche PAS — il y a du texte après).
+ * La ligne est donc évaluée BRUTE, sans retrait des espaces. */
+#define CDB_PROMPT_RE \
+    "^[A-Za-z0-9_.@-]+@[A-Za-z0-9_.-]+:[^\\n]*\\$[ ]*$"
+
+/* Registre des polls actifs : chaque tick valide son appartenance avant
+ * de toucher pl (la tuile peut être détruite par un re-rendu du layout
+ * pendant la surveillance) ; la mort d'une tuile purge ses polls. */
+static GPtrArray *cdb_polls = NULL;
+
+static void
+cdb_poll_register(CdbPoll *pl)
+{
+    if (cdb_polls == NULL)
+        cdb_polls = g_ptr_array_new();
+    g_ptr_array_add(cdb_polls, pl);
+}
+
+static void
+cdd_poll_unregister(CdbPoll *pl)
+{
+    if (cdb_polls != NULL)
+        g_ptr_array_remove_fast(cdb_polls, pl);
+}
+
+/* Purge les polls rattachés à une tuile mourante (appelé par
+ * llm_tile_free) : libère pl ; le tick suivant verra son pointeur
+ * retiré du registre et se retirera silencieusement. */
+static void
+llm_cdb_polls_purge(LlmTile *t)
+{
+    if (cdb_polls == NULL)
+        return;
+    for (guint i = 0; i < cdb_polls->len; ) {
+        CdbPoll *pl = g_ptr_array_index(cdb_polls, i);
+
+        if (pl->t == t) {
+            g_ptr_array_remove_index_fast(cdb_polls, i);
+            g_free(pl->prev_tail);
+            g_free(pl->tab_label);
+            g_free(pl);
+        } else
+            i++;
+    }
+}
+
+static void llm_cdb_deliver(LlmTile *t, const char *text);
+static void llm_cdb_next(LlmTile *t);
+static gboolean cdb_poll_tick(gpointer data);
+
+static void
+cdb_poll_finish(CdbPoll *pl, const char *text)
+{
+    CdbResult *r;
+
+    cdd_poll_unregister(pl);
+
+    /* Anti-spam (loi d'Éric) : pas de livraison immédiate — le résultat
+     * attend la fin de la file ; les résultats contenus à 100 % dans un
+     * plus récent du même bash seront éliminés au flush. */
+    r = g_new0(CdbResult, 1);
+    r->label = g_steal_pointer(&pl->tab_label);
+    r->text = g_strdup(text);
+    if (pl->t->cdb_results == NULL)
+        pl->t->cdb_results = g_queue_new();
+    g_queue_push_tail(pl->t->cdb_results, r);
+
+    llm_cdb_next(pl->t);
+
+    g_free(pl->prev_tail);
+    g_free(pl);
+}
+
+static void
+on_cdb_refuse_clicked(GtkButton *btn, gpointer data)
+{
+    CdbApproval *a = data;
+    LlmTile     *t = cdb_tile_from_button(btn);
+    char        *note;
+
+    if (t == NULL || a->t != t)
+        return; /* bouton fantôme : tuile détruite depuis */
+
+    /* Une demande = une décision : verrouille immédiatement. */
+    gtk_widget_set_sensitive(a->b_ok, FALSE);
+    gtk_widget_set_sensitive(a->b_no, FALSE);
+
+    note = g_strdup_printf(
+        "Éric a REFUSÉ cette commande. Ce n'est pas un bug : "
+        "c'est une décision. Adapte-toi et propose autre chose.");
+
+    llm_cdb_deliver(t, note);
+    g_free(note);
+    /* `a` reste propriété de la rangée : libéré à son destroy. */
+}
+
+static void
+on_cdb_approve_clicked(GtkButton *btn, gpointer data)
+{
+    CdbApproval *a = data;
+    LlmTile     *t = cdb_tile_from_button(btn);
+    CdbPoll     *pl;
+
+    if (t == NULL || a->t != t)
+        return; /* bouton fantôme : tuile détruite depuis */
+
+    /* Une demande = une décision : verrouille immédiatement. */
+    gtk_widget_set_sensitive(a->b_ok, FALSE);
+    gtk_widget_set_sensitive(a->b_no, FALSE);
+
+    pl = g_new0(CdbPoll, 1);
+
+    pl->t = t;
+    pl->tab = a->tab;
+    pl->tab_label = g_strdup_printf("bash-%d", a->tab);
+
+    bash_panel_ensure_tabs((guint)(a->tab + 1));
+
+    if (!bash_panel_exec_tab((guint)a->tab, a->cmd)) {
+        char *note = g_strdup_printf(
+            "terminal %s indisponible (panneau bash absent ?)",
+            pl->tab_label);
+
+        hist_cdb_announce(t, note);
+        g_free(note);
+        g_free(pl->tab_label);
+        g_free(pl);
+        return;
+    }
+
+    /* Surveillance du buffer VTE : prompt vu CDB_ROUND_MIN fois de
+     * suite en fin de buffer = terminé (spécification Éric). Pas de
+     * timeout (Ctrl+C humain). Busy reste verrouillé. `a` reste
+     * propriété de la rangée. */
+    cdb_poll_register(pl);
+    g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
+}
+
+static gboolean
+cdb_poll_tick(gpointer data)
+{
+    static GRegex *prompt_re = NULL;
+    CdbPoll  *pl = data;
+    gchar    *tail = NULL;
+    gchar    *bounded = NULL;
+    char     *note;
+    gboolean  matched;
+
+    /* Poll purgé (tuile détruite) : se retire silencieusement. */
+    if (cdb_polls == NULL ||
+        !g_ptr_array_find(cdb_polls, pl, NULL))
+        return G_SOURCE_REMOVE;
+
+    if (prompt_re == NULL)
+        prompt_re = g_regex_new(CDB_PROMPT_RE, 0, 0, NULL);
+
+    if (!bash_panel_term_alive((guint)pl->tab)) {
+        note = g_strdup_printf(
+            "le terminal %s a été fermé pendant l'exécution.",
+            pl->tab_label);
+        cdb_poll_finish(pl, note);
+        g_free(note);
+        return G_SOURCE_REMOVE;
+    }
+
+    /* Détection (spécification Éric) : la dernière ligne est un
+     * prompt ET identique au round précédent. L'écho de la commande
+     * chasse naturellement le vieux prompt de la queue à l'injection,
+     * donc aucun état « avant » n'est nécessaire. */
+    tail = bash_panel_last_line((guint)pl->tab);
+    matched = tail != NULL && g_regex_match(prompt_re, tail, 0, NULL);
+
+    if (!matched) {
+        pl->rounds = 0;
+        g_free(pl->prev_tail);
+        pl->prev_tail = NULL;
+        g_free(tail);
+        return G_SOURCE_CONTINUE;
+    }
+    if (pl->prev_tail != NULL && strcmp(pl->prev_tail, tail) == 0)
+        pl->rounds++;
+    else
+        pl->rounds = 1;
+    g_free(pl->prev_tail);
+    pl->prev_tail = g_steal_pointer(&tail);
+
+    if (pl->rounds < CDB_ROUND_MIN)
+        return G_SOURCE_CONTINUE;
+    g_free(pl->prev_tail);
+    pl->prev_tail = NULL;
+
+    /* Terminé. Capture (spécification Éric) : dump du terminal en RAM,
+     * on garde les CDB_TAIL_LINES dernières lignes, puis on jette
+     * tout. */
+    {
+        gchar    *full = bash_panel_text((guint)pl->tab);
+        gchar    **lines = NULL;
+        guint     n;
+        GString   *acc = g_string_new(NULL);
+
+        if (full != NULL)
+            lines = g_strsplit(full, "\n", -1);
+        n = lines != NULL ? g_strv_length(lines) : 0;
+
+        /* retire les lignes vides finales puis le prompt de fin */
+        while (n > 0 && lines[n - 1][strspn(lines[n - 1], " \r")] == '\0')
+            n--;
+        if (n > 0 &&
+            g_regex_match(prompt_re, lines[n - 1], 0, NULL))
+            n--;
+
+        /* fenêtre : les CDB_TAIL_LINES dernières lignes du corps,
+         * débarrassées du padding d'espaces de fin de ligne */
+        {
+            guint from = n > (guint)CDB_TAIL_LINES
+                ? n - (guint)CDB_TAIL_LINES : 0;
+
+            for (guint i = from; i < n; i++) {
+                char *ln = lines[i];
+                gsize len = strlen(ln);
+
+                while (len > 0 && (ln[len - 1] == ' ' ||
+                                   ln[len - 1] == '\r'))
+                    ln[--len] = '\0';
+                g_string_append_printf(acc, "%s\n", ln);
+            }
+        }
+        bounded = g_string_free(acc, FALSE);
+
+        g_strfreev(lines);
+        g_free(full);
+    }
+
+    note = g_strdup_printf(
+        "résultat de %s :\n%s",
+        pl->tab_label,
+        bounded != NULL && bounded[0] != '\0'
+            ? bounded : "(aucune sortie)");
+    cdb_poll_finish(pl, note);
+
+    g_free(note);
+    g_free(bounded);
+    return G_SOURCE_REMOVE;
+}
+
+/* Réponse initiale reçue : gère 429 (retry), erreurs HTTP,
+ * puis démarre la lecture du flux SSE. */
 static void
 llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
 {
@@ -1435,9 +2011,6 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
                               NULL, llm_stream_read, req);
 }
 
-static void llm_send_attempt(LlmRequest *req);
-static gboolean llm_retry_tick(gpointer data);
-
 /* Un essai d'envoi : reconstruit un SoupMessage neuf depuis la
  * requête stockée (la session possède le message après send_async,
  * donc chaque tentative repart d'une instance fraîche). */
@@ -1460,17 +2033,181 @@ llm_send_attempt(LlmRequest *req)
                          strlen(req->body)));
 
     gtk_widget_set_sensitive(req->tile->send_btn, FALSE);
-    req->msg = msg; /* possédé par la session après send_async */
+    req->msg = msg;
     soup_session_send_async(req->tile->soup, msg, G_PRIORITY_DEFAULT,
                             NULL, llm_send_done, req);
 }
 
-/* Tick de retry 429 : relance un essai après le délai configuré. */
 static gboolean
 llm_retry_tick(gpointer data)
 {
     llm_send_attempt((LlmRequest *)data);
     return G_SOURCE_REMOVE;
+}
+
+/* Voix CDB dans le fil : rendu + historique. SANS avance de boucle. */
+static void
+hist_cdb_say(LlmTile *t, const char *text)
+{
+    GtkTextIter end;
+
+    hist_render_actor_header(t, LLMACTOR_CDB);
+    hist_ensure_voice_tags(t);
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, text, -1,
+                                             "voice-cdb", NULL);
+    history_push(t, LLMACTOR_CDB, FALSE, text);
+}
+
+/* Livraison immédiate (décisions d'Éric, malformations) puis avance. */
+static void
+llm_cdb_deliver(LlmTile *t, const char *text)
+{
+    hist_cdb_say(t, text);
+    llm_cdb_next(t);
+}
+
+/* Demande d'approbation : rangée de boutons DANS le fil (ancre). */
+static void
+llm_cdb_ask(LlmTile *t, int tab, const char *cmd)
+{
+    GtkTextIter         end;
+    GtkTextChildAnchor *anch;
+    GtkWidget          *hbar;
+    GtkWidget          *b_ok;
+    GtkWidget          *b_no;
+    CdbApproval        *a = g_new0(CdbApproval, 1);
+
+    a->t = t;
+    a->cmd = g_strdup(cmd);
+    a->tab = tab;
+
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    anch = gtk_text_buffer_create_child_anchor(t->hist, &end);
+
+    hbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    b_ok = gtk_button_new_with_label("Exécuter");
+    b_no = gtk_button_new_with_label("Refuser");
+    a->b_ok = b_ok;
+    a->b_no = b_no;
+    gtk_widget_add_css_class(b_ok, "flat");
+    gtk_widget_add_css_class(b_no, "flat");
+    gtk_widget_set_focusable(b_ok, FALSE);
+    gtk_widget_set_focusable(b_no, FALSE);
+    g_signal_connect(b_ok, "clicked",
+                     G_CALLBACK(on_cdb_approve_clicked), a);
+    g_signal_connect(b_no, "clicked",
+                     G_CALLBACK(on_cdb_refuse_clicked), a);
+    g_signal_connect(hbar, "destroy", G_CALLBACK(cdb_approval_destroy), a);
+    gtk_box_append(GTK_BOX(hbar), b_ok);
+    gtk_box_append(GTK_BOX(hbar), b_no);
+    gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(t->hist_view),
+                                      hbar, anch);
+}
+
+/* Loi d'Éric (anti-spam) : quand la file de commandes se vide, un
+ * résultat antérieur contenu à 100 % dans un résultat plus récent du
+ * même bash est jeté — seule la version la plus longue est livrée.
+ * Aucune perte : la capture lit tout le buffer, donc le plus récent
+ * inclut fatalement les précédents du même terminal. */
+static void
+llm_cdb_results_flush(LlmTile *t)
+{
+    GQueue   *q = t->cdb_results;
+    guint     n;
+    gboolean *drop;
+    guint     i = 0;
+
+    t->cdb_results = NULL;
+    if (q == NULL) {
+        llm_send(t, NULL);
+        return;
+    }
+    if (g_queue_is_empty(q)) {
+        g_queue_free(q);
+        llm_send(t, NULL);
+        return;
+    }
+
+    n = g_queue_get_length(q);
+    drop = g_new0(gboolean, n);
+    for (GList *li = q->head; li != NULL; li = li->next, i++) {
+        CdbResult *ri = li->data;
+        GList     *lj = li->next;
+
+        while (lj != NULL && !drop[i]) {
+            CdbResult *rj = lj->data;
+
+            if (g_strcmp0(ri->label, rj->label) == 0 &&
+                strstr(rj->text, ri->text) != NULL)
+                drop[i] = TRUE;
+            lj = lj->next;
+        }
+    }
+
+    i = 0;
+    for (GList *l = q->head; l != NULL; l = l->next, i++) {
+        CdbResult *r = l->data;
+
+        if (!drop[i])
+            hist_cdb_say(t, r->text);
+        g_free(r->label);
+        g_free(r->text);
+        g_free(r);
+    }
+    g_free(drop);
+    g_queue_free(q);
+
+    llm_send(t, NULL);
+}
+
+/* Avance la file : commande suivante → approbation ; vide →
+ * livraison des résultats pendants (dédupliqués), puis
+ * re-interrogation du modèle. */
+static void
+llm_cdb_next(LlmTile *t)
+{
+    if (t->cmd_queue == NULL || g_queue_is_empty(t->cmd_queue)) {
+        llm_cdb_results_flush(t);
+        return;
+    }
+    CdbCmdSpec *s = g_queue_pop_head(t->cmd_queue);
+
+    llm_cdb_ask(t, s->tab, s->cmd);
+    g_free(s->cmd);
+    g_free(s);
+}
+
+/* Détection des commandes /CDB:: d'une réponse. Protocole à 2 champs :
+ * /CDB::bash-N::"commande" — la pagination se fait dans la commande
+ * (head/tail/sed). TOUTES les commandes valides partent en file. */
+static gboolean
+llm_agent_detect(LlmTile *t, const char *reply)
+{
+    static GRegex *re = NULL;
+    GMatchInfo    *mi = NULL;
+    gboolean      found = FALSE;
+
+    if (re == NULL)
+        re = g_regex_new("/CDB::bash-(\\d)::\"([^\"]*)\"", 0, 0, NULL);
+    if (g_regex_match(re, reply, 0, &mi)) {
+        found = TRUE;
+        do {
+            CdbCmdSpec *s = g_new0(CdbCmdSpec, 1);
+
+            s->tab = atoi(g_match_info_fetch(mi, 1));
+            s->cmd = g_match_info_fetch(mi, 2);
+            if (t->cmd_queue == NULL)
+                t->cmd_queue = g_queue_new();
+            g_queue_push_tail(t->cmd_queue, s);
+        } while (g_match_info_next(mi, NULL));
+    }
+    g_match_info_free(mi);
+
+    if (found)
+        llm_cdb_next(t);
+
+    return found;
 }
 
 /* Construit et envoie la requête chat/completions (stream=true). */
@@ -1485,8 +2222,6 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     req->attempt = 0;
     req->url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
 
-    /* Clé optionnelle (OpenCode Zen fonctionne sans) : on n'envoie
-     * l'Authorization que si elle existe. */
     if (t->cfg->api_key != NULL && t->cfg->api_key[0] != '\0')
         req->auth = g_strdup_printf("Bearer %s", t->cfg->api_key);
 
@@ -1498,17 +2233,40 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     json_builder_add_boolean_value(builder, TRUE);
     json_builder_set_member_name(builder, "messages");
     json_builder_begin_array(builder);
-    /* Historique COMPLET — le message user courant y est déjà
-     * (history_push avant llm_send). Ne PAS le rajouter ici : c'était
-     * la source des messages en double. */
-    for (guint i = 0; i < t->history->len; i++) {
-        LlmMsg *m = &g_array_index(t->history, LlmMsg, i);
+
+    /* [0] Persona CDB. */
+    {
+        char *persona = llm_persona_load();
 
         json_builder_begin_object(builder);
         json_builder_set_member_name(builder, "role");
-        json_builder_add_string_value(builder, m->role);
+        json_builder_add_string_value(builder, "system");
         json_builder_set_member_name(builder, "content");
-        json_builder_add_string_value(builder, m->content);
+        json_builder_add_string_value(builder, persona);
+        json_builder_end_object(builder);
+        g_free(persona);
+    }
+
+    /* Le fil des trois acteurs. */
+    for (guint i = 0; i < t->history->len; i++) {
+        LlmMsg     *m = &g_array_index(t->history, LlmMsg, i);
+        const char *wire = llm_msg_wire_role(m->actor);
+
+        if (m->local)
+            continue;
+        json_builder_begin_object(builder);
+        json_builder_set_member_name(builder, "role");
+        json_builder_add_string_value(builder, wire);
+        if (m->actor == LLMACTOR_CDB) {
+            char *framed = g_strdup_printf("[CDB] %s", m->content);
+
+            json_builder_set_member_name(builder, "content");
+            json_builder_add_string_value(builder, framed);
+            g_free(framed);
+        } else {
+            json_builder_set_member_name(builder, "content");
+            json_builder_add_string_value(builder, m->content);
+        }
         json_builder_end_object(builder);
     }
     json_builder_end_array(builder);
@@ -1539,11 +2297,9 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
         return;
     }
 
-    hist_append(t, "\n— vous —\n");
+    hist_render_actor_header(t, LLMACTOR_USER);
     hist_append(t, prompt);
-    hist_append(t, "\n\n— ");
-    hist_append(t, t->cfg->model);
-    hist_append(t, " —\n");
+    hist_render_actor_header(t, LLMACTOR_LLM);
     g_string_truncate(t->reply, 0);
     t->in_reasoning = FALSE;
     {
@@ -1557,7 +2313,8 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
             gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
     }
     gtk_editable_set_text(GTK_EDITABLE(t->entry), "");
-    history_push(t, "user", prompt);
+    t->cdb_retries = 0; /* nouveau tour : compteur malformations reset */
+    history_push(t, LLMACTOR_USER, FALSE, prompt);
     llm_send(t, prompt);
     llm_scroll_to_end(t);
     g_free(prompt); /* copie : l'entry a été vidée */
@@ -1633,6 +2390,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions)
 
     t->hist = gtk_text_buffer_new(NULL);
     t->view = gtk_text_view_new_with_buffer(t->hist);
+    t->hist_view = t->view;
     gtk_text_view_set_editable(GTK_TEXT_VIEW(t->view), FALSE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(t->view), GTK_WRAP_WORD_CHAR);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(t->view), FALSE);
@@ -1669,8 +2427,8 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions)
         t->sections = g_ptr_array_new_with_free_func(model_section_free);
 
         t->model_search = gtk_search_entry_new();
-        gtk_entry_set_placeholder_text(GTK_ENTRY(t->model_search),
-                                       "Sélectionner un modèle…");
+        gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(t->model_search),
+                                              "Sélectionner un modèle…");
         g_signal_connect(t->model_search, "search-changed",
                          G_CALLBACK(on_llm_model_search_changed), t);
 

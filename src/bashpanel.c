@@ -155,6 +155,8 @@ bash_panel_add_tab(BashPanel *p)
         return;
     index = p->count + 1;
     term = vte_terminal_new();
+    /* Réservoir paginable pour la boucle /CDB:: : 100k lignes. */
+    vte_terminal_set_scrollback_lines(VTE_TERMINAL(term), 100000);
     bash_tab_spawn(p, VTE_TERMINAL(term));
     gtk_notebook_append_page(GTK_NOTEBOOK(p->notebook), term,
                              bash_tab_label(term, index));
@@ -173,6 +175,214 @@ on_add_tab_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 /* Panneau                                           */
 /* ------------------------------------------------ */
 
+static GtkWidget *cdb_first_panel = NULL; /* référence FAIBLE */
+
+gboolean
+bash_panel_exec_tab(guint index, const char *command)
+{
+    BashPanel *p;
+    GtkWidget *page;
+    char      *line;
+
+    if (cdb_first_panel == NULL)
+        return FALSE; /* aucun panneau bash à l'écran */
+    p = g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel");
+    if (p == NULL || index >= (guint)p->count)
+        return FALSE;
+
+    page = gtk_notebook_get_nth_page(GTK_NOTEBOOK(cdb_first_panel),
+                                     (int)index);
+    if (page == NULL || !VTE_IS_TERMINAL(page))
+        return FALSE;
+
+    /* La commande EXACTE, rien qu'elle : tapée au clavier du shell,
+     * comme si Éric la saisissait lui-même. Zéro plomberie. */
+    line = g_strdup_printf("%s\n", command != NULL ? command : "true");
+    vte_terminal_feed_child(VTE_TERMINAL(page), line, -1);
+    g_free(line);
+    return TRUE;
+}
+
+/* Terminal de l'onglet N, ou NULL. */
+static VteTerminal *
+bash_panel_term(guint index)
+{
+    BashPanel *p;
+    GtkWidget *page;
+
+    if (cdb_first_panel == NULL)
+        return NULL;
+    p = g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel");
+    if (p == NULL || index >= (guint)p->count)
+        return NULL;
+    page = gtk_notebook_get_nth_page(GTK_NOTEBOOK(cdb_first_panel),
+                                     (int)index);
+    return (page != NULL && VTE_IS_TERMINAL(page))
+        ? VTE_TERMINAL(page) : NULL;
+}
+
+gboolean
+bash_panel_term_alive(guint index)
+{
+    return bash_panel_term(index) != NULL;
+}
+
+/* Ligne du BAS du document selon le curseur : coordonnée ABSOLUE dans
+ * le buffer (mesuré : row=5001 après 5000 lignes générées ; le curseur
+ * ne dépend ni du contenu affiché ni du scroll — idée d'Éric). */
+static glong
+bash_panel_bottom(guint index)
+{
+    VteTerminal *term = bash_panel_term(index);
+    glong        col = 0, row = 0;
+
+    if (term == NULL)
+        return -1;
+    vte_terminal_get_cursor_position(term, &col, &row);
+    return row;
+}
+
+/* Plage du buffer en coordonnées ABSOLUES (mesuré empiriquement : même
+ * référentiel que get_cursor_position ; négatif = clamp VTE). Fin de
+ * plage = bas du document (curseur) ; lignes paddées aux colonnes. */
+static gchar *
+bash_panel_range_text(guint index, glong start_row)
+{
+    VteTerminal *term = bash_panel_term(index);
+    gsize        len = 0;
+    glong        bottom;
+
+    if (term == NULL)
+        return NULL;
+    bottom = bash_panel_bottom(index);
+    if (bottom < 0)
+        return NULL;
+    return vte_terminal_get_text_range_format(
+        term, VTE_FORMAT_TEXT,
+        start_row, 0,
+        bottom + 1, /* inclusif : jusqu'au prompt final */
+        (long)vte_terminal_get_column_count(term),
+        &len);
+}
+
+/* Texte intégral du buffer (recette d'Éric, mesurée) : début = -1,
+ * clampé par VTE au début réelle du buffer ; fin = curseur. Capte tout
+ * l'historique SANS les 100k lignes de padding du scrollback configuré.
+ * get_text_format, lui, ne rend que l'écran VISIBLE. */
+static gchar *
+bash_panel_full_text(guint index)
+{
+    return bash_panel_range_text(index, -1);
+}
+
+/* Les n dernières lignes du BUFFER (indépendant du scroll affiché),
+ * lecture légère : seule la plage demandée est extraite. */
+static gchar *
+bash_panel_tail_text(guint index, glong n)
+{
+    VteTerminal *term = bash_panel_term(index);
+    glong        bottom;
+
+    if (term == NULL)
+        return NULL;
+    bottom = bash_panel_bottom(index);
+    return bash_panel_range_text(index, bottom - n + 1);
+}
+
+glong
+bash_panel_line_count(guint index)
+{
+    gchar *text;
+    glong  n;
+
+    text = bash_panel_full_text(index);
+    if (text == NULL)
+        return -1;
+    n = 0;
+    for (const char *c = text; *c != '\0'; c++)
+        if (*c == '\n')
+            n++;
+    if (text[0] != '\0' && !g_str_has_suffix(text, "\n"))
+        n++; /* dernière ligne sans \n final */
+    g_free(text);
+    return n;
+}
+
+gchar *
+bash_panel_last_line(guint index)
+{
+    gchar      *text;
+    const char *end;
+
+    /* Lecture légère : 5 dernières lignes du buffer suffisent. */
+    text = bash_panel_tail_text(index, 5);
+    if (text == NULL)
+        return NULL;
+    end = text + strlen(text);
+    while (end > text && (end[-1] == '\n' || end[-1] == '\r'))
+        end--; /* saute les lignes vides finales */
+    {
+        const char *start = end;
+
+        while (start > text && start[-1] != '\n')
+            start--;
+        /* PAS de trim des espaces : « $ » suivi d'espaces est le
+         * signal du prompt (le padding VTE les fournit). */
+        return g_strndup(start, (gsize)(end - start));
+    }
+}
+
+gchar *
+bash_panel_text(guint index)
+{
+    return bash_panel_full_text(index);
+}
+
+gchar *
+bash_panel_slice(guint index, glong first, glong last)
+{
+    gchar   *text;
+    gchar  **lines;
+    guint    n;
+    GString *acc;
+
+    text = bash_panel_full_text(index);
+    if (text == NULL)
+        return NULL;
+    lines = g_strsplit(text, "\n", -1);
+    n = g_strv_length(lines);
+
+    if (first < 0)
+        first = 0;
+    if (last > (glong)n - 1)
+        last = (glong)n - 1;
+    acc = g_string_new(NULL);
+    for (glong i = first; i <= last; i++) {
+        gsize len = strlen(lines[i]);
+
+        if (len > 0 && lines[i][len - 1] == '\r')
+            lines[i][len - 1] = '\0'; /* normalise CRLF éventuel */
+        g_string_append_printf(acc, "%s\n", lines[i]);
+    }
+    g_strfreev(lines);
+    g_free(text);
+    return g_string_free(acc, FALSE);
+}
+
+void
+bash_panel_ensure_tabs(guint count)
+{
+    BashPanel *p;
+
+    if (cdb_first_panel == NULL)
+        return;
+    p = g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel");
+    if (p == NULL)
+        return;
+    while ((guint)p->count < count && p->count < BASH_TAB_MAX)
+        bash_panel_add_tab(p);
+}
+
 GtkWidget *
 bash_panel_new(GListStore *roots, GHashTable *multi_paths)
 {
@@ -182,6 +392,16 @@ bash_panel_new(GListStore *roots, GHashTable *multi_paths)
     p->roots = roots;
     p->multi_paths = multi_paths;
     g_object_set_data_full(G_OBJECT(p->notebook), "bash-panel", p, g_free);
+    /* Enregistrement TOUJOURS sur le dernier panneau créé : lors d'un
+     * re-rendu du layout, si le nouveau était créé avant la destruction
+     * de l'ancien, il ne s'enregistrait pas — et le pointeur faible
+     * repartait à NULL avec l'ancien (bash « absent » pour /CDB::). */
+    if (cdb_first_panel != NULL)
+        g_object_remove_weak_pointer(G_OBJECT(cdb_first_panel),
+                                     (gpointer *)&cdb_first_panel);
+    g_object_add_weak_pointer(G_OBJECT(p->notebook),
+                              (gpointer *)&cdb_first_panel);
+    cdb_first_panel = p->notebook;
 
     /* Bouton « + » : nouvel onglet (désactivé à la limite). */
     p->add_btn = gtk_button_new_from_icon_name("list-add-symbolic");

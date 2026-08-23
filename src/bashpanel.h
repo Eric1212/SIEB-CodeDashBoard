@@ -14,4 +14,27 @@
  * spawn via roots/multi_paths), sinon $HOME. */
 GtkWidget *bash_panel_new(GListStore *roots, GHashTable *multi_paths);
 
+/* Injecte STRICTEMENT la commande dans l'onglet N (au clavier du shell).
+ * Aucune plomberie : pas de redirection, pas de sentinelle. */
+gboolean bash_panel_exec_tab(guint index, const char *command);
+
+/* Garantit l'existence d'au moins count onglets. */
+void bash_panel_ensure_tabs(guint count);
+
+/* Nombre de lignes du buffer (scrollback inclus), -1 si indisponible. */
+glong bash_panel_line_count(guint index);
+
+/* Dernière ligne non vide du buffer (sans le \n), NULL si indisponible. */
+gchar *bash_panel_last_line(guint index);
+
+/* Lignes [first..last] du buffer (inclusives, bornées au contenu),
+ * jointes par \n. NULL si indisponible. */
+gchar *bash_panel_slice(guint index, glong first, glong last);
+
+/* Texte intégral du buffer (scrollback inclus). NULL si indisponible. */
+gchar *bash_panel_text(guint index);
+
+/* Le terminal de l'onglet N existe-t-il encore ? */
+gboolean bash_panel_term_alive(guint index);
+
 #endif /* CDB_BASHPANEL_H */

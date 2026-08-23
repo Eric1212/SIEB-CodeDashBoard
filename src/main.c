@@ -2683,6 +2683,7 @@ static void on_allowed_models_changed(GtkEditable *editable,
                                       gpointer data);
 static GtkWidget *build_provider_form(const char *provider_name);
 static GtkWidget *build_harness_form(void);
+static GtkWidget *build_initprompt_editor(void);
 
 static GtkWidget *
 build_settings_section(const SettingsSection *sec)
@@ -2724,6 +2725,8 @@ build_settings_section(const SettingsSection *sec)
         body = build_provider_form("OpenCode");
     else if (g_strcmp0(sec->title, "429") == 0)
         body = build_harness_form();
+    else if (g_strcmp0(sec->title, "Init-Prompt") == 0)
+        body = build_initprompt_editor();
     else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_widget_set_margin_start(body, 16);
@@ -3185,6 +3188,160 @@ build_harness_form(void)
     return grid;
 }
 
+/* ------------------------------------------------ */
+/* Éditeur « Init-Prompt » (prompt système par session) */
+/* ------------------------------------------------ */
+
+typedef struct {
+    GtkWidget *view;
+    GtkWidget *status;
+} InitPromptCtx;
+
+static void
+on_ip_insert(GtkButton *btn, gpointer data)
+{
+    const char    *snippet = data;
+    InitPromptCtx *ctx = g_object_get_data(G_OBJECT(btn), "ip-ctx");
+    GtkTextBuffer *buf;
+    GtkTextIter    ins;
+
+    if (ctx == NULL || ctx->view == NULL || snippet == NULL)
+        return;
+    buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(ctx->view));
+    gtk_text_buffer_get_iter_at_mark(buf, &ins,
+                                     gtk_text_buffer_get_insert(buf));
+    gtk_text_buffer_insert(buf, &ins, snippet, -1);
+}
+
+static void
+on_ip_save_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    InitPromptCtx *ctx = data;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(ctx->view));
+    GtkTextIter    s, e;
+    char          *text;
+
+    gtk_text_buffer_get_bounds(buf, &s, &e);
+    text = gtk_text_buffer_get_text(buf, &s, &e, FALSE);
+    llm_persona_save(text);
+    g_free(text);
+    gtk_label_set_text(GTK_LABEL(ctx->status), "Enregistré ✓");
+}
+
+static GtkWidget *
+build_initprompt_editor(void)
+{
+    GtkSourceBuffer *sbuf;
+    typedef struct {
+        const char *label;
+        const char *snippet;
+    } IpSnippet;
+
+    static const IpSnippet snippets[] = {
+        { "[PROJET]", "[PROJET]" },
+        { "[CHEMIN]", "[CHEMIN]" },
+        { "/CDB::",   "/CDB::bash-0::\"COMMANDE\"" },
+    };
+    InitPromptCtx *ctx = g_new0(InitPromptCtx, 1);
+    GtkWidget     *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget     *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    GtkWidget     *scroll;
+    GtkTextBuffer *buf;
+    char          *raw;
+
+    /* Barre d'insertion : les variables et le gabarit de commande. */
+    for (gsize i = 0; i < G_N_ELEMENTS(snippets); i++) {
+        GtkWidget *b = gtk_button_new_with_label(snippets[i].label);
+
+        gtk_widget_add_css_class(b, "flat");
+        /* Sans focus : le clic n'arrache pas le curseur de l'éditeur. */
+        gtk_widget_set_focusable(b, FALSE);
+        g_object_set_data(G_OBJECT(b), "ip-ctx", ctx); /* pour le handler */
+        g_signal_connect(b, "clicked", G_CALLBACK(on_ip_insert),
+                         (gpointer)snippets[i].snippet);
+        gtk_box_append(GTK_BOX(bar), b);
+    }
+
+    /* Buffer source + schéma Adwaita : le fond suit le thème clair/
+     * sombre comme l'éditeur principal. */
+    {
+        GtkSourceStyleSchemeManager *smgr_m =
+            gtk_source_style_scheme_manager_get_default();
+        AdwStyleManager *style_mgr = adw_style_manager_get_default();
+        const char *sname = adw_style_manager_get_dark(style_mgr)
+                                ? "Adwaita-dark"
+                                : "Adwaita";
+        GtkSourceStyleScheme *scheme =
+            gtk_source_style_scheme_manager_get_scheme(smgr_m, sname);
+
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr("CDB: Init-Prompt schéma=%s trouvé=%d\n", sname,
+                       scheme != NULL);
+        sbuf = gtk_source_buffer_new(NULL);
+        if (scheme != NULL)
+            gtk_source_buffer_set_style_scheme(GTK_SOURCE_BUFFER(sbuf),
+                                               scheme);
+    }
+
+    ctx->view =
+        gtk_source_view_new_with_buffer(GTK_SOURCE_BUFFER(sbuf));
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(ctx->view),
+                                GTK_WRAP_WORD_CHAR);
+    gtk_source_view_set_show_line_numbers(
+        GTK_SOURCE_VIEW(ctx->view), TRUE);
+    gtk_widget_add_css_class(ctx->view, "initprompt-editor");
+
+    buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(ctx->view));
+    raw = llm_persona_raw();
+    gtk_text_buffer_set_text(buf, raw != NULL ? raw : "", -1);
+    g_free(raw);
+
+    /* Curseur initial en fin de texte : les tags partent de là tant
+     * qu'Éric n'a pas cliqué ailleurs dans l'éditeur. */
+    {
+        GtkTextIter cur;
+
+        gtk_text_buffer_get_end_iter(buf, &cur);
+        gtk_text_buffer_place_cursor(buf, &cur);
+    }
+
+    scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                   GTK_POLICY_AUTOMATIC,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), ctx->view);
+    /* PAS de vexpand : un accordéon fermé doit libérer son espace.
+     * Hauteur utile bornée par min/max-content-height. */
+    gtk_scrolled_window_set_min_content_height(
+        GTK_SCROLLED_WINDOW(scroll), 260);
+    gtk_scrolled_window_set_max_content_height(
+        GTK_SCROLLED_WINDOW(scroll), 420);
+    gtk_scrolled_window_set_propagate_natural_height(
+        GTK_SCROLLED_WINDOW(scroll), TRUE);
+
+    {
+        GtkWidget *save_btn = gtk_button_new_with_label("Enregistrer");
+
+        gtk_widget_add_css_class(save_btn, "flat");
+        g_signal_connect(save_btn, "clicked",
+                         G_CALLBACK(on_ip_save_clicked), ctx);
+        gtk_box_append(GTK_BOX(box), bar);
+        gtk_box_append(GTK_BOX(box), scroll);
+        {
+            GtkWidget *foot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+
+            gtk_box_append(GTK_BOX(foot), save_btn);
+            gtk_box_append(GTK_BOX(foot), ctx->status);
+            gtk_widget_set_halign(ctx->status, GTK_ALIGN_END);
+            gtk_widget_set_hexpand(ctx->status, TRUE);
+            gtk_box_append(GTK_BOX(box), foot);
+        }
+    }
+
+    g_object_set_data_full(G_OBJECT(box), "ip-ctx-owner", ctx, g_free);
+    return box;
+}
+
 static GtkWidget *
 build_provider_form(const char *provider_name)
 {
@@ -3267,7 +3424,8 @@ build_settings(App *app G_GNUC_UNUSED)
         { "OpenRouter",        NULL, NULL, 0 }, /* formulaire provider */
     };
     static const SettingsSection harness_subs[] = {
-        { "429", NULL, NULL, 0 }, /* formulaire retry */
+        { "429",         NULL, NULL, 0 }, /* formulaire retry */
+        { "Init-Prompt", NULL, NULL, 0 }, /* éditeur du prompt système */
     };
     static const SettingsSection llm_subs[] = {
         { "Harness",    NULL, harness_subs, G_N_ELEMENTS(harness_subs) },
@@ -4102,6 +4260,7 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             /* Bouton « Configurer… » du sélecteur LLM : même fine
              * print que le reste — le style bouton par défaut rend le
              * label en gras et casse la hiérarchie 10 px. */
+            ".initprompt-editor text { font-family: monospace; font-size: 10pt; }\n"
             "button.llm-configure { font-size: 10pt; "
             "font-weight: normal; padding: 2px 6px; }\n"
             "menubutton.tile-menu > button { font-size: 9pt; "
