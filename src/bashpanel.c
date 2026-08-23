@@ -177,6 +177,14 @@ on_add_tab_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 
 static GtkWidget *cdb_first_panel = NULL; /* référence FAIBLE */
 
+/* Un panneau bash est-il disponible pour /CDB:: ? */
+gboolean
+bash_panel_exec_tab_possible(void)
+{
+    return cdb_first_panel != NULL &&
+        g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel") != NULL;
+}
+
 gboolean
 bash_panel_exec_tab(guint index, const char *command)
 {
@@ -225,6 +233,18 @@ gboolean
 bash_panel_term_alive(guint index)
 {
     return bash_panel_term(index) != NULL;
+}
+
+/* Le shell de l'onglet N a-t-il TERMINÉ son spawn ? vte_terminal_spawn_async
+ * est asynchrone : entre add_tab() et le callback, get_pty() retourne NULL —
+ * toute commande feed_child pendant cette fenêtre part dans le vide.
+ * Prêt = terminal existant ET PTY attaché. */
+gboolean
+bash_panel_term_ready(guint index)
+{
+    VteTerminal *term = bash_panel_term(index);
+
+    return term != NULL && vte_terminal_get_pty(term) != NULL;
 }
 
 /* Ligne du BAS du document selon le curseur : coordonnée ABSOLUE dans

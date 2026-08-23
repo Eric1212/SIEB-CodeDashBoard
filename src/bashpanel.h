@@ -21,6 +21,9 @@ gboolean bash_panel_exec_tab(guint index, const char *command);
 /* Garantit l'existence d'au moins count onglets. */
 void bash_panel_ensure_tabs(guint count);
 
+/* Un panneau bash est-il disponible (pour /CDB::) ? */
+gboolean bash_panel_exec_tab_possible(void);
+
 /* Nombre de lignes du buffer (scrollback inclus), -1 si indisponible. */
 glong bash_panel_line_count(guint index);
 
@@ -36,5 +39,9 @@ gchar *bash_panel_text(guint index);
 
 /* Le terminal de l'onglet N existe-t-il encore ? */
 gboolean bash_panel_term_alive(guint index);
+
+/* Le shell de l'onglet N a-t-il terminé son spawn (PTY attaché) ?
+ * feed_child avant ce point = commande perdue. */
+gboolean bash_panel_term_ready(guint index);
 
 #endif /* CDB_BASHPANEL_H */

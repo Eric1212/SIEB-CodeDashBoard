@@ -976,6 +976,7 @@ static void llm_model_menu_apply_filter(LlmTile *t);
 static void llm_model_menu_ensure(LlmTile *t);
 static void llm_cdb_polls_purge(LlmTile *t);
 static void llm_cdb_deliver(LlmTile *t, const char *text);
+static gboolean llm_cdb_malformed(const char *reply);
 
 static void
 llm_tile_free(gpointer data)
@@ -1630,7 +1631,8 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
             llm_request_free(req);
             return;
         }
-        if (strstr(t->reply->str, "/CDB::") != NULL) {
+        if (strstr(t->reply->str, "/CDB::") != NULL &&
+            llm_cdb_malformed(t->reply->str)) {
             if (t->cdb_retries < CDB_RETRY_MAX) {
                 char *note;
 
@@ -1723,11 +1725,13 @@ typedef struct {
     int      tab;        /* index d'onglet surveillé */
     gchar   *prev_tail;  /* dernière ligne du round précédent */
     int      rounds;     /* rounds consécutifs finissant par un prompt */
+    char    *pending_cmd; /* commande en attente du spawn du shell */
 } CdbPoll;
 
 #define CDB_POLL_MS   250    /* cadence de surveillance (décision Éric) */
 #define CDB_ROUND_MIN 2      /* prompt vu 2 rounds de suite = terminé */
 #define CDB_TAIL_LINES 100000 /* fenêtre de restitution = scrollback */
+#define CDB_SPAWN_WAIT_MAX 120 /* ticks max d'attente du spawn (30 s) */
 
 /* Prompt shell : [user]@[host]:[n'importe quoi]$ suivi UNIQUEMENT
  * d'espaces (le padding VTE remplit la fin de ligne ; une sortie du
@@ -1771,6 +1775,7 @@ llm_cdb_polls_purge(LlmTile *t)
             g_ptr_array_remove_index_fast(cdb_polls, i);
             g_free(pl->prev_tail);
             g_free(pl->tab_label);
+            g_free(pl->pending_cmd);
             g_free(pl);
         } else
             i++;
@@ -1780,6 +1785,7 @@ llm_cdb_polls_purge(LlmTile *t)
 static void llm_cdb_deliver(LlmTile *t, const char *text);
 static void llm_cdb_next(LlmTile *t);
 static gboolean cdb_poll_tick(gpointer data);
+static gboolean cdb_spawn_wait_tick(gpointer data);
 
 static void
 cdb_poll_finish(CdbPoll *pl, const char *text)
@@ -1849,6 +1855,28 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data)
 
     bash_panel_ensure_tabs((guint)(a->tab + 1));
 
+    /* Spawn ASYNCHRONE : un onglet fraîchement créé n'a pas encore de PTY.
+     * Injecter tout de suite = commande perdue (le shell ne lit pas encore
+     * son entrée) et le poll verrait le prompt initial comme « terminé ».
+     * On attend donc que le shell soit prêt avant d'injecter. */
+    if (!bash_panel_term_ready((guint)a->tab)) {
+        if (!bash_panel_exec_tab_possible()) {
+            char *note = g_strdup_printf(
+                "terminal %s indisponible (panneau bash absent ?)",
+                pl->tab_label);
+
+            hist_cdb_announce(t, note);
+            g_free(note);
+            g_free(pl->tab_label);
+            g_free(pl);
+            return;
+        }
+        pl->pending_cmd = g_strdup(a->cmd);
+        cdb_poll_register(pl);
+        g_timeout_add(CDB_POLL_MS, cdb_spawn_wait_tick, pl);
+        return;
+    }
+
     if (!bash_panel_exec_tab((guint)a->tab, a->cmd)) {
         char *note = g_strdup_printf(
             "terminal %s indisponible (panneau bash absent ?)",
@@ -1867,6 +1895,48 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data)
      * propriété de la rangée. */
     cdb_poll_register(pl);
     g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
+}
+
+/* Attend que le shell d'un onglet fraîchement créé finisse son spawn
+ * (PTY attaché), puis injecte la commande approuvée. Le poll normal ne
+ * démarre qu'APRÈS l'injection : le prompt initial du shell ne peut plus
+ * être confondu avec une fin de commande. */
+static gboolean
+cdb_spawn_wait_tick(gpointer data)
+{
+    CdbPoll *pl = data;
+    int      waits;
+
+    /* Poll purgé (tuile détruite) : se retire silencieusement. */
+    if (cdb_polls == NULL || !g_ptr_array_find(cdb_polls, pl, NULL)) {
+        g_free(pl->pending_cmd);
+        g_free(pl);
+        return G_SOURCE_REMOVE;
+    }
+
+    if (bash_panel_term_ready((guint)pl->tab)) {
+        char *cmd = pl->pending_cmd;
+
+        pl->pending_cmd = NULL; /* transféré */
+        cdd_poll_unregister(pl); /* quitte le registre d'attente… */
+        cdb_poll_register(pl);   /* …et y revient comme poll normal */
+        bash_panel_exec_tab((guint)pl->tab, cmd);
+        g_free(cmd);
+        g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
+        return G_SOURCE_REMOVE;
+    }
+
+    waits = pl->rounds++;
+    if (waits >= CDB_SPAWN_WAIT_MAX) {
+        char *note = g_strdup_printf(
+            "le shell %s ne démarre pas (spawn en échec ?).",
+            pl->tab_label);
+
+        cdb_poll_finish(pl, note);
+        g_free(note);
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
 }
 
 static gboolean
@@ -2247,31 +2317,88 @@ llm_cdb_next(LlmTile *t)
     g_free(s);
 }
 
+/* Y a-t-il une VRAIE malformation /CDB:: dans la réponse ? Une mention
+ * du protocole dans la prose (ex. citation littérale « bash-N » avec le
+ * N majuscule, ou « COMMANDE » non remplacé) n'est PAS une tentative —
+ * c'est du texte explicatif. Logique inverse et plus sûre : on cherche
+ * les occurrences de /CDB::bash-<digit> qui ne sont PAS immédiatement
+ * suivies de ::" — toute autre forme (guillemets simples, N à 2 chiffres,
+ * séparateur manquant) est une vraie tentative bâclée. */
+static gboolean
+llm_cdb_malformed(const char *reply)
+{
+    static GRegex *re = NULL;
+    GMatchInfo    *mi = NULL;
+    gboolean      bad = FALSE;
+
+    if (re == NULL)
+        re = g_regex_new("/CDB::bash-(\\d)(?!::\\\")", 0, 0, NULL);
+    if (g_regex_match(re, reply, 0, &mi))
+        bad = TRUE;
+    g_match_info_free(mi);
+    return bad;
+}
+
 /* Détection des commandes /CDB:: d'une réponse. Protocole à 2 champs :
  * /CDB::bash-N::"commande" — la pagination se fait dans la commande
- * (head/tail/sed). TOUTES les commandes valides partent en file. */
+ * (head/tail/sed). TOUTES les commandes valides partient en file.
+ *
+ * Anti-double-détection : le buffer reply contient AUSSI le thinking
+ * (« 〔thinking〕 … 〔/thinking〕 »), où le modèle rédige souvent la même
+ * commande avant de l'écrire dans son contenu final. On scanne donc le
+ * texte SANS les blocs thinking, et on saute tout doublon exact déjà
+ * présent dans la file (même bash + même commande). */
 static gboolean
 llm_agent_detect(LlmTile *t, const char *reply)
 {
     static GRegex *re = NULL;
+    static GRegex *think_re = NULL;
     GMatchInfo    *mi = NULL;
     gboolean      found = FALSE;
+    char          *scan;
 
     if (re == NULL)
         re = g_regex_new("/CDB::bash-(\\d)::\"([^\"]*)\"", 0, 0, NULL);
-    if (g_regex_match(re, reply, 0, &mi)) {
+    if (think_re == NULL)
+        /* DOTALL indispensable : le thinking s'étale sur des dizaines
+         * de lignes ; sans lui, .*? s'arrête en fin de première ligne,
+         * le tag fermant n'est jamais atteint et les commandes brouillon
+         * du thinking restent détectées (bug constaté : 3 exécutions). */
+        think_re = g_regex_new("〔thinking〕.*?〔/thinking〕",
+                               G_REGEX_DOTALL, 0, NULL);
+    scan = g_regex_replace_literal(think_re, reply, -1, 0, " ", 0, NULL);
+    if (g_regex_match(re, scan != NULL ? scan : reply, 0, &mi)) {
         found = TRUE;
         do {
-            CdbCmdSpec *s = g_new0(CdbCmdSpec, 1);
+            CdbCmdSpec *s;
+            char       *cmd = g_match_info_fetch(mi, 2);
+            int         tab = atoi(g_match_info_fetch(mi, 1));
+            gboolean    dup = FALSE;
 
-            s->tab = atoi(g_match_info_fetch(mi, 1));
-            s->cmd = g_match_info_fetch(mi, 2);
-            if (t->cmd_queue == NULL)
-                t->cmd_queue = g_queue_new();
-            g_queue_push_tail(t->cmd_queue, s);
+            /* Doublon exact déjà en file (ou en cours) : on ignore. */
+            if (t->cmd_queue != NULL)
+                for (GList *l = t->cmd_queue->head; l != NULL; l = l->next) {
+                    CdbCmdSpec *q = l->data;
+
+                    if (q->tab == tab && g_strcmp0(q->cmd, cmd) == 0) {
+                        dup = TRUE;
+                        break;
+                    }
+                }
+            if (!dup) {
+                s = g_new0(CdbCmdSpec, 1);
+
+                s->tab = tab;
+                s->cmd = cmd;
+                if (t->cmd_queue == NULL)
+                    t->cmd_queue = g_queue_new();
+                g_queue_push_tail(t->cmd_queue, s);
+            } else
+                g_free(cmd);
         } while (g_match_info_next(mi, NULL));
     }
     g_match_info_free(mi);
+    g_free(scan);
 
     if (found)
         llm_cdb_next(t);
