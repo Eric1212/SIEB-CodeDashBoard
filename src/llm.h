@@ -108,8 +108,11 @@ void llm_retry429_load(LlmRetry429 *out);
 /* Sauvegarde la config de retry (bornes forcées : 0-5000 et 10-100000). */
 void llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms);
 
-/* Crée la VUE de la tuile « llm » (historique + saisie). */
+/* Crée la VUE de la tuile « llm » (historique + saisie).
+ * roots/multi_paths : résolution du projet courant pour les
+ * substitutions [PROJET]/[CHEMIN] du prompt (empruntés à App). */
 GtkWidget *llm_tile_new(const LlmConfig *cfg,
-                        GActionGroup *actions);
+                        GActionGroup *actions,
+                        GListStore *roots, GHashTable *multi_paths);
 
 #endif /* CDB_LLM_H */

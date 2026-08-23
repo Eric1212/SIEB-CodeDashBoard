@@ -12,6 +12,7 @@
 #include "session.h"
 #include "mdview.h"
 #include "bashpanel.h"
+#include "roots.h"
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
@@ -937,6 +938,8 @@ typedef struct {
     GPtrArray   *sections;  /* ModelSection[] par provider */
     gboolean     menu_built;/* popover peuplé au premier ouvert */
     GActionGroup *actions;  /* pour « Configurer… » (ref ; emprunté sinon) */
+    GListStore  *roots;     /* résolution du projet courant (empruntés, */
+    GHashTable  *multi_paths; /* comme BashPanel) */
     GQueue      *cmd_queue; /* commandes /CDB:: valides en attente */
     GQueue      *cdb_results; /* résultats pendants {label,text} */
     int          cdb_retries; /* malformations consécutives (max 3) */
@@ -1305,9 +1308,6 @@ str_replace_all(const char *s, const char *old_s, const char *new_s)
     "Après exécution, CDB répondra dans le fil avec le résultat demandé : " \
     "continue ton travail à partir de là.\n"
 
-/* Charge prompts/default.txt de la session ; substitue [PROJET]/[CHEMIN]
- * depuis le répertoire courant ; fallback : défaut intégré.
- * Chaîne à libérer (g_free). */
 /* Texte BRUT du prompt (sans substitutions) : fichier s'il existe,
  * sinon le défaut intégré. Pour l'éditeur Settings → Harness.
  * Chaîne à libérer (g_free). */
@@ -1343,23 +1343,30 @@ llm_persona_save(const char *text)
 }
 
 /* Texte final pour l'envoi : raw + substitutions [PROJET]/[CHEMIN]
- * résolues depuis le répertoire courant. */
+ * résolues depuis le projet actuellement sélectionné (comme les
+ * terminaux au spawn) ; à défaut, le répertoire courant. */
 static char *
-llm_persona_load(void)
+llm_persona_load(LlmTile *t)
 {
-    char       *raw = llm_persona_raw();
-    const char *proj_path;
-    char       *proj_name;
-    char       *s1, *s2;
+    char *raw = llm_persona_raw();
+    char *proj_path;
+    char *proj_name;
+    char *s1, *s2;
 
-    proj_path = g_getenv("CDB_TEST_PROJET");
-    proj_path = proj_path != NULL ? proj_path : g_get_current_dir();
+    /* Priorité : CDB_TEST_PROJET > projet sélectionné > cwd. */
+    proj_path = g_strdup(g_getenv("CDB_TEST_PROJET"));
+    if (proj_path == NULL)
+        proj_path = roots_current_project(t->roots, t->multi_paths);
+    if (proj_path == NULL)
+        proj_path = g_get_current_dir();
+
     proj_name = g_path_get_basename(proj_path);
     s1 = str_replace_all(raw, "[PROJET]", proj_name);
     s2 = str_replace_all(s1, "[CHEMIN]", proj_path);
     g_free(raw);
     g_free(s1);
     g_free(proj_name);
+    g_free(proj_path);
     return s2;
 }
 
@@ -2263,9 +2270,9 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     json_builder_set_member_name(builder, "messages");
     json_builder_begin_array(builder);
 
-    /* [0] Persona CDB. */
+    /* [0] Persona CDB (projet courant résolu à CHAQUE envoi). */
     {
-        char *persona = llm_persona_load();
+        char *persona = llm_persona_load(t);
 
         json_builder_begin_object(builder);
         json_builder_set_member_name(builder, "role");
@@ -2398,14 +2405,12 @@ on_llm_entry_activate(GtkEntry G_GNUC_UNUSED *entry, gpointer data)
 }
 
 GtkWidget *
-llm_tile_new(const LlmConfig *cfg, GActionGroup *actions)
+llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
+             GListStore *roots, GHashTable *multi_paths)
 {
     GtkWidget *box;
     GtkWidget *scroll;
-    LlmTile   *t = g_new0(LlmTile, 1);
-
-    t->cfg = (LlmConfig *)cfg;
-    t->actions = actions != NULL ? g_object_ref(actions) : NULL;
+    LlmTile   *t;
 
     if (cfg == NULL) {
         /* Pas de config : aide au lieu du chat. */
@@ -2419,6 +2424,14 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions)
         gtk_widget_set_valign(lbl, GTK_ALIGN_CENTER);
         return lbl;
     }
+
+    t = g_new0(LlmTile, 1);
+    t->cfg = (LlmConfig *)cfg;
+    t->actions = actions != NULL ? g_object_ref(actions) : NULL;
+    /* Projet courant pour [PROJET]/[CHEMIN] : mêmes références que
+     * BashPanel (possédées par App, vivent plus longtemps que la tuile). */
+    t->roots = roots;
+    t->multi_paths = multi_paths;
 
     t->hist = gtk_text_buffer_new(NULL);
     t->view = gtk_text_view_new_with_buffer(t->hist);
