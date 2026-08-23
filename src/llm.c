@@ -36,6 +36,8 @@ llm_provider_default_url(const char *provider)
         return "https://openrouter.ai/api/v1";
     if (g_strcmp0(provider, "OpenCode") == 0)
         return "https://opencode.ai/zen/v1";
+    if (g_strcmp0(provider, "HyperCharm") == 0)
+        return "https://hyper.charm.land/v1";
     return NULL;
 }
 
@@ -277,12 +279,21 @@ models_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
                     JsonObject *m = json_array_get_object_element(arr, i);
 
                     /* Nom lisible si le provider en fournit un
-                     * (OpenRouter : « name »), sinon NULL → slug. */
+                     * (OpenRouter : « name », HyperCharm :
+                     * « display_name »), sinon NULL → slug. */
                     models[i].id = g_strdup(
                         json_object_get_string_member(m, "id"));
                     if (json_object_has_member(m, "name")) {
                         const char *nm =
                             json_object_get_string_member(m, "name");
+
+                        if (nm != NULL && nm[0] != '\0')
+                            models[i].name = g_strdup(nm);
+                    }
+                    if (models[i].name == NULL &&
+                        json_object_has_member(m, "display_name")) {
+                        const char *nm =
+                            json_object_get_string_member(m, "display_name");
 
                         if (nm != NULL && nm[0] != '\0')
                             models[i].name = g_strdup(nm);
@@ -375,6 +386,23 @@ llm_config_provider_object(const char *provider, JsonNode **root_node)
     if (provs == NULL || !json_object_has_member(provs, provider))
         return NULL;
     return json_object_get_object_member(provs, provider);
+}
+
+/* Clé API d'un provider (indépendant du provider actif). */
+char *
+llm_config_get_api_key(const char *provider)
+{
+    JsonObject *prov;
+    JsonNode   *root_node = NULL;
+    char       *key;
+
+    prov = llm_config_provider_object(provider, &root_node);
+    key = (prov != NULL && json_object_has_member(prov, "api_key"))
+              ? g_strdup(json_object_get_string_member(prov, "api_key"))
+              : NULL;
+    if (root_node != NULL)
+        json_node_unref(root_node);
+    return key;
 }
 
 char *
@@ -726,13 +754,13 @@ llm_config_load(void)
     cfg = g_new0(LlmConfig, 1);
     cfg->provider = g_strdup(prov_name);
 
-    /* Modèle actif (fallback : default_model du provider, puis
-     * stealth/ox-alpha — le modèle de référence CDB). */
+    /* Modèle actif : uniquement active.model. AUCUN repli — pas de
+     * « default_model » ni de modèle injecté d'office. */
     cfg->model = json_object_has_member(active, "model")
                  ? g_strdup(json_object_get_string_member(active, "model"))
                  : NULL;
 
-    /* Provider actif : api_url + api_key (+ default_model en repli). */
+    /* Provider actif : api_url + api_key. */
     if (!json_object_has_member(root, "providers")) {
         llm_config_free(cfg);
         cfg = NULL;
@@ -755,21 +783,14 @@ llm_config_load(void)
                        ? g_strdup(json_object_get_string_member(prov_obj,
                                                                 "api_key"))
                        : NULL;
-        if (cfg->model == NULL && json_object_has_member(prov_obj,
-                                                         "default_model"))
-            cfg->model = g_strdup(
-                json_object_get_string_member(prov_obj, "default_model"));
-    }
-
-    /* Repli final : modèle de référence CDB si rien de défini. */
-    if (cfg->model == NULL || cfg->model[0] == '\0') {
-        g_free(cfg->model);
-        cfg->model = g_strdup("stealth/ox-alpha");
     }
 
     /* Config incomplète = pas de chat. La clé est OPTIONNELLE
-     * (providers gratuits type OpenCode Zen). */
-    if (cfg->api_url == NULL || cfg->model == NULL) {
+     * (providers gratuits type OpenCode Zen). Le modèle peut être
+     * absent : il se choisit dans le menu de la tuile — la tuile
+     * reste utilisable, l'envoi est refusé tant qu'aucun modèle
+     * n'est actif. */
+    if (cfg->api_url == NULL) {
         llm_config_free(cfg);
         cfg = NULL;
     }
@@ -779,12 +800,13 @@ out:
     return cfg;
 }
 
-/* Sauvegarde (création/màj) d'un provider dans llm.json. Le fichier
- * existant est rechargé en arbre, modifié, réécrit — les autres
- * providers sont préservés. */
+/* Sauvegarde (création/màj) d'un provider dans llm.json : la clé.
+ * Le fichier existant est rechargé en arbre, modifié, réécrit — les
+ * autres providers sont préservés. « active » n'est JAMAIS réécrit
+ * (sauf première création, sans modèle) : le provider/modèle actifs
+ * se choisissent dans le menu de la tuile LLM (switch_active). */
 void
-llm_config_save_provider(const char *provider, const char *api_key,
-                         const char *default_model)
+llm_config_save_provider(const char *provider, const char *api_key)
 {
     char       *path = llm_config_path();
     JsonParser *parser = json_parser_new();
@@ -819,7 +841,10 @@ llm_config_save_provider(const char *provider, const char *api_key,
         json_object_set_object_member(provs, provider, prov);
     }
     json_object_set_string_member(prov, "api_key", api_key);
-    json_object_set_string_member(prov, "default_model", default_model);
+    /* Un éventuel « default_model » hérité de l'ancienne config est
+     * retiré : le mécanisme de repli n'existe plus. */
+    if (json_object_has_member(prov, "default_model"))
+        json_object_remove_member(prov, "default_model");
 
 /* URL par défaut si absente, selon le provider. */
     if (g_strcmp0(json_object_get_string_member(prov, "api_url"), "") == 0) {
@@ -829,12 +854,16 @@ llm_config_save_provider(const char *provider, const char *api_key,
             json_object_set_string_member(prov, "api_url", def);
     }
 
-    /* Provider actif + modèle actif. */
-    {
+    /* « active » n'existe pas encore (première sauvegarde) : poser le
+     * provider, SANS modèle — il sera choisi dans le menu de la tuile.
+     * S'il existe : on n'y touche PAS (un Enregistrer dans les Settings
+     * ne doit jamais changer ce avec quoi on chatte). */
+    if (!json_object_has_member(root, "active") ||
+        json_object_get_object_member(root, "active") == NULL) {
         JsonObject *active = json_object_new();
 
         json_object_set_string_member(active, "provider", provider);
-        json_object_set_string_member(active, "model", default_model);
+        json_object_set_string_member(active, "model", "");
         json_object_set_object_member(root, "active", active);
     }
 
@@ -1086,7 +1115,7 @@ on_llm_model_row_activated(GtkListBox G_GNUC_UNUSED *lb,
     if (id == NULL || prov == NULL || t->cfg == NULL)
         return;
     if (strcmp(prov, t->cfg->provider) == 0 &&
-        strcmp(id, t->cfg->model) == 0) {
+        g_strcmp0(id, t->cfg->model) == 0) {
         gtk_popover_popdown(GTK_POPOVER(t->model_pop));
         return; /* déjà actif */
     }
@@ -2297,6 +2326,18 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
         return;
     }
 
+    /* Sans modèle actif, pas d'envoi : le menu de la tuile est le seul
+     * endroit où l'on choisit un modèle (plus aucun repli implicite). */
+    if (t->cfg == NULL || t->cfg->model == NULL ||
+        t->cfg->model[0] == '\0') {
+        hist_cdb_announce(t,
+            "aucun modèle actif : choisissez-en un dans le menu de "
+            "modèle (bouton « ? ») au-dessus de la saisie.");
+        g_free(prompt);
+        t->busy = FALSE;
+        return;
+    }
+
     hist_render_actor_header(t, LLMACTOR_USER);
     hist_append(t, prompt);
     hist_render_actor_header(t, LLMACTOR_LLM);
@@ -2370,18 +2411,9 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions)
         /* Pas de config : aide au lieu du chat. */
         GtkWidget *lbl = gtk_label_new(
             "LLM non configuré.\n\n"
-            "Créez ~/.config/cdb/<session>/llm.json :\n"
-            "{\n"
-            "  \"providers\": {\n"
-            "    \"OpenRouter\": {\n"
-            "      \"api_url\": \"https://openrouter.ai/api/v1\",\n"
-            "      \"api_key\": \"sk-or-…\",\n"
-            "      \"default_model\": \"stealth/ox-alpha\"\n"
-            "    }\n"
-            "  },\n"
-            "  \"active\": { \"provider\": \"OpenRouter\",\n"
-            "               \"model\": \"stealth/ox-alpha\" }\n"
-            "}");
+            "Settings → LLM → Providers : renseignez un provider\n"
+            "(clé API), puis choisissez un modèle dans le menu\n"
+            "ci-dessous.");
 
         gtk_widget_set_halign(lbl, GTK_ALIGN_CENTER);
         gtk_widget_set_valign(lbl, GTK_ALIGN_CENTER);

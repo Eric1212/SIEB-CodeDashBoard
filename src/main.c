@@ -2678,7 +2678,7 @@ typedef struct SettingsSection {
 
 static void on_settings_section_toggled(GtkToggleButton *btn, gpointer data);
 static GtkWidget *build_settings_section(const SettingsSection *sec);
-static void on_provider_field_changed(GtkEditable *editable, gpointer data);
+static void on_provider_save_clicked(GtkButton *btn, gpointer data);
 static void on_allowed_models_changed(GtkEditable *editable,
                                       gpointer data);
 static GtkWidget *build_provider_form(const char *provider_name);
@@ -2723,6 +2723,8 @@ build_settings_section(const SettingsSection *sec)
         body = build_provider_form("OpenRouter");
     else if (g_strcmp0(sec->title, "OpenCode") == 0)
         body = build_provider_form("OpenCode");
+    else if (g_strcmp0(sec->title, "HyperCharm") == 0)
+        body = build_provider_form("HyperCharm");
     else if (g_strcmp0(sec->title, "429") == 0)
         body = build_harness_form();
     else if (g_strcmp0(sec->title, "Init-Prompt") == 0)
@@ -2759,42 +2761,22 @@ on_settings_section_toggled(GtkToggleButton *btn, gpointer G_GNUC_UNUSED data)
                            gtk_toggle_button_get_active(btn) ? "⌄" : "›");
 }
 
-/* Formulaire d'un provider LLM : api_key + default_model, pré-remplis
- * depuis llm.json, sauvegardés à chaque modification. */
-/* Sauvegarde llm.json à chaque modification d'un champ provider.
- * Le modèle déclencheur porte le nom du provider ; l'entry clé est
- * retrouvé via l'autre champ (data "provider-key-entry"). */
+/* Sauvegarde EXPLICITE d'un provider (bouton « Enregistrer ») :
+ * la clé, rien d'autre. « active » (provider/modèle du chat) n'est
+ * JAMAIS touché ici — il se choisit dans le menu de la tuile LLM.
+ * Une clé vide s'enregistre aussi (ex: OpenCode Zen sans clé) : les
+ * champs vides sont des informations volontaires. */
 static void
-on_provider_field_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
+on_provider_save_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
 {
-    GtkWidget  *entry = GTK_WIDGET(editable);
-    const char *provider = g_object_get_data(G_OBJECT(entry), "provider");
-    GtkWidget  *key_entry = g_object_get_data(G_OBJECT(entry),
-                                              "provider-key-entry");
-    GtkWidget  *model_entry = entry;
-    const char *key, *model;
+    GtkWidget  *w = GTK_WIDGET(btn);
+    const char *provider = g_object_get_data(G_OBJECT(w), "provider");
+    GtkWidget  *key_entry = g_object_get_data(G_OBJECT(w), "key-entry");
+    GtkWidget  *status = g_object_get_data(G_OBJECT(w), "status");
+    const char *key = gtk_editable_get_text(GTK_EDITABLE(key_entry));
 
-    if (key_entry == NULL) {
-        /* C'est l'entry clé : le modèle est l'autre objet. On retrouve
-         * la grille parente puis l'entry modèle par position. */
-        GtkWidget *grid = gtk_widget_get_parent(GTK_WIDGET(editable));
-
-        key_entry = entry;
-        model_entry = gtk_grid_get_child_at(GTK_GRID(grid), 1, 1);
-        g_object_set_data(G_OBJECT(model_entry), "provider",
-                          g_object_get_data(G_OBJECT(entry), "provider"));
-        g_object_set_data(G_OBJECT(model_entry), "provider-key-entry", entry);
-    }
-    /* Évite la sauvegarde pendant le pré-remplissage (pas de provider). */
-    if (provider == NULL)
-        return;
-    key = gtk_editable_get_text(GTK_EDITABLE(key_entry));
-    model = gtk_editable_get_text(GTK_EDITABLE(model_entry));
-    /* Pas de sauvegarde tant que le modèle est vide (évite d'écraser
-     * la config avec du vide pendant la saisie). */
-    if (model[0] == '\0')
-        return;
-    llm_config_save_provider(provider, key, model);
+    llm_config_save_provider(provider, key);
+    gtk_label_set_text(GTK_LABEL(status), "Enregistré \u2713");
 }
 
 /* ------------------------------------------------ */
@@ -3350,7 +3332,8 @@ build_provider_form(const char *provider_name)
     GtkWidget *key_entry = gtk_entry_new();
     GtkWidget *model_lbl = gtk_label_new("Modèles autorisés :");
     GtkWidget *model_entry = gtk_entry_new();
-    LlmConfig *cfg = llm_config_load();
+    GtkWidget *save_btn = gtk_button_new_with_label("Enregistrer");
+    GtkWidget *status = gtk_label_new("");
 
     gtk_widget_set_halign(key_lbl, GTK_ALIGN_START);
     gtk_widget_set_halign(model_lbl, GTK_ALIGN_START);
@@ -3364,17 +3347,27 @@ build_provider_form(const char *provider_name)
                                        "(optionnelle)");
         gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
                                        "(vide : tous les modèles)");
+    } else if (g_strcmp0(provider_name, "HyperCharm") == 0) {
+        gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry),
+                                       "clé HyperCharm…");
+        gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
+                                       "(vide : tous les modèles)");
     } else {
         gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry), "sk-or-v1-…");
         gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
                                        "(vide : tous les modèles)");
     }
 
-    if (cfg != NULL && g_strcmp0(cfg->provider, provider_name) == 0) {
-        if (cfg->api_key != NULL)
-            gtk_editable_set_text(GTK_EDITABLE(key_entry), cfg->api_key);
+    /* Préremplit la clé depuis llm.json — pour TOUS les providers,
+     * pas seulement l'actif (avant : la clé disparaissait dès que le
+     * provider cessait d'être actif). */
+    {
+        char *saved_key = llm_config_get_api_key(provider_name);
+
+        if (saved_key != NULL && saved_key[0] != '\0')
+            gtk_editable_set_text(GTK_EDITABLE(key_entry), saved_key);
+        g_free(saved_key);
     }
-    llm_config_free(cfg);
     /* Préremplit le filtre (indépendant du provider actif). */
     {
         char *filter = llm_config_get_allowed_models(provider_name);
@@ -3384,18 +3377,27 @@ build_provider_form(const char *provider_name)
         g_free(filter);
     }
 
-    g_object_set_data_full(G_OBJECT(key_entry), "provider",
-                           g_strdup(provider_name), g_free);
-    g_object_set_data(G_OBJECT(model_entry), "provider-key-entry", key_entry);
-    /* Le champ modèle connaît SON provider dès la construction. */
+    /* Le champ modèle connaît SON provider (pour le filtre direct). */
     g_object_set_data_full(G_OBJECT(model_entry), "provider",
                            g_strdup(provider_name), g_free);
-    g_signal_connect(key_entry, "changed",
-                     G_CALLBACK(on_provider_field_changed), NULL);
     /* Le champ modèles = FILTRE : sauvegarde même vide (tout autoriser),
      * sans toucher au provider/modèle actifs. */
     g_signal_connect(model_entry, "changed",
                      G_CALLBACK(on_allowed_models_changed), NULL);
+
+    /* Bouton Enregistrer : écrit la clé d'un coup (l'auto-save à la
+     * frappe perdait la clé). Ne touche JAMAIS au provider/modèle
+     * actifs — ça, c'est le menu de la tuile LLM qui le fait. */
+    gtk_widget_add_css_class(save_btn, "flat");
+    gtk_widget_set_halign(save_btn, GTK_ALIGN_START);
+    g_object_set_data_full(G_OBJECT(save_btn), "provider",
+                           g_strdup(provider_name), g_free);
+    g_object_set_data(G_OBJECT(save_btn), "key-entry", key_entry);
+    g_object_set_data(G_OBJECT(save_btn), "status", status);
+    g_signal_connect(save_btn, "clicked",
+                     G_CALLBACK(on_provider_save_clicked), NULL);
+    gtk_label_set_xalign(GTK_LABEL(status), 0.0);
+    gtk_widget_add_css_class(status, "dim-label");
 
     /* Suggestions de modèles depuis /models du provider : champ vide →
      * liste complète (focus ou icône), le popup reste disponible ensuite. */
@@ -3411,6 +3413,8 @@ build_provider_form(const char *provider_name)
     gtk_grid_attach(GTK_GRID(grid), key_entry, 1, 0, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), model_lbl, 0, 1, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), model_entry, 1, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), save_btn, 1, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), status, 1, 3, 1, 1);
     return grid;
 }
 
@@ -3419,7 +3423,7 @@ build_settings(App *app G_GNUC_UNUSED)
 {
     static const SettingsSection provider_subs[] = {
         { "OpenAi-Compatible", "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
-        { "HyperCharm",        "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+        { "HyperCharm",        NULL, NULL, 0 }, /* formulaire provider */
         { "OpenCode",          NULL, NULL, 0 }, /* formulaire provider */
         { "OpenRouter",        NULL, NULL, 0 }, /* formulaire provider */
     };

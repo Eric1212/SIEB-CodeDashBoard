@@ -6,15 +6,15 @@
  *     "providers": {
  *       "OpenRouter": {
  *         "api_url":      "https://openrouter.ai/api/v1",
- *         "api_key":      "sk-or-…",
- *         "default_model": "stealth/ox-alpha"
+ *         "api_key":      "sk-or-…"
  *       }
  *     },
  *     "active": { "provider": "OpenRouter", "model": "stealth/ox-alpha" }
  *   }
  *
- * Schéma providers inspiré du « openai_compatible » de Zed
- * (~/.config/zed/settings.json).
+ * « active » est le SEUL couple provider/modèle utilisé pour le chat ;
+ * il est écrit par switch_active (menu de la tuile), jamais par les
+ * formulaires Settings. Pas de « default_model » : aucun repli.
  */
 
 #ifndef CDB_LLM_H
@@ -22,7 +22,9 @@
 
 #include <gtk/gtk.h>
 
-/* Configuration LLM chargée depuis llm.json (possédée par App). */
+/* Configuration LLM chargée depuis llm.json (possédée par App).
+ * model peut être NULL/vide : aucun modèle actif tant que l'utilisateur
+ * n'en choisit pas un dans le menu de la tuile. */
 typedef struct {
     char *provider;        /* nom du provider actif ("OpenRouter") */
     char *model;           /* modèle actif ("stealth/ox-alpha") */
@@ -36,11 +38,10 @@ LlmConfig *llm_config_load(void);
 
 void llm_config_free(LlmConfig *cfg);
 
-/* Crée/met à jour le provider dans llm.json (api_key + default_model),
- * en préservant les autres providers ; positionne aussi « active ».
- * Crée le fichier s'il n'existe pas. */
-void llm_config_save_provider(const char *provider, const char *api_key,
-                              const char *default_model);
+/* Crée/met à jour le provider dans llm.json (api_key), en préservant
+ * les autres providers et « active » (posé seulement à la première
+ * création). Crée le fichier s'il n'existe pas. */
+void llm_config_save_provider(const char *provider, const char *api_key);
 
 /* Récupère la liste des modèles du provider (GET {api_url}/models).
  * Async : cb(ids, user_data) sur la boucle principale — ids = tableau
@@ -64,6 +65,10 @@ void llm_models_free(LlmModelInfo *models);
 
 /* URL de base d'un provider connu ; NULL si inconnu. */
 const char *llm_provider_default_url(const char *provider);
+
+/* Clé API sauvegardée d'un provider (indépendant du provider actif).
+ * get : chaîne g_strdup à libérer ; NULL si absente. */
+char *llm_config_get_api_key(const char *provider);
 
 /* Filtre de modèles autorisés du provider (chaîne brute : liste séparée
  * par virgules d'ids exacts). NULL/"" = tous les modèles.
