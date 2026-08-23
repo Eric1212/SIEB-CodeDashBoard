@@ -2141,6 +2141,39 @@ llm_cdb_ask(LlmTile *t, int tab, const char *cmd)
                                       hbar, anch);
 }
 
+/* Ouvre un nouveau tour de réponse du modèle : en-tête acteur, buffer
+ * de réponse remis à zéro, marque de streaming déplacée en fin de fil.
+ * INDISPENSABLE à la boucle agentique : sans remise à zéro, t->reply
+ * ré-accumule les réponses précédentes et llm_agent_detect re-compte
+ * indéfiniment les mêmes commandes /CDB::. Le déplacement de la marque
+ * évite aussi que hist_update_reply n'écrase les résultats CDB déjà
+ * livrés entre deux tours. */
+static void
+llm_turn_new(LlmTile *t)
+{
+    GtkTextIter end;
+
+    hist_render_actor_header(t, LLMACTOR_LLM);
+    g_string_truncate(t->reply, 0);
+    t->in_reasoning = FALSE;
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    if (t->reply_mark == NULL)
+        t->reply_mark = gtk_text_buffer_create_mark(t->hist, NULL,
+                                                    &end, TRUE);
+    else
+        gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
+}
+
+/* Re-interrogation du modèle après livraison des résultats. L'ouverture
+ * du tour neuf est faite par llm_send elle-même : chaque départ de
+ * requête réinitialise t->reply — c'est LE correctif du re-comptage
+ * infini des commandes /CDB::. */
+static void
+llm_cdb_requery(LlmTile *t)
+{
+    llm_send(t, NULL);
+}
+
 /* Loi d'Éric (anti-spam) : quand la file de commandes se vide, un
  * résultat antérieur contenu à 100 % dans un résultat plus récent du
  * même bash est jeté — seule la version la plus longue est livrée.
@@ -2156,12 +2189,12 @@ llm_cdb_results_flush(LlmTile *t)
 
     t->cdb_results = NULL;
     if (q == NULL) {
-        llm_send(t, NULL);
+        llm_cdb_requery(t);
         return;
     }
     if (g_queue_is_empty(q)) {
         g_queue_free(q);
-        llm_send(t, NULL);
+        llm_cdb_requery(t);
         return;
     }
 
@@ -2194,7 +2227,7 @@ llm_cdb_results_flush(LlmTile *t)
     g_free(drop);
     g_queue_free(q);
 
-    llm_send(t, NULL);
+    llm_cdb_requery(t);
 }
 
 /* Avance la file : commande suivante → approbation ; vide →
@@ -2246,7 +2279,12 @@ llm_agent_detect(LlmTile *t, const char *reply)
     return found;
 }
 
-/* Construit et envoie la requête chat/completions (stream=true). */
+/* Construit et envoie la requête chat/completions (stream=true).
+ * Ouvre un NOUVEAU tour de réponse : en-tête acteur, t->reply remis à
+ * zéro, marque de streaming déplacée en fin de fil. Sans cette remise
+ * à zéro, la boucle agentique ré-accumulait les réponses précédentes
+ * dans t->reply et llm_agent_detect redétectait indéfiniment les MÊMES
+ * commandes /CDB:: (comptage infini, exécutions multiples). */
 static void
 llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
 {
@@ -2254,6 +2292,7 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     JsonNode    *root_node;
     LlmRequest  *req = g_new0(LlmRequest, 1);
 
+    llm_turn_new(t);
     req->tile = t;
     req->attempt = 0;
     req->url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
@@ -2347,19 +2386,8 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 
     hist_render_actor_header(t, LLMACTOR_USER);
     hist_append(t, prompt);
-    hist_render_actor_header(t, LLMACTOR_LLM);
-    g_string_truncate(t->reply, 0);
-    t->in_reasoning = FALSE;
-    {
-        GtkTextIter end;
-
-        gtk_text_buffer_get_end_iter(t->hist, &end);
-        if (t->reply_mark == NULL)
-            t->reply_mark = gtk_text_buffer_create_mark(t->hist, NULL,
-                                                        &end, TRUE);
-        else
-            gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
-    }
+    /* llm_send ouvre lui-même le tour (llm_turn_new) : pas d'appel ici,
+     * sinon l'en-tête « Claude » serait rendu deux fois. */
     gtk_editable_set_text(GTK_EDITABLE(t->entry), "");
     t->cdb_retries = 0; /* nouveau tour : compteur malformations reset */
     history_push(t, LLMACTOR_USER, FALSE, prompt);
