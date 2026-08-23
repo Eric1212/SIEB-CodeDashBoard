@@ -1,8 +1,9 @@
 # Binaire compilé
 cdb
 
-# Objets
+# Objets + dépendances générées par -MMD
 *.o
+*.d
 
 # Éditeurs / système
 .vscode/
