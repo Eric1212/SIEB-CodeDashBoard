@@ -20,6 +20,7 @@
 #include <libsoup/soup.h>
 #include <glib/gstdio.h>
 #include <string.h>
+#include <gdk/gdkkeysyms.h>
 
 /* ------------------------------------------------------------------ */
 /* Config                                                             */
@@ -3903,6 +3904,47 @@ on_llm_scroll(GtkAdjustment *adj, gpointer data)
     t->follow = (val + page >= upper - 20.0);
 }
 
+/* Home/End dans l'historique : scroll haut/bas, sans déplacer le
+ * curseur ni casser une sélection. La phase CAPTURE intercepte la
+ * touche avant les bindings par défaut de GtkTextView. */
+static gboolean
+on_llm_hist_key(GtkEventControllerKey G_GNUC_UNUSED *ctrl,
+                guint keyval,
+                guint G_GNUC_UNUSED keycode,
+                GdkModifierType state,
+                gpointer data)
+{
+    LlmTile *t = data;
+    double   upper, page;
+
+    if (t == NULL || t->adj == NULL)
+        return FALSE;
+
+    /* Home/End simples ou Ctrl+Home/Ctrl+End. On ignore les autres
+     * combinaisons modifiées pour laisser GTK gérer sélection/actions. */
+    if ((state & GDK_SHIFT_MASK) != 0)
+        return FALSE;
+    if ((state & GDK_CONTROL_MASK) == 0 &&
+        (state & ~GDK_CONTROL_MASK) != 0)
+        return FALSE;
+
+    switch (keyval) {
+    case GDK_KEY_Home:
+    case GDK_KEY_KP_Home:
+        gtk_adjustment_set_value(t->adj, 0.0);
+        return TRUE;
+    case GDK_KEY_End:
+    case GDK_KEY_KP_End:
+        t->follow = TRUE;
+        upper = gtk_adjustment_get_upper(t->adj);
+        page = gtk_adjustment_get_page_size(t->adj);
+        gtk_adjustment_set_value(t->adj, upper - page);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
 /* Détachement FRANC : dès qu'Éric touche la scrollbar, le suivi auto
  * est coupé — pas de course entre le geste et les rappels du stream
  * (avec un long contexte, le seuil de 20 px seul laisse le collage
@@ -3975,6 +4017,17 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     t->adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroll));
     g_signal_connect(t->adj, "value-changed",
                      G_CALLBACK(on_llm_scroll), t);
+
+    /* Home/End : scroll explicite de l'historique. */
+    {
+        GtkEventController *key = gtk_event_controller_key_new();
+
+        gtk_event_controller_set_propagation_phase(
+            key, GTK_PHASE_CAPTURE);
+        g_signal_connect(key, "key-pressed",
+                         G_CALLBACK(on_llm_hist_key), t);
+        gtk_widget_add_controller(t->hist_view, key);
+    }
     /* Toute pression sur la scrollbar détache le suivi immédiatement. */
     {
         GtkWidget         *sb =
