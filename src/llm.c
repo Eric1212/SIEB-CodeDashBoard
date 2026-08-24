@@ -2452,6 +2452,7 @@ llm_turn_new(LlmTile *t)
 
     hist_render_actor_header(t, LLMACTOR_LLM);
     g_string_truncate(t->reply, 0);
+    md_thinking_reset(t->hist);
     t->in_reasoning = FALSE;
     gtk_text_buffer_get_end_iter(t->hist, &end);
     if (t->reply_mark == NULL)
@@ -2903,6 +2904,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     t->hist = gtk_text_buffer_new(NULL);
     t->view = gtk_text_view_new_with_buffer(t->hist);
     t->hist_view = t->view;
+    md_thinking_attach(t->hist, t->hist_view);
     gtk_text_view_set_editable(GTK_TEXT_VIEW(t->view), FALSE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(t->view), GTK_WRAP_WORD_CHAR);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(t->view), FALSE);
