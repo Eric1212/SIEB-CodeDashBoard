@@ -125,9 +125,12 @@ void llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms);
 
 /* Crée la VUE de la tuile « llm » (historique + saisie).
  * roots/multi_paths : résolution du projet courant pour les
- * substitutions [PROJET]/[CHEMIN] du prompt (empruntés à App). */
+ * substitutions [PROJET]/[CHEMIN] du prompt (empruntés à App).
+ * modal_count : compteur de modales d'App (modale « Voir le JSON »,
+ * limité à MODAL_MAX — emprunté). */
 GtkWidget *llm_tile_new(const LlmConfig *cfg,
                         GActionGroup *actions,
-                        GListStore *roots, GHashTable *multi_paths);
+                        GListStore *roots, GHashTable *multi_paths,
+                        int *modal_count);
 
 #endif /* CDB_LLM_H */

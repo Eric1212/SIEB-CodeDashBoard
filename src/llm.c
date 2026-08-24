@@ -12,6 +12,8 @@
 #include "session.h"
 #include "mdview.h"
 #include "bashpanel.h"
+#include "modal.h"
+#include "llmslots.h"
 #include "roots.h"
 
 #include <json-glib/json-glib.h>
@@ -1030,6 +1032,8 @@ typedef struct {
     GtkTextMark *reply_mark;/* marque de fin de la réponse en streaming */
     GArray      *history;   /* LlmMsg[] : fil de conversation envoyé */
     GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
+    GtkWidget   *slots_btn; /* bouton menu persistance (slots JSON) */
+    int         *modal_count; /* compteur de modales d'App (emprunté) */
     GtkWidget   *model_pop; /* popover : recherche + sections provider */
     GtkWidget   *model_search; /* filtre live des rangées */
     GtkWidget   *rows_box;  /* conteneur vertical des sections */
@@ -1078,6 +1082,13 @@ static void llm_model_chevron_update(GtkWidget *popover, gpointer data);
 static void llm_cdb_polls_purge(LlmTile *t);
 static void llm_cdb_deliver(LlmTile *t, const char *text);
 static gboolean llm_cdb_malformed(const char *reply);
+
+/* Persistance slots (menu du bouton folder-templates). */
+static void llm_slots_view(LlmTile *t);
+static void llm_slots_save_dialog(LlmTile *t);
+static void llm_slots_load_dialog(LlmTile *t);
+static void llm_slots_clear_dialog(LlmTile *t);
+static void llm_slots_import_dialog(LlmTile *t);
 
 static void
 llm_tile_free(gpointer data)
@@ -2852,34 +2863,17 @@ llm_agent_detect(LlmTile *t, const char *reply)
     return found;
 }
 
-/* Construit et envoie la requête chat/completions (stream=true).
- * Ouvre un NOUVEAU tour de réponse : en-tête acteur, t->reply remis à
- * zéro, marque de streaming déplacée en fin de fil. Sans cette remise
- * à zéro, la boucle agentique ré-accumulait les réponses précédentes
- * dans t->reply et llm_agent_detect redétectait indéfiniment les MÊMES
- * commandes /CDB:: (comptage infini, exécutions multiples). */
-static void
-llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
+/* Construit le body chat/completions TEL qu'il serait envoyé à
+ * l'instant T : persona re-résolu avec le projet courant + tout le
+ * fil non-local. String g_strdup (à g_free). Utilisé par llm_send()
+ * ET par le menu slots (voir / sauvegarder) — garantie d'identité
+ * octet pour octet avec la requête réseau. */
+static char *
+llm_body_build(LlmTile *t)
 {
     JsonBuilder *builder;
     JsonNode    *root_node;
-    LlmRequest  *req = g_new0(LlmRequest, 1);
-
-    req->pending = g_string_new(NULL); /* réassemblage des lignes SSE */
-    llm_turn_new(t);
-    /* Cancellable FRAIS par requête : l'ancien peut rester dans l'état
-     * « annulé » (un GCancellable annulé le reste). Flag stop aussi. */
-    t->stop_requested = FALSE;
-    if (t->cancel != NULL)
-        g_object_unref(t->cancel);
-    t->cancel = g_cancellable_new();
-    t->cur_req = req;
-    req->tile = t;
-    req->attempt = 0;
-    req->url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
-
-    if (t->cfg->api_key != NULL && t->cfg->api_key[0] != '\0')
-        req->auth = g_strdup_printf("Bearer %s", t->cfg->api_key);
+    char        *out;
 
     builder = json_builder_new();
     json_builder_begin_object(builder);
@@ -2928,9 +2922,43 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     json_builder_end_array(builder);
     json_builder_end_object(builder);
     root_node = json_builder_get_root(builder);
-    req->body = json_to_string(root_node, FALSE);
+    out = json_to_string(root_node, FALSE);
     json_node_unref(root_node);
     g_object_unref(builder);
+    return out;
+}
+
+/* Construit et envoie la requête chat/completions (stream=true).
+ * Ouvre un NOUVEAU tour de réponse : en-tête acteur, t->reply remis à
+ * zéro, marque de streaming déplacée en fin de fil. Sans cette remise
+ * à zéro, la boucle agentique ré-accumulait les réponses précédentes
+ * dans t->reply et llm_agent_detect redétectait indéfiniment les MÊMES
+ * commandes /CDB:: (comptage infini, exécutions multiples). */
+static void
+llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
+{
+    LlmRequest *req = g_new0(LlmRequest, 1);
+
+    req->pending = g_string_new(NULL); /* réassemblage des lignes SSE */
+    llm_turn_new(t);
+    /* Cancellable FRAIS par requête : l'ancien peut rester dans l'état
+     * « annulé » (un GCancellable annulé le reste). Flag stop aussi. */
+    t->stop_requested = FALSE;
+    if (t->cancel != NULL)
+        g_object_unref(t->cancel);
+    t->cancel = g_cancellable_new();
+    t->cur_req = req;
+    req->tile = t;
+    req->attempt = 0;
+    req->url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
+
+    if (t->cfg->api_key != NULL && t->cfg->api_key[0] != '\0')
+        req->auth = g_strdup_printf("Bearer %s", t->cfg->api_key);
+
+    /* Le body est construit par llm_body_build (même code que la vue
+     * slots) puis persisté dans last.json : trace exacte de l'envoi. */
+    req->body = llm_body_build(t);
+    llm_slots_last_save(req->body);
 
     llm_send_attempt(req);
 }
@@ -2966,6 +2994,693 @@ llm_entry_resize(LlmTile *t)
     /* ~19 px par ligne : hauteur de ligne + padding (mesuré GTK défaut). */
     gtk_scrolled_window_set_min_content_height(
         GTK_SCROLLED_WINDOW(t->entry_scroll), lines * 19 + 12);
+}
+
+/* ------------------------------------------------------------------ */
+/* Persistance slots (JSON envoyé)                                    */
+/* ------------------------------------------------------------------ */
+
+/* Fenêtre top-level de la tuile (parent des dialogues). */
+static GtkWindow *
+tile_window(LlmTile *t)
+{
+    GtkRoot *root = gtk_widget_get_root(t->view);
+
+    return GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL;
+}
+
+/* Filtre insert-text : chiffres uniquement (sélecteurs 0-999). */
+static void
+on_digits_only_insert(GtkEditable *editable, const char *text, gint len,
+                      gint G_GNUC_UNUSED *position, gpointer G_GNUC_UNUSED data)
+{
+    if (len < 0)
+        len = (gint)strlen(text);
+    for (gint i = 0; i < len; i++) {
+        if (!g_ascii_isdigit(text[i])) {
+            g_signal_stop_emission_by_name(editable, "insert-text");
+            return;
+        }
+    }
+}
+
+typedef struct {
+    GtkWindow *dialog;
+    int        result; /* -1 = annulé / invalide */
+} NumPickCtx;
+
+static void
+on_num_pick_ok(GtkButton G_GNUC_UNUSED *b, gpointer data)
+{
+    NumPickCtx *ctx = data;
+    GtkWidget  *entry = g_object_get_data(G_OBJECT(ctx->dialog), "entry");
+    const char *txt = gtk_editable_get_text(GTK_EDITABLE(entry));
+    char       *end;
+    long        v;
+
+    v = strtol(txt, &end, 10);
+    if (*end != '\0' || txt[0] == '\0' || v < 0 || v > 999)
+        ctx->result = -1;
+    else
+        ctx->result = (int)v;
+    gtk_window_destroy(GTK_WINDOW(ctx->dialog));
+}
+
+static void
+on_num_pick_cancel(GtkButton G_GNUC_UNUSED *b, gpointer data)
+{
+    NumPickCtx *ctx = data;
+
+    ctx->result = -1;
+    gtk_window_destroy(GTK_WINDOW(ctx->dialog));
+}
+
+static void
+on_num_pick_activate(GtkEntry G_GNUC_UNUSED *e, gpointer data)
+{
+    on_num_pick_ok(NULL, data);
+}
+
+/* Dialogue BLOQUANT : un numéro 0-999. Renvoie -1 si annulé. */
+static int
+num_pick_dialog(GtkWindow *parent, const char *title, const char *label)
+{
+    NumPickCtx ctx = { NULL, -1 };
+    GtkWidget *win, *box, *lbl, *entry, *row, *cancel, *ok;
+    GMainLoop *loop;
+
+    win = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(win), title);
+    gtk_window_set_transient_for(GTK_WINDOW(win), parent);
+    gtk_window_set_modal(GTK_WINDOW(win), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
+    gtk_window_set_default_size(GTK_WINDOW(win), 320, -1);
+
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_top(box, 16);
+    gtk_widget_set_margin_bottom(box, 12);
+    gtk_widget_set_margin_start(box, 16);
+    gtk_widget_set_margin_end(box, 16);
+    gtk_window_set_child(GTK_WINDOW(win), box);
+
+    lbl = gtk_label_new(label);
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+    gtk_box_append(GTK_BOX(box), lbl);
+
+    entry = gtk_entry_new();
+    gtk_entry_set_max_length(GTK_ENTRY(entry), 3);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "0");
+    g_signal_connect(entry, "insert-text",
+                     G_CALLBACK(on_digits_only_insert), NULL);
+    gtk_box_append(GTK_BOX(box), entry);
+
+    row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_halign(row, GTK_ALIGN_END);
+    cancel = gtk_button_new_with_label("Annuler");
+    ok = gtk_button_new_with_label("Valider");
+    gtk_widget_add_css_class(ok, "suggested-action");
+    g_signal_connect(cancel, "clicked", G_CALLBACK(on_num_pick_cancel), &ctx);
+    g_signal_connect(ok, "clicked", G_CALLBACK(on_num_pick_ok), &ctx);
+    g_signal_connect(entry, "activate", G_CALLBACK(on_num_pick_activate), &ctx);
+    gtk_box_append(GTK_BOX(row), cancel);
+    gtk_box_append(GTK_BOX(row), ok);
+    gtk_box_append(GTK_BOX(box), row);
+
+    g_object_set_data(G_OBJECT(win), "entry", entry);
+    ctx.dialog = GTK_WINDOW(win);
+
+    loop = g_main_loop_new(NULL, FALSE);
+    g_signal_connect_swapped(win, "destroy", G_CALLBACK(g_main_loop_quit),
+                             loop);
+    gtk_window_present(GTK_WINDOW(win));
+    gtk_widget_grab_focus(entry);
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
+    return ctx.result;
+}
+
+/* Dialogue BLOQUANT de confirmation. `destructive` style le bouton OK. */
+typedef struct {
+    GtkWindow *dialog;
+    gboolean   ok;
+} ConfirmCtx;
+
+static void
+on_confirm_yes(GtkButton G_GNUC_UNUSED *b, gpointer data)
+{
+    ConfirmCtx *ctx = data;
+
+    ctx->ok = TRUE;
+    gtk_window_destroy(ctx->dialog);
+}
+
+static void
+on_confirm_no(GtkButton G_GNUC_UNUSED *b, gpointer data)
+{
+    ConfirmCtx *ctx = data;
+
+    gtk_window_destroy(ctx->dialog);
+}
+
+static gboolean
+confirm_dialog(GtkWindow *parent, const char *title, const char *msg,
+               const char *ok_label, gboolean destructive)
+{
+    ConfirmCtx ctx = { NULL, FALSE };
+    GtkWidget *win, *box, *lbl, *row, *cancel, *ok;
+    GMainLoop *loop;
+
+    win = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(win), title);
+    gtk_window_set_transient_for(GTK_WINDOW(win), parent);
+    gtk_window_set_modal(GTK_WINDOW(win), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
+    gtk_window_set_default_size(GTK_WINDOW(win), 340, -1);
+
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_top(box, 16);
+    gtk_widget_set_margin_bottom(box, 12);
+    gtk_widget_set_margin_start(box, 16);
+    gtk_widget_set_margin_end(box, 16);
+    gtk_window_set_child(GTK_WINDOW(win), box);
+
+    lbl = gtk_label_new(msg);
+    gtk_label_set_wrap(GTK_LABEL(lbl), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+    gtk_box_append(GTK_BOX(box), lbl);
+
+    row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_halign(row, GTK_ALIGN_END);
+    cancel = gtk_button_new_with_label("Annuler");
+    ok = gtk_button_new_with_label(ok_label);
+    gtk_widget_add_css_class(ok, destructive ? "destructive-action"
+                                             : "suggested-action");
+    g_signal_connect(cancel, "clicked", G_CALLBACK(on_confirm_no), &ctx);
+    g_signal_connect(ok, "clicked", G_CALLBACK(on_confirm_yes), &ctx);
+    gtk_box_append(GTK_BOX(row), cancel);
+    gtk_box_append(GTK_BOX(row), ok);
+    gtk_box_append(GTK_BOX(box), row);
+
+    ctx.dialog = GTK_WINDOW(win);
+
+    loop = g_main_loop_new(NULL, FALSE);
+    g_signal_connect_swapped(win, "destroy", G_CALLBACK(g_main_loop_quit),
+                             loop);
+    gtk_window_present(GTK_WINDOW(win));
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
+    return ctx.ok;
+}
+
+/* Bouton « Copier » de la modale Voir : presse-papier = JSON BRUT
+ * (pas la version pretty). */
+static void
+on_view_copy_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    GtkWindow    *win = data;
+    const char   *raw = g_object_get_data(G_OBJECT(win), "raw-json");
+
+    if (raw == NULL)
+        return;
+    gdk_clipboard_set_text(gtk_widget_get_clipboard(GTK_WIDGET(win)), raw);
+}
+
+/* 1 — Voir le JSON tel qu'il serait envoyé à l'instant T (Q2 : body
+ * reconstruit live, identique octet pour octet à l'envoi). */
+static void
+llm_slots_view(LlmTile *t)
+{
+    char          *raw = llm_body_build(t);
+    char          *pretty;
+    JsonParser    *parser;
+    GError        *error = NULL;
+    GtkWidget     *scroll, *text_view, *titlebar, *copy_btn;
+    GtkWindow     *win;
+    GtkTextBuffer *buf;
+
+    parser = json_parser_new();
+    if (json_parser_load_from_data(parser, raw, -1, &error)) {
+        pretty = json_to_string(json_parser_get_root(parser), TRUE);
+    } else {
+        /* Ne devrait jamais arriver (sortie de json_to_string). */
+        pretty = g_strdup_printf("/* JSON invalide : %s — brut : */\n%s",
+                                 error->message, raw);
+        g_clear_error(&error);
+    }
+    g_object_unref(parser);
+
+    buf = gtk_text_buffer_new(NULL);
+    gtk_text_buffer_set_text(buf, pretty, -1);
+    g_free(pretty);
+    text_view = gtk_text_view_new_with_buffer(buf);
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(text_view), FALSE);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(text_view), TRUE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(text_view), GTK_WRAP_NONE);
+
+    scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                                   GTK_POLICY_AUTOMATIC,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), text_view);
+    gtk_widget_set_size_request(scroll, 640, 480);
+
+    titlebar = gtk_header_bar_new();
+    copy_btn = gtk_button_new_with_label("Copier");
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(titlebar), copy_btn);
+
+    if (!modal_open(tile_window(t), t->modal_count, titlebar, scroll,
+                    &win)) {
+        g_object_ref_sink(scroll);
+        g_object_unref(scroll);
+        g_object_ref_sink(titlebar);
+        g_object_unref(titlebar);
+        g_free(raw);
+        hist_cdb_announce(t,
+            "limite de modales atteinte (4) : fermez-en une d'abord.");
+        return;
+    }
+    gtk_window_set_title(win, "JSON — tel qu'envoyé");
+    /* La copie porte sur le JSON BRUT ; libéré avec la fenêtre. */
+    g_object_set_data_full(G_OBJECT(win), "raw-json", raw, g_free);
+    g_signal_connect(copy_btn, "clicked",
+                     G_CALLBACK(on_view_copy_clicked), win);
+}
+
+/* 2 — Sauvegarder le body courant (llm_body_build) dans un slot. */
+static void
+llm_slots_save_dialog(LlmTile *t)
+{
+    GtkWindow *parent = tile_window(t);
+    int        slot;
+    char      *body;
+    char      *msg;
+
+    slot = num_pick_dialog(parent, "Sauvegarder dans un slot",
+                           "Numéro de slot (0-999) :");
+    if (slot < 0)
+        return;
+    if (llm_slots_exists(slot)) {
+        char *q = g_strdup_printf("Le slot %d existe déjà. L'écraser ?",
+                                  slot);
+
+        if (!confirm_dialog(parent, "Slot occupé", q, "Écraser", TRUE)) {
+            g_free(q);
+            return;
+        }
+        g_free(q);
+    }
+    body = llm_body_build(t);
+    if (llm_slots_save(slot, body)) {
+        msg = g_strdup_printf("Slot %d sauvegardé.", slot);
+        hist_cdb_announce(t, msg);
+    } else {
+        msg = g_strdup_printf("Échec de la sauvegarde du slot %d.", slot);
+        hist_cdb_announce(t, msg);
+    }
+    g_free(msg);
+    g_free(body);
+}
+
+/* Vide t->history (les contenus) sans toucher au GArray. */
+static void
+llm_history_wipe(LlmTile *t)
+{
+    for (guint i = 0; i < t->history->len; i++) {
+        LlmMsg *m = &g_array_index(t->history, LlmMsg, i);
+
+        g_free(m->content);
+    }
+    g_array_set_size(t->history, 0);
+}
+
+/* Purge les files /CDB:: (elles référençaient l'ancien fil). */
+static void
+llm_queues_purge(LlmTile *t)
+{
+    if (t->cmd_queue != NULL) {
+        for (GList *l = t->cmd_queue->head; l != NULL; l = l->next) {
+            CdbCmdSpec *s = l->data;
+
+            g_free(s->cmd);
+            g_free(s);
+        }
+        g_queue_free(t->cmd_queue);
+        t->cmd_queue = NULL;
+    }
+    if (t->cdb_results != NULL) {
+        for (GList *l = t->cdb_results->head; l != NULL; l = l->next) {
+            CdbResult *r = l->data;
+
+            g_free(r->label);
+            g_free(r->text);
+            g_free(r);
+        }
+        g_queue_free(t->cdb_results);
+        t->cdb_results = NULL;
+    }
+}
+
+/* 3 — Charger un slot : IMPERSONNALISATION — le fil d'avant n'existe
+ * plus. Wipe complet (history, vue, saisie, files /CDB::, état de
+ * streaming) puis repeuplement depuis le tableau messages :
+ *   system [0]   → sauté (persona ré-injecté live à chaque envoi) ;
+ *   system autre → CDB, préfixe « [CDB] » retiré (fidélité du
+ *                  round-trip : llm_body_build le rajoutera) ;
+ *   assistant    → LLM (rendu markdown) ;
+ *   user/autre   → USER. */
+static void
+llm_slots_load_dialog(LlmTile *t)
+{
+    GtkWindow  *parent = tile_window(t);
+    int         slot;
+    char       *json;
+    char       *msg;
+    JsonParser *parser;
+    JsonObject *root;
+    JsonArray  *msgs;
+    GError     *error = NULL;
+    GtkTextIter start, end;
+    guint       n;
+
+    if (t->busy) {
+        hist_cdb_announce(t,
+            "chargement impossible pendant une requête en cours.");
+        return;
+    }
+    slot = num_pick_dialog(parent, "Charger un slot",
+                           "Numéro de slot (0-999) :");
+    if (slot < 0)
+        return;
+    json = llm_slots_load(slot);
+    if (json == NULL) {
+        msg = g_strdup_printf("Slot %d vide.", slot);
+        hist_cdb_announce(t, msg);
+        g_free(msg);
+        return;
+    }
+    parser = json_parser_new();
+    if (!json_parser_load_from_data(parser, json, -1, &error)) {
+        msg = g_strdup_printf("Slot %d : JSON invalide (%s).", slot,
+                              error->message);
+        g_clear_error(&error);
+        g_object_unref(parser);
+        g_free(json);
+        hist_cdb_announce(t, msg);
+        g_free(msg);
+        return;
+    }
+    g_free(json);
+    root = json_node_get_object(json_parser_get_root(parser));
+    msgs = root != NULL ? json_object_get_array_member(root, "messages")
+                        : NULL;
+    if (msgs == NULL) {
+        g_object_unref(parser);
+        hist_cdb_announce(t, "pas de tableau « messages » dans ce slot.");
+        return;
+    }
+
+    /* --- Wipe complet : comme si le fil n'avait jamais existé. --- */
+    llm_history_wipe(t);
+    llm_queues_purge(t);
+    gtk_text_buffer_get_bounds(t->hist, &start, &end);
+    gtk_text_buffer_delete(t->hist, &start, &end);
+    md_thinking_reset(t->hist);
+    g_string_truncate(t->reply, 0);
+    t->rendered_len = 0;
+    t->in_reasoning = FALSE;
+    if (t->reply_mark != NULL) {
+        gtk_text_buffer_get_end_iter(t->hist, &end);
+        gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
+    }
+    llm_entry_clear(t);
+    t->cdb_retries = 0;
+
+    /* --- Repeuplement + rendu du fil importé. --- */
+    n = json_array_get_length(msgs);
+    for (guint i = 0; i < n; i++) {
+        JsonObject *m = json_array_get_object_element(msgs, i);
+        const char *role = m != NULL
+                           ? json_object_get_string_member(m, "role") : NULL;
+        const char *content = m != NULL
+                              ? json_object_get_string_member(m, "content")
+                              : NULL;
+        GtkTextIter eit;
+
+        if (content == NULL)
+            continue;
+        if (g_strcmp0(role, "system") == 0) {
+            if (i == 0)
+                continue; /* persona : ré-injecté live à chaque envoi */
+            if (g_str_has_prefix(content, "[CDB] "))
+                content += 6; /* retire le cadre (rajouté à l'envoi) */
+            history_push(t, LLMACTOR_CDB, FALSE, content);
+            hist_render_actor_header(t, LLMACTOR_CDB);
+            hist_ensure_voice_tags(t);
+            gtk_text_buffer_get_end_iter(t->hist, &eit);
+            gtk_text_buffer_insert_with_tags_by_name(
+                t->hist, &eit, content, -1, "voice-cdb", NULL);
+            hist_append(t, "\n");
+        } else if (g_strcmp0(role, "assistant") == 0) {
+            history_push(t, LLMACTOR_LLM, FALSE, content);
+            hist_render_actor_header(t, LLMACTOR_LLM);
+            gtk_text_buffer_get_end_iter(t->hist, &eit);
+            md_insert(t->hist, &eit, content); /* rendu markdown */
+            hist_append(t, "\n");
+        } else {
+            /* user + tout rôle inconnu. */
+            history_push(t, LLMACTOR_USER, FALSE, content);
+            hist_render_actor_header(t, LLMACTOR_USER);
+            hist_append(t, content);
+            hist_append(t, "\n");
+        }
+    }
+    g_object_unref(parser);
+    llm_scroll_to_end(t);
+
+    msg = g_strdup_printf("Slot %d chargé — le fil a été remplacé.", slot);
+    hist_cdb_announce(t, msg);
+    g_free(msg);
+}
+
+/* 4 — Vider un slot. */
+static void
+llm_slots_clear_dialog(LlmTile *t)
+{
+    GtkWindow *parent = tile_window(t);
+    int        slot;
+    char      *msg;
+
+    slot = num_pick_dialog(parent, "Vider un slot",
+                           "Numéro de slot (0-999) :");
+    if (slot < 0)
+        return;
+    if (!llm_slots_exists(slot)) {
+        msg = g_strdup_printf("Slot %d déjà vide.", slot);
+        hist_cdb_announce(t, msg);
+        g_free(msg);
+        return;
+    }
+    msg = g_strdup_printf("Vider le slot %d ?", slot);
+    if (!confirm_dialog(parent, "Vider un slot", msg, "Vider", TRUE)) {
+        g_free(msg);
+        return;
+    }
+    g_free(msg);
+    llm_slots_clear(slot);
+    msg = g_strdup_printf("Slot %d vidé.", slot);
+    hist_cdb_announce(t, msg);
+    g_free(msg);
+}
+
+/* 5 — Importer un slot d'une autre session (3 champs : session
+ * source, slot source, slot cible). Erreurs inline, dialogue reste
+ * ouvert tant que non validé. */
+typedef struct {
+    GtkWindow *dialog;
+    GtkWidget *e_session;
+    GtkWidget *e_src;
+    GtkWidget *e_dst;
+    GtkWidget *err;
+    gboolean   attempted; /* OK cliqué au moins une fois (vs annuler) */
+    gboolean   done;
+    int        dst_slot;
+} ImportCtx;
+
+static int
+entry_to_int(GtkWidget *entry, gboolean *ok)
+{
+    const char *txt = gtk_editable_get_text(GTK_EDITABLE(entry));
+    char       *end;
+    long        v;
+
+    *ok = FALSE;
+    if (txt[0] == '\0')
+        return -1;
+    v = strtol(txt, &end, 10);
+    if (*end != '\0' || v < 0 || v > 999)
+        return -1;
+    *ok = TRUE;
+    return (int)v;
+}
+
+static void
+on_import_ok(GtkButton G_GNUC_UNUSED *b, gpointer data)
+{
+    ImportCtx *ctx = data;
+    gboolean   a, b2, c;
+    int        sess = entry_to_int(ctx->e_session, &a);
+    int        src = entry_to_int(ctx->e_src, &b2);
+    int        dst = entry_to_int(ctx->e_dst, &c);
+
+    ctx->attempted = TRUE;
+    if (!a || !b2 || !c) {
+        gtk_label_set_text(GTK_LABEL(ctx->err),
+                           "Trois nombres 0-999 attendus.");
+        return;
+    }
+    if (!llm_slots_dir_exists(sess)) {
+        char *m = g_strdup_printf("La session %03d n'a pas de slots.",
+                                  sess);
+
+        gtk_label_set_text(GTK_LABEL(ctx->err), m);
+        g_free(m);
+        return;
+    }
+    if (!llm_slots_exists_in(sess, src)) {
+        char *m = g_strdup_printf("Slot %d vide dans la session %03d.",
+                                  src, sess);
+
+        gtk_label_set_text(GTK_LABEL(ctx->err), m);
+        g_free(m);
+        return;
+    }
+    if (llm_slots_exists(dst)) {
+        char *q = g_strdup_printf("Le slot cible %d existe déjà. "
+                                  "L'écraser ?", dst);
+
+        if (!confirm_dialog(ctx->dialog, "Slot occupé", q, "Écraser",
+                            TRUE)) {
+            g_free(q);
+            return;
+        }
+        g_free(q);
+    }
+    ctx->done = llm_slots_import(sess, src, dst);
+    ctx->dst_slot = dst;
+    gtk_window_destroy(ctx->dialog);
+}
+
+static void
+on_import_cancel(GtkButton G_GNUC_UNUSED *b, gpointer data)
+{
+    ImportCtx *ctx = data;
+
+    gtk_window_destroy(ctx->dialog);
+}
+
+static void
+llm_slots_import_dialog(LlmTile *t)
+{
+    GtkWindow *parent = tile_window(t);
+    ImportCtx  ctx = { NULL, NULL, NULL, NULL, NULL, FALSE, FALSE, -1 };
+    GtkWidget *win, *box, *row, *cancel, *ok;
+    GMainLoop *loop;
+
+    win = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(win), "Importer d'une session");
+    gtk_window_set_transient_for(GTK_WINDOW(win), parent);
+    gtk_window_set_modal(GTK_WINDOW(win), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
+    gtk_window_set_default_size(GTK_WINDOW(win), 360, -1);
+
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_top(box, 16);
+    gtk_widget_set_margin_bottom(box, 12);
+    gtk_widget_set_margin_start(box, 16);
+    gtk_widget_set_margin_end(box, 16);
+    gtk_window_set_child(GTK_WINDOW(win), box);
+
+    {
+        struct {
+            const char *label;
+            GtkWidget **out;
+        } fields[] = {
+            { "Session source (000-999) :", &ctx.e_session },
+            { "Slot source (0-999) :",      &ctx.e_src },
+            { "Slot cible (0-999) :",       &ctx.e_dst },
+        };
+
+        for (guint i = 0; i < G_N_ELEMENTS(fields); i++) {
+            GtkWidget *lbl = gtk_label_new(fields[i].label);
+            GtkWidget *e = gtk_entry_new();
+
+            gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+            gtk_box_append(GTK_BOX(box), lbl);
+            gtk_entry_set_max_length(GTK_ENTRY(e), 3);
+            gtk_entry_set_placeholder_text(GTK_ENTRY(e), "0");
+            g_signal_connect(e, "insert-text",
+                             G_CALLBACK(on_digits_only_insert), NULL);
+            gtk_box_append(GTK_BOX(box), e);
+            *fields[i].out = e;
+        }
+    }
+
+    ctx.err = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(ctx.err), 0.0);
+    gtk_label_set_wrap(GTK_LABEL(ctx.err), TRUE);
+    gtk_widget_add_css_class(ctx.err, "error");
+    gtk_box_append(GTK_BOX(box), ctx.err);
+
+    row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_halign(row, GTK_ALIGN_END);
+    cancel = gtk_button_new_with_label("Annuler");
+    ok = gtk_button_new_with_label("Importer");
+    gtk_widget_add_css_class(ok, "suggested-action");
+    g_signal_connect(cancel, "clicked", G_CALLBACK(on_import_cancel), &ctx);
+    g_signal_connect(ok, "clicked", G_CALLBACK(on_import_ok), &ctx);
+    gtk_box_append(GTK_BOX(row), cancel);
+    gtk_box_append(GTK_BOX(row), ok);
+    gtk_box_append(GTK_BOX(box), row);
+
+    ctx.dialog = GTK_WINDOW(win);
+
+    loop = g_main_loop_new(NULL, FALSE);
+    g_signal_connect_swapped(win, "destroy", G_CALLBACK(g_main_loop_quit),
+                             loop);
+    gtk_window_present(GTK_WINDOW(win));
+    gtk_widget_grab_focus(ctx.e_session);
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
+
+    if (ctx.done) {
+        char *msg = g_strdup_printf("Slot importé dans le slot %d.",
+                                    ctx.dst_slot);
+
+        hist_cdb_announce(t, msg);
+        g_free(msg);
+    } else if (ctx.attempted) {
+        hist_cdb_announce(t, "échec de l'import.");
+    }
+}
+
+/* Dispatch des actions du menu persistance. */
+static void
+on_slots_action(GSimpleAction *action, GVariant G_GNUC_UNUSED *param,
+                gpointer data)
+{
+    LlmTile    *t = data;
+    const char *name = g_action_get_name(G_ACTION(action));
+
+    if (g_strcmp0(name, "view") == 0)
+        llm_slots_view(t);
+    else if (g_strcmp0(name, "save") == 0)
+        llm_slots_save_dialog(t);
+    else if (g_strcmp0(name, "load") == 0)
+        llm_slots_load_dialog(t);
+    else if (g_strcmp0(name, "clear") == 0)
+        llm_slots_clear_dialog(t);
+    else if (g_strcmp0(name, "import") == 0)
+        llm_slots_import_dialog(t);
 }
 
 static void
@@ -3066,7 +3781,8 @@ on_llm_entry_changed(GtkTextBuffer G_GNUC_UNUSED *buf, gpointer data)
 
 GtkWidget *
 llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
-             GListStore *roots, GHashTable *multi_paths)
+             GListStore *roots, GHashTable *multi_paths,
+             int *modal_count)
 {
     GtkWidget *box;
     GtkWidget *scroll;
@@ -3088,6 +3804,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     t = g_new0(LlmTile, 1);
     t->cfg = (LlmConfig *)cfg;
     t->actions = actions != NULL ? g_object_ref(actions) : NULL;
+    t->modal_count = modal_count; /* emprunté à App */
     /* Projet courant pour [PROJET]/[CHEMIN] : mêmes références que
      * BashPanel (possédées par App, vivent plus longtemps que la tuile). */
     t->roots = roots;
@@ -3150,6 +3867,47 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     gtk_widget_set_valign(t->send_btn, GTK_ALIGN_CENTER);
     g_signal_connect(t->send_btn, "clicked",
                      G_CALLBACK(on_llm_send_clicked), t);
+
+    /* Bouton persistance (slots JSON) : menu à 5 actions, à gauche du
+     * play/pause. Groupe d'actions LOCAL à la tuile (pas le global) —
+     * chaque tuile a ses propres slots. */
+    {
+        GSimpleActionGroup *grp = g_simple_action_group_new();
+        GMenu              *menu;
+        /* Initialiseurs désignés : activate porte le callback, le
+         * reste (padding compris) est mis à zéro sans warning. */
+        static const GActionEntry entries[] = {
+            { .name = "view",   .activate = on_slots_action },
+            { .name = "save",   .activate = on_slots_action },
+            { .name = "load",   .activate = on_slots_action },
+            { .name = "clear",  .activate = on_slots_action },
+            { .name = "import", .activate = on_slots_action },
+        };
+
+        g_action_map_add_action_entries(G_ACTION_MAP(grp), entries,
+                                        G_N_ELEMENTS(entries), t);
+        menu = g_menu_new();
+        g_menu_append(menu, "Voir le JSON envoyé…", "slots.view");
+        g_menu_append(menu, "Sauvegarder dans un slot…", "slots.save");
+        g_menu_append(menu, "Charger un slot…", "slots.load");
+        g_menu_append(menu, "Vider un slot…", "slots.clear");
+        g_menu_append(menu, "Importer d'une session…", "slots.import");
+
+        t->slots_btn = gtk_menu_button_new();
+        gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(t->slots_btn),
+                                      "folder-templates-symbolic");
+        gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(t->slots_btn),
+                                       G_MENU_MODEL(menu));
+        gtk_widget_insert_action_group(t->slots_btn, "slots",
+                                       G_ACTION_GROUP(grp));
+        gtk_widget_set_tooltip_text(t->slots_btn,
+                                    "Persistance du JSON envoyé");
+        gtk_widget_add_css_class(t->slots_btn, "flat");
+        gtk_widget_set_valign(t->slots_btn, GTK_ALIGN_CENTER);
+        g_object_unref(menu);
+        g_object_unref(grp); /* le widget prend une réf via
+                              * insert_action_group */
+    }
 
     {
         GtkWidget *model_pop;
@@ -3256,6 +4014,8 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
                 gtk_widget_set_hexpand(spring, TRUE);
                 gtk_box_append(GTK_BOX(tools), spring);
             }
+            /* Persistance juste à gauche du play/pause. */
+            gtk_box_append(GTK_BOX(tools), t->slots_btn);
             gtk_box_append(GTK_BOX(tools), t->send_btn);
             gtk_widget_set_margin_start(tools, 6);
             gtk_widget_set_margin_end(tools, 6);

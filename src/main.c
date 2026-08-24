@@ -3535,7 +3535,8 @@ create_piece(const char *id, App *app)
         w = bash_panel_new(app->roots, app->multi_paths);
     else if (strcmp(id, "llm") == 0)
         w = llm_tile_new(app->llm_cfg, G_ACTION_GROUP(app->win),
-                         app->roots, app->multi_paths);
+                         app->roots, app->multi_paths,
+                         &app->modal_count);
     else if (strcmp(id, "settings") == 0) {
         w = build_settings(app);
     } else {
