@@ -1638,6 +1638,7 @@ build_add_button(void)
 
     button = gtk_menu_button_new();
     gtk_widget_add_css_class(button, "flat");
+    gtk_widget_add_css_class(button, "cdb-flat");
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), "list-add-symbolic");
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(button), popover);
     gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
@@ -3805,6 +3806,7 @@ build_tile_wrapper(Layout *node, App *app, GtkWidget *content)
 
     menu_btn = gtk_menu_button_new();
     gtk_widget_add_css_class(menu_btn, "flat");
+    gtk_widget_add_css_class(menu_btn, "cdb-flat");
     gtk_widget_add_css_class(menu_btn, "tile-menu");
     /* « :: » seul (set_child remplace label+flèche internes). */
     {
@@ -4397,6 +4399,7 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             cdb_pop_style(new_pop);
             gtk_menu_button_set_popover(GTK_MENU_BUTTON(new_win_btn), new_pop);
             gtk_widget_add_css_class(new_win_btn, "flat");
+            gtk_widget_add_css_class(new_win_btn, "cdb-flat");
             gtk_header_bar_pack_start(GTK_HEADER_BAR(header), new_win_btn);
             g_object_unref(menu);
         }

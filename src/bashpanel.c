@@ -107,6 +107,7 @@ bash_tab_label(GtkWidget *term, int index)
 
     close_btn = gtk_button_new_from_icon_name("window-close-symbolic");
     gtk_widget_add_css_class(close_btn, "flat");
+    gtk_widget_add_css_class(close_btn, "cdb-flat");
     gtk_widget_add_css_class(close_btn, "tile-menu");
     g_signal_connect(close_btn, "clicked", G_CALLBACK(on_close_tab), term);
     gtk_box_append(GTK_BOX(box), close_btn);
@@ -507,6 +508,7 @@ bash_panel_new(GListStore *roots, GHashTable *multi_paths)
     /* Bouton « + » : nouvel onglet (désactivé à la limite). */
     p->add_btn = gtk_button_new_from_icon_name("list-add-symbolic");
     gtk_widget_add_css_class(p->add_btn, "flat");
+    gtk_widget_add_css_class(p->add_btn, "cdb-flat");
     g_signal_connect(p->add_btn, "clicked", G_CALLBACK(on_add_tab_clicked), p);
     gtk_notebook_set_action_widget(GTK_NOTEBOOK(p->notebook), p->add_btn,
                                    GTK_PACK_START);

@@ -3913,6 +3913,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         "media-playback-start-symbolic");
     gtk_widget_set_tooltip_text(t->send_btn, "Envoyer");
     gtk_widget_add_css_class(t->send_btn, "flat");
+    gtk_widget_add_css_class(t->send_btn, "cdb-flat");
     gtk_widget_add_css_class(t->send_btn, "llm-compose-send");
     gtk_widget_set_valign(t->send_btn, GTK_ALIGN_CENTER);
     g_signal_connect(t->send_btn, "clicked",
@@ -3967,6 +3968,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         gtk_widget_set_tooltip_text(t->slots_btn,
                                     "Persistance du JSON envoyé");
         gtk_widget_add_css_class(t->slots_btn, "flat");
+        gtk_widget_add_css_class(t->slots_btn, "cdb-flat");
         gtk_widget_set_valign(t->slots_btn, GTK_ALIGN_CENTER);
     }
 

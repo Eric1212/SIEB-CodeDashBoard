@@ -48,6 +48,15 @@ static const char *cdb_css =
     ".titlebar-signature { font-size: 10pt; font-weight: normal; }\n"
     ".titlebar-file { font-weight: normal; font-size: 10pt; }\n"
 
+    /* --- Boutons icônes vraiment flat --- */
+    "button.cdb-flat, menubutton.cdb-flat > button { background: none; "
+    "border: none; box-shadow: none; }\n"
+    "button.cdb-flat:hover, button.cdb-flat:active, button.cdb-flat:checked, "
+    "button.cdb-flat:disabled, menubutton.cdb-flat > button:hover, "
+    "menubutton.cdb-flat > button:active, menubutton.cdb-flat > button:checked, "
+    "menubutton.cdb-flat > button:disabled { background: none; border: none; "
+    "box-shadow: none; }\n"
+
     /* --- Popovers CDB unifiés --- */
     "popover.cdb-pop > contents { border-radius: 0; background: @view_bg_color; "
     "padding: 4px 0; }\n"
