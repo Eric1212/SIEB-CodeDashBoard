@@ -1591,6 +1591,38 @@ on_add_project(GSimpleAction G_GNUC_UNUSED *action,
     pick_folder((App *)data, ROOT_PROJECT);
 }
 
+/* Base commune des menus CDB : popover plat, items alignés à gauche. */
+static void
+cdb_pop_style(GtkWidget *pop)
+{
+    gtk_popover_set_has_arrow(GTK_POPOVER(pop), FALSE);
+    gtk_widget_add_css_class(pop, "cdb-pop");
+}
+
+static GtkWidget *
+cdb_pop_item_new(const char *label)
+{
+    GtkWidget *lbl = gtk_label_new(label);
+    GtkWidget *b = gtk_button_new();
+
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+    gtk_button_set_child(GTK_BUTTON(b), lbl);
+    gtk_widget_add_css_class(b, "cdb-pop-item");
+    gtk_widget_set_hexpand(b, TRUE);
+    gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+    return b;
+}
+
+static GtkWidget *
+cdb_pop_title_new(const char *label)
+{
+    GtkWidget *lbl = gtk_label_new(label);
+
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+    gtk_widget_add_css_class(lbl, "cdb-pop-title");
+    return lbl;
+}
+
 static GtkWidget *
 build_add_button(void)
 {
@@ -1601,9 +1633,11 @@ build_add_button(void)
     g_menu_append(menu, "Root de structure…", "win.add-structure");
     g_menu_append(menu, "Root de projet…", "win.add-project");
     popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+    cdb_pop_style(popover);
     g_object_unref(menu);
 
     button = gtk_menu_button_new();
+    gtk_widget_add_css_class(button, "flat");
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), "list-add-symbolic");
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(button), popover);
     gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
@@ -3600,9 +3634,8 @@ on_tile_action(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 static void
 add_menu_button(GtkWidget *box, const char *label, TileAction *act)
 {
-    GtkWidget *b = gtk_button_new_with_label(label);
+    GtkWidget *b = cdb_pop_item_new(label);
 
-    gtk_widget_set_halign(b, GTK_ALIGN_FILL);
     g_signal_connect(b, "clicked", G_CALLBACK(on_tile_action), act);
     gtk_box_append(GTK_BOX(box), b);
 }
@@ -3619,16 +3652,13 @@ build_tile_menu(Layout *node, App *app)
     gsize       i;
 
     pop = gtk_popover_new();
+    cdb_pop_style(pop);
     /* Libère les TileAction quand le popover est détruit. */
     acts = g_ptr_array_new_with_free_func(g_free);
     g_object_set_data_full(G_OBJECT(pop), "tile-actions", acts,
                            (GDestroyNotify)g_ptr_array_unref);
 
-    menu = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    gtk_widget_set_margin_start(menu, 8);
-    gtk_widget_set_margin_end(menu, 8);
-    gtk_widget_set_margin_top(menu, 6);
-    gtk_widget_set_margin_bottom(menu, 6);
+    menu = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
     /* Diviser : la nouvelle tuile prend la même pièce (un éditeur divisé
      * donne un éditeur — deux vues sur le même état). */
@@ -3661,8 +3691,7 @@ build_tile_menu(Layout *node, App *app)
         a->popover = pop;
         g_ptr_array_add(acts, a);
 
-        b = gtk_button_new_with_label(layout_name(pieces[i]));
-        gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+        b = cdb_pop_item_new(layout_name(pieces[i]));
         if (node->id != NULL && strcmp(pieces[i], node->id) == 0)
             gtk_widget_set_sensitive(b, FALSE); /* pièce actuelle */
         g_signal_connect(b, "clicked", G_CALLBACK(on_tile_action), a);
@@ -3689,13 +3718,7 @@ build_tile_menu(Layout *node, App *app)
 
         gtk_box_append(GTK_BOX(menu),
                        gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
-        {
-            GtkWidget *lbl = gtk_label_new("Groupe");
-
-            gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-            gtk_widget_add_css_class(lbl, "dim-label");
-            gtk_box_append(GTK_BOX(menu), lbl);
-        }
+        gtk_box_append(GTK_BOX(menu), cdb_pop_title_new("Groupe"));
         for (int h = 0; h < 2; h++) {
             TileAction *a = g_new0(TileAction, 1);
 
@@ -4237,18 +4260,14 @@ static GtkWidget *
 build_modal_menu(App *app, ModalCtx *ctx)
 {
     GtkWidget  *pop = gtk_popover_new();
-    GtkWidget  *menu = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    GtkWidget  *menu = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     const char *pieces[] = { "editor", "explorer", "bash", "llm", "empty" };
 
-    gtk_widget_set_margin_start(menu, 8);
-    gtk_widget_set_margin_end(menu, 8);
-    gtk_widget_set_margin_top(menu, 6);
-    gtk_widget_set_margin_bottom(menu, 6);
+    cdb_pop_style(pop);
 
     for (gsize i = 0; i < G_N_ELEMENTS(pieces); i++) {
         ModalPieceAction *a = g_new0(ModalPieceAction, 1);
-        GtkWidget        *b = gtk_button_new_with_label(
-                                     layout_name(pieces[i]));
+        GtkWidget        *b = cdb_pop_item_new(layout_name(pieces[i]));
 
         a->app = app;
         a->ctx = ctx;
@@ -4352,8 +4371,10 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         gtk_widget_set_valign(sep, GTK_ALIGN_CENTER);
         gtk_widget_add_css_class(menu_btn, "flat");
         gtk_widget_add_css_class(menu_btn, "titlebar-brand");
-        gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_btn),
-                                       G_MENU_MODEL(menu));
+        GtkWidget *brand_pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+
+        cdb_pop_style(brand_pop);
+        gtk_menu_button_set_popover(GTK_MENU_BUTTON(menu_btn), brand_pop);
         gtk_menu_button_set_child(GTK_MENU_BUTTON(menu_btn), brand);
         gtk_header_bar_pack_start(GTK_HEADER_BAR(header), menu_btn);
         gtk_header_bar_pack_start(GTK_HEADER_BAR(header), sep);
@@ -4371,8 +4392,10 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             g_menu_append(menu, "Nouvelle session…", "win.new-session");
             gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(new_win_btn),
                                           "window-new-symbolic");
-            gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(new_win_btn),
-                                           G_MENU_MODEL(menu));
+            GtkWidget *new_pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+
+            cdb_pop_style(new_pop);
+            gtk_menu_button_set_popover(GTK_MENU_BUTTON(new_win_btn), new_pop);
             gtk_widget_add_css_class(new_win_btn, "flat");
             gtk_header_bar_pack_start(GTK_HEADER_BAR(header), new_win_btn);
             g_object_unref(menu);

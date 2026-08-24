@@ -3937,7 +3937,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
 
         slots_pop = gtk_popover_new();
         gtk_popover_set_has_arrow(GTK_POPOVER(slots_pop), FALSE);
-        gtk_widget_add_css_class(slots_pop, "llm-slots-pop");
+        gtk_widget_add_css_class(slots_pop, "cdb-pop");
 
         slots_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
@@ -3947,6 +3947,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
             gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
             gtk_button_set_child(GTK_BUTTON(b), lbl);
             gtk_widget_add_css_class(b, "flat");
+            gtk_widget_add_css_class(b, "cdb-pop-item");
             gtk_widget_set_hexpand(b, TRUE);
             gtk_widget_set_halign(b, GTK_ALIGN_FILL);
             g_object_set_data(G_OBJECT(b), "slot-action",
@@ -4017,7 +4018,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
          * désactive que pour ses popovers internes, pas le nôtre. */
         gtk_popover_set_has_arrow(GTK_POPOVER(model_pop), FALSE);
         gtk_popover_set_child(GTK_POPOVER(model_pop), model_outer);
-        gtk_widget_add_css_class(model_pop, "llm-model-pop");
+        gtk_widget_add_css_class(model_pop, "cdb-pop");
         g_signal_connect(model_pop, "map",
                          G_CALLBACK(llm_model_pop_mapped), t);
         t->model_pop = model_pop;
