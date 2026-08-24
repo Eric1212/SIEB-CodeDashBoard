@@ -4270,6 +4270,14 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             "font-weight: normal; padding: 2px 6px; }\n"
             "menubutton.tile-menu > button { font-size: 9pt; "
             "padding: 0 4px; min-height: 0; }\n"
+            /* Barre de composition LLM : bloc plein légèrement plus sombre
+             * que la tuile ; la saisie y est transparente (fond du bloc). */
+            ".llm-compose { background: alpha(shade(@view_bg_color, 0.92), 1); "
+            "border: 1px solid @borders; border-radius: 6px; }\n"
+            ".llm-compose-entry, .llm-compose-entry text "
+            "{ background: none; }\n"
+            ".llm-compose-entry { padding: 4px 8px; }\n"
+            ".llm-compose-send { padding: 2px 8px; min-height: 0; }\n"
             /* Titlebar : teintes uniformes, tout en 10 pt non gras. */
             "headerbar { font-size: 10pt; font-weight: normal; }\n"
             "headerbar .title { font-weight: normal; font-size: 10pt; }\n"

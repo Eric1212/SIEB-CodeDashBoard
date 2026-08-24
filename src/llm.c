@@ -917,11 +917,19 @@ llm_msg_wire_role(LlmActor a)
     }
 }
 
+/* Requête en cours : définie plus bas, référencée par LlmTile. */
+typedef struct LlmRequest LlmRequest;
+
 typedef struct {
     GtkWidget   *view;      /* historique (GtkTextView, non éditable) */
     GtkTextBuffer *hist;    /* buffer de l'historique */
-    GtkWidget   *entry;     /* saisie */
+    GtkWidget   *entry;     /* saisie multi-lignes (GtkTextView) */
+    GtkTextBuffer *entry_buf; /* buffer de la saisie */
+    GtkWidget   *entry_scroll; /* fenêtre scrollée de la saisie */
     GtkWidget   *send_btn;
+    GCancellable *cancel;   /* annulation de la requête en cours */
+    LlmRequest  *cur_req;   /* requête active (annulation pendant flux) */
+    gboolean     stop_requested; /* pause cliquée : jette tout entrant */
     GtkWidget   *hist_view; /* la vue (pour les boutons dans le fil) */
     LlmConfig   *cfg;
     SoupSession *soup;
@@ -984,6 +992,8 @@ llm_tile_free(gpointer data)
     LlmTile *t = data;
 
     llm_cdb_polls_purge(t); /* polls actifs rattachés à cette tuile */
+    if (t->cancel != NULL)
+        g_object_unref(t->cancel);
     if (t->soup != NULL)
         g_object_unref(t->soup);
     if (t->reply != NULL)
@@ -1533,7 +1543,7 @@ llm_handle_sse_line(LlmTile *t, const char *line)
     g_object_unref(parser);
 }
 
-typedef struct {
+struct LlmRequest {
     LlmTile      *tile;
     SoupMessage  *msg;
     GInputStream *stream;
@@ -1545,18 +1555,93 @@ typedef struct {
     char         *body;         /* corps JSON de la requête */
     char         *auth;         /* header Authorization ou NULL */
     int           attempt;      /* numéro d'essai courant (0 = premier) */
-} LlmRequest;
+};
 
 static void llm_send_attempt(LlmRequest *req);
 static gboolean llm_agent_detect(LlmTile *t, const char *reply);
 static void     llm_send(LlmTile *t, const char *prompt);
 static gboolean llm_retry_tick(gpointer data);
+static void     llm_busy_set(LlmTile *t, gboolean busy);
+
+/* État busy centralisé : sensibilité + ICÔNE du bouton (play = envoyer,
+ * pause = annuler). Tous les chemins de fin de requête passent ici —
+ * plus aucun risque d'oublier de remettre le play. */
+static void
+llm_busy_set(LlmTile *t, gboolean busy)
+{
+    t->busy = busy;
+    gtk_button_set_icon_name(GTK_BUTTON(t->send_btn), busy
+                             ? "media-playback-pause-symbolic"
+                             : "media-playback-start-symbolic");
+    gtk_widget_set_tooltip_text(t->send_btn, busy
+                                ? "Annuler la génération"
+                                : "Envoyer");
+    gtk_widget_set_sensitive(t->send_btn, TRUE);
+}
+
+/* Clic sur le bouton média : play = envoyer, pause = annuler la
+ * requête en cours (le flux se termine en erreur G_IO_ERROR_CANCELLED,
+ * capturée silencieusement par les chemins de lecture). */
+static void
+llm_cancel_current(LlmTile *t)
+{
+    /* 1. Requête réseau en cours : annule le flux ET FERME LA CONNEXION.
+     * Le cancellable seul interrompt notre lecture locale, mais libsoup
+     * peut continuer à drainer le socket en arrière-plan — le serveur
+     * continue alors de générer et la réponse « arrive quand même ».
+     * g_input_stream_close force le close TCP : le serveur voit la
+     * déconnexion et stoppe sa génération (comportement Zed/OpenCode).
+     * Le flag stop_requested complète le dispositif : tout chunk déjà
+     * en vol est JETÉ à réception au lieu d'être affiché. */
+    t->stop_requested = TRUE;
+    if (t->cancel != NULL)
+        g_cancellable_cancel(t->cancel);
+    if (t->cur_req != NULL && t->cur_req->stream != NULL)
+        g_input_stream_close_async(t->cur_req->stream, G_PRIORITY_DEFAULT,
+                                   NULL, NULL, NULL);
+
+    /* 2. Boucle agentique en attente (approbation, exécution bash,
+     * re-requête) : rien n'écoute le cancellable — on vide la file et
+     * on rend la main. Les polls bash en cours se termineront mais leur
+     * résultat ne déclenchera plus de re-requête (file vide → flush →
+     * requery est court-circuité par busy=FALSE ci-dessous). */
+    if (t->cmd_queue != NULL && !g_queue_is_empty(t->cmd_queue)) {
+        for (GList *l = t->cmd_queue->head; l != NULL; l = l->next) {
+            CdbCmdSpec *s = l->data;
+
+            g_free(s->cmd);
+            g_free(s);
+        }
+        g_queue_free(t->cmd_queue);
+        t->cmd_queue = NULL;
+        hist_cdb_announce(t, "〔annulé〕 file de commandes vidée.");
+    }
+    /* 3. Résultats pendants non livrés : jetés (le user a dit stop). */
+    if (t->cdb_results != NULL) {
+        for (GList *l = t->cdb_results->head; l != NULL; l = l->next) {
+            CdbResult *r = l->data;
+
+            g_free(r->label);
+            g_free(r->text);
+            g_free(r);
+        }
+        g_queue_free(t->cdb_results);
+        t->cdb_results = NULL;
+    }
+    /* 4. Si aucun flux réseau n'était actif (attente approbation/poll),
+     * personne ne remettra busy à FALSE : on le fait ici. Si un flux
+     * était actif, son callback de fin le fera — double appel inoffensif. */
+    llm_busy_set(t, FALSE);
+}
 
 /* Libère la requête une seule fois (les callbacks de complétion
  * peuvent arriver en double selon l'état du flux). */
 static void
 llm_request_free(LlmRequest *req)
 {
+    /* La requête courante de la tuile meurt : plus rien à annuler. */
+    if (req->tile != NULL && req->tile->cur_req == req)
+        req->tile->cur_req = NULL;
     g_free(req->url);
     g_free(req->body);
     g_free(req->auth);
@@ -1608,7 +1693,36 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
     GError     *error = NULL;
 
     n = g_input_stream_read_finish(req->stream, res, &error);
+
+    /* Pause cliquée : tout entrant est jeté, fin immédiate. Le flag
+     * couvre le cas où cancellable/close n'interrompent pas la lecture
+     * assez vite (chunks en vol, drain libsoup) — constaté : 100 % de
+     * la réponse arrivait APRÈS le clic. */
+    if (t->stop_requested) {
+        if (error != NULL)
+            g_error_free(error);
+        history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
+        hist_append(t, "\n〔annulé〕\n");
+        llm_busy_set(t, FALSE);
+        llm_request_free(req);
+        return;
+    }
+
     if (error != NULL) {
+        gboolean cancelled = g_error_matches(error, G_IO_ERROR,
+                                             G_IO_ERROR_CANCELLED);
+
+        /* Annulation (pause) : la réponse partielle rejoint quand même
+         * l'historique — le modèle a dit ce qu'il a dit — puis fin
+         * silencieuse. */
+        if (cancelled) {
+            g_error_free(error);
+            history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
+            hist_append(t, "\n〔annulé〕\n");
+            llm_busy_set(t, FALSE);
+            llm_request_free(req);
+            return;
+        }
         hist_append(t, error->message);
         g_error_free(error);
         llm_request_free(req);
@@ -1654,8 +1768,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                 "cette boucle. Réponds en texte ou reformule entièrement.");
         }
 
-        t->busy = FALSE;
-        gtk_widget_set_sensitive(t->send_btn, TRUE);
+        llm_busy_set(t, FALSE);
         llm_request_free(req);
         return;
     }
@@ -2058,12 +2171,18 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
                                                     res, &error);
 
     if (error != NULL) {
-        hist_append(t, "\n[erreur : ");
-        hist_append(t, error->message);
-        hist_append(t, "]\n");
+        gboolean cancelled = g_error_matches(error, G_IO_ERROR,
+                                             G_IO_ERROR_CANCELLED);
+
+        /* Annulation utilisateur : silencieuse (la réponse partielle
+         * déjà affichée reste dans le fil). */
+        if (!cancelled) {
+            hist_append(t, "\n[erreur : ");
+            hist_append(t, error->message);
+            hist_append(t, "]\n");
+        }
         g_error_free(error);
-        t->busy = FALSE;
-        gtk_widget_set_sensitive(t->send_btn, TRUE);
+        llm_busy_set(t, FALSE);
         llm_request_free(req);
         return;
     }
@@ -2105,8 +2224,7 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
             hist_append(t, msg);
             if (stream != NULL)
                 g_object_unref(stream);
-            t->busy = FALSE;
-            gtk_widget_set_sensitive(t->send_btn, TRUE);
+            llm_busy_set(t, FALSE);
             llm_request_free(req);
             return;
         }
@@ -2114,7 +2232,7 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
     req->stream = stream; /* transfert : libéré par llm_request_free */
     g_input_stream_read_async(req->stream, req->scratch,
                               sizeof(req->scratch), G_PRIORITY_DEFAULT,
-                              NULL, llm_stream_read, req);
+                              req->tile->cancel, llm_stream_read, req);
 }
 
 /* Un essai d'envoi : reconstruit un SoupMessage neuf depuis la
@@ -2138,10 +2256,10 @@ llm_send_attempt(LlmRequest *req)
         g_bytes_new_take((guint8 *)g_strdup(req->body),
                          strlen(req->body)));
 
-    gtk_widget_set_sensitive(req->tile->send_btn, FALSE);
+    llm_busy_set(req->tile, TRUE); /* icône pause = annuler */
     req->msg = msg;
     soup_session_send_async(req->tile->soup, msg, G_PRIORITY_DEFAULT,
-                            NULL, llm_send_done, req);
+                            req->tile->cancel, llm_send_done, req);
 }
 
 static gboolean
@@ -2256,6 +2374,23 @@ llm_cdb_results_flush(LlmTile *t)
     guint     n;
     gboolean *drop;
     guint     i = 0;
+
+    /* Boucle annulée par l'utilisateur : plus de re-requête. Les
+     * résultats tardifs d'un poll bash encore actif sont jetés. */
+    if (!t->busy) {
+        if (q != NULL) {
+            for (GList *l = q->head; l != NULL; l = l->next) {
+                CdbResult *r = l->data;
+
+                g_free(r->label);
+                g_free(r->text);
+                g_free(r);
+            }
+            g_queue_free(q);
+            t->cdb_results = NULL;
+        }
+        return;
+    }
 
     t->cdb_results = NULL;
     if (q == NULL) {
@@ -2420,6 +2555,13 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     LlmRequest  *req = g_new0(LlmRequest, 1);
 
     llm_turn_new(t);
+    /* Cancellable FRAIS par requête : l'ancien peut rester dans l'état
+     * « annulé » (un GCancellable annulé le reste). Flag stop aussi. */
+    t->stop_requested = FALSE;
+    if (t->cancel != NULL)
+        g_object_unref(t->cancel);
+    t->cancel = g_cancellable_new();
+    t->cur_req = req;
     req->tile = t;
     req->attempt = 0;
     req->url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
@@ -2481,18 +2623,52 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     llm_send_attempt(req);
 }
 
+/* Texte de la saisie multi-lignes (g_strdup, vide = ""). */
+static char *
+llm_entry_text(LlmTile *t)
+{
+    GtkTextIter start, end;
+
+    gtk_text_buffer_get_start_iter(t->entry_buf, &start);
+    gtk_text_buffer_get_end_iter(t->entry_buf, &end);
+    return gtk_text_buffer_get_text(t->entry_buf, &start, &end, FALSE);
+}
+
+/* Vide la saisie et ramène la zone à une ligne. */
+static void
+llm_entry_clear(LlmTile *t)
+{
+    gtk_text_buffer_set_text(t->entry_buf, "", -1);
+}
+
+/* Hauteur de la saisie : nb de lignes du buffer, borné [1..8]. Le
+ * scrolled-window reçoit cette hauteur ; au-delà de 8 lignes il scrolle
+ * en interne. Recalculé à chaque changement du buffer. */
+#define CDB_ENTRY_MAX_LINES 8
+static void
+llm_entry_resize(LlmTile *t)
+{
+    int n = gtk_text_buffer_get_line_count(t->entry_buf);
+    int lines = n < 1 ? 1 : (n > CDB_ENTRY_MAX_LINES ? CDB_ENTRY_MAX_LINES : n);
+
+    /* ~19 px par ligne : hauteur de ligne + padding (mesuré GTK défaut). */
+    gtk_scrolled_window_set_min_content_height(
+        GTK_SCROLLED_WINDOW(t->entry_scroll), lines * 19 + 12);
+}
+
 static void
 on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 {
     LlmTile    *t = data;
     char       *prompt;
 
-    /* Garde AVANT tout : activate + clicked peuvent arriver au même
-     * tick (double émission du signal) — un seul envoi doit passer. */
-    if (t->busy)
+    /* Bouton média : pause pendant une requête = ANNULER. */
+    if (t->busy) {
+        llm_cancel_current(t);
         return;
+    }
     t->busy = TRUE;
-    prompt = g_strdup(gtk_editable_get_text(GTK_EDITABLE(t->entry)));
+    prompt = llm_entry_text(t);
     if (prompt[0] == '\0') {
         g_free(prompt);
         t->busy = FALSE;
@@ -2515,7 +2691,7 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     hist_append(t, prompt);
     /* llm_send ouvre lui-même le tour (llm_turn_new) : pas d'appel ici,
      * sinon l'en-tête « Claude » serait rendu deux fois. */
-    gtk_editable_set_text(GTK_EDITABLE(t->entry), "");
+    llm_entry_clear(t);
     t->cdb_retries = 0; /* nouveau tour : compteur malformations reset */
     history_push(t, LLMACTOR_USER, FALSE, prompt);
     llm_send(t, prompt);
@@ -2553,10 +2729,11 @@ on_llm_scroll(GtkAdjustment *adj, gpointer data)
     t->follow = (val + page >= upper - 20.0);
 }
 
+/* Le buffer de saisie a changé : recalcule la hauteur de la zone. */
 static void
-on_llm_entry_activate(GtkEntry G_GNUC_UNUSED *entry, gpointer data)
+on_llm_entry_changed(GtkTextBuffer G_GNUC_UNUSED *buf, gpointer data)
 {
-    on_llm_send_clicked(NULL, data);
+    llm_entry_resize(data);
 }
 
 GtkWidget *
@@ -2606,17 +2783,34 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroll)),
         "value-changed", G_CALLBACK(on_llm_scroll), t);
 
-    t->entry = gtk_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(t->entry),
-                                   "Message… (Entrée pour envoyer)");
-    t->send_btn = gtk_button_new_with_label("Envoyer");
+    /* Saisie multi-lignes : GtkTextView dans un scrolled-window (1 ligne
+     * au repos, jusqu'à 8, puis scroll interne). Entrée = saut de ligne ;
+     * l'envoi passe par le bouton de la rangée outils. */
+    t->entry_buf = gtk_text_buffer_new(NULL);
+    t->entry = gtk_text_view_new_with_buffer(t->entry_buf);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(t->entry), GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_accepts_tab(GTK_TEXT_VIEW(t->entry), FALSE);
+    gtk_widget_add_css_class(t->entry, "llm-compose-entry");
+    g_signal_connect(t->entry_buf, "changed",
+                     G_CALLBACK(on_llm_entry_changed), t);
+
+    t->entry_scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(t->entry_scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(t->entry_scroll),
+                                  t->entry);
+    llm_entry_resize(t);
+
+    t->send_btn = gtk_button_new_from_icon_name(
+        "media-playback-start-symbolic");
+    gtk_widget_set_tooltip_text(t->send_btn, "Envoyer");
+    gtk_widget_add_css_class(t->send_btn, "flat");
+    gtk_widget_add_css_class(t->send_btn, "llm-compose-send");
+    gtk_widget_set_valign(t->send_btn, GTK_ALIGN_CENTER);
     g_signal_connect(t->send_btn, "clicked",
                      G_CALLBACK(on_llm_send_clicked), t);
-    g_signal_connect(t->entry, "activate",
-                     G_CALLBACK(on_llm_entry_activate), t);
 
     {
-        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         GtkWidget *model_pop;
         GtkWidget *model_scroll;
         GtkWidget *model_outer;
@@ -2670,19 +2864,40 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->model_btn),
                                     model_pop);
 
-        gtk_widget_set_margin_start(row, 6);
-        gtk_widget_set_margin_end(row, 6);
-        gtk_widget_set_margin_top(row, 4);
-        gtk_widget_set_margin_bottom(row, 6);
-        gtk_box_append(GTK_BOX(row), t->model_btn);
-        gtk_widget_set_hexpand(t->entry, TRUE);
-        gtk_box_append(GTK_BOX(row), t->entry);
-        gtk_box_append(GTK_BOX(row), t->send_btn);
+        /* Barre de composition : bloc plein légèrement plus sombre que
+         * la tuile (classe .llm-compose), deux rangées — saisie au-dessus,
+         * outils en dessous (modèle à gauche, envoi à droite). */
+        {
+            GtkWidget *compose = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+            GtkWidget *tools = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 
-        box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-        gtk_box_append(GTK_BOX(box), scroll);
-        gtk_widget_set_vexpand(scroll, TRUE);
-        gtk_box_append(GTK_BOX(box), row);
+            gtk_widget_add_css_class(compose, "llm-compose");
+            gtk_box_append(GTK_BOX(compose), t->entry_scroll);
+            gtk_widget_set_hexpand(t->model_btn, FALSE);
+            gtk_box_append(GTK_BOX(tools), t->model_btn);
+            /* Ressort : le bouton d'envoi collé à droite. */
+            {
+                GtkWidget *spring = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+
+                gtk_widget_set_hexpand(spring, TRUE);
+                gtk_box_append(GTK_BOX(tools), spring);
+            }
+            gtk_box_append(GTK_BOX(tools), t->send_btn);
+            gtk_widget_set_margin_start(tools, 6);
+            gtk_widget_set_margin_end(tools, 6);
+            gtk_widget_set_margin_bottom(tools, 6);
+            gtk_box_append(GTK_BOX(compose), tools);
+
+            gtk_widget_set_margin_start(compose, 6);
+            gtk_widget_set_margin_end(compose, 6);
+            gtk_widget_set_margin_top(compose, 6);
+            gtk_widget_set_margin_bottom(compose, 6);
+
+            box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+            gtk_box_append(GTK_BOX(box), scroll);
+            gtk_widget_set_vexpand(scroll, TRUE);
+            gtk_box_append(GTK_BOX(box), compose);
+        }
     }
 
     t->soup = soup_session_new();
