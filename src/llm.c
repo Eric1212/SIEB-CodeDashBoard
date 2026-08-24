@@ -1636,8 +1636,9 @@ struct LlmRequest {
     SoupMessage  *msg;
     GInputStream *stream;
     char          scratch[4096]; /* buffer du read en cours */
-    char          pending[8192]; /* lignes SSE partielles */
-    gsize         pending_len;
+    GString      *pending;      /* lignes SSE partielles (dynamique :
+                                  * une ligne data: peut dépasser 8 Ko
+                                  * quand le serveur agrège les deltas) */
     int           done;         /* garde anti double-libération */
     char         *url;          /* pour reconstruire les essais 429 */
     char         *body;         /* corps JSON de la requête */
@@ -1733,6 +1734,8 @@ llm_request_free(LlmRequest *req)
     g_free(req->url);
     g_free(req->body);
     g_free(req->auth);
+    if (req->pending != NULL)
+        g_string_free(req->pending, TRUE);
     if (req->done)
         return;
     req->done = 1;
@@ -1741,33 +1744,28 @@ llm_request_free(LlmRequest *req)
     g_free(req);
 }
 
-/* Traite les bytes reçus : découpe en lignes SSE.
- * Ligne trop longue pour le buffer : traitée par morceaux (le parser
- * JSON échouera sur le fragment, mais pending ne sature jamais —
- * les fragments sont jetés, pas accumulés à l'infini). */
+/* Réassemblage des lignes SSE. Le buffer est DYNAMIQUE (GString) : une
+ * ligne « data: … » peut faire bien plus de 8 Ko quand le serveur agrège
+ * de gros deltas dans un seul événement — l'ancien buffer fixe jetait
+ * alors le début de ligne sans log, et un fragment perdu dans la zone
+ * d'un marqueur /CDB:: rendait la commande indétectable ET non
+ * condamnable (silence total de la boucle agentique, bug constaté). */
 static void
 llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
 {
     LlmTile *t = req->tile;
+    char    *nl;
 
-    if ((gsize)n > sizeof(req->pending) - 1 - req->pending_len) {
-        /* Buffer plein sans \n : ligne aberrante, on la jette. */
-        req->pending_len = 0;
-        req->pending[0] = '\0';
-    }
-    memcpy(req->pending + req->pending_len, bytes, (size_t)n);
-    req->pending_len += (gsize)n;
-    req->pending[req->pending_len] = '\0';
-    {
-        char *nl;
+    if ((gsize)n <= 0)
+        return;
+    g_string_append_len(req->pending, bytes, (gssize)n);
+    while ((nl = strchr(req->pending->str, '\n')) != NULL) {
+        gsize consumed = (gsize)(nl - req->pending->str) + 1;
 
-        while ((nl = strchr(req->pending, '\n')) != NULL) {
-            *nl = '\0';
-            if (req->pending[0] != '\0')
-                llm_handle_sse_line(t, req->pending);
-            memmove(req->pending, nl + 1, strlen(nl + 1) + 1);
-            req->pending_len -= (gsize)(nl - req->pending) + 1;
-        }
+        *nl = '\0';
+        if (req->pending->str[0] != '\0')
+            llm_handle_sse_line(t, req->pending->str);
+        g_string_erase(req->pending, 0, consumed);
     }
 }
 
@@ -2310,6 +2308,8 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
 
             if (rc.retry && (infinite || req->attempt < rc.max_retries)) {
                 req->attempt++;
+                /* Réassemblage SSE repart à zéro pour l'essai suivant. */
+                g_string_truncate(req->pending, 0);
                 if (req->attempt == 1)
                     hist_append(t,
                         "\n[CDB] HTTP 429 — nouvelles tentatives en cours…\n");
@@ -2688,6 +2688,7 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     JsonNode    *root_node;
     LlmRequest  *req = g_new0(LlmRequest, 1);
 
+    req->pending = g_string_new(NULL); /* réassemblage des lignes SSE */
     llm_turn_new(t);
     /* Cancellable FRAIS par requête : l'ancien peut rester dans l'état
      * « annulé » (un GCancellable annulé le reste). Flag stop aussi. */
