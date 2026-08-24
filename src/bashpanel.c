@@ -393,7 +393,12 @@ bash_panel_last_line(guint index)
             start--;
         /* PAS de trim des espaces : « $ » suivi d'espaces est le
          * signal du prompt (le padding VTE les fournit). */
-        return g_strndup(start, (gsize)(end - start));
+        {
+            gchar *last = g_strndup(start, (gsize)(end - start));
+
+            g_free(text); /* l'extraction VTE : copie rendue, original jeté */
+            return last;
+        }
     }
 }
 

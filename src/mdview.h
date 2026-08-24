@@ -20,8 +20,17 @@
 #include <gtk/gtk.h>
 
 /* Insere md rendu a iter (les tags sont crees/reutilises par nom dans
- * la tag table du buffer). */
+ * la tag table du buffer). Rendu COMPLET : etat de parsing et
+ * numerotation des blocs thinking repartent de zero. */
 void md_insert(GtkTextBuffer *buf, GtkTextIter *iter, const char *md);
+
+/* Rendu INCREMENTAL (streaming) : enchaine sur le rendu precedent —
+ * etat fence/thinking et index des blocs preserves. `text` n'est pas
+ * nul-terminal : `len` octets sont traites. Les lignes completes sont
+ * rendues ; le fragment final sans \n ne l'est que si flush (fin de
+ * stream), car il peut encore changer au chunk suivant. */
+void md_insert_append(GtkTextBuffer *buf, GtkTextIter *iter,
+                      const char *text, gsize len, gboolean flush);
 
 /* Declare la vue dans laquelle ancre les boutons des blocs thinking.
  * Sans attach, les balises thinking restent du texte ordinaire. */

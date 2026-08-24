@@ -1020,7 +1020,13 @@ typedef struct {
     gboolean     busy;      /* requête en cours */
     gboolean     in_reasoning; /* delta courant = thinking */
     gboolean     follow;     /* scroll auto actif (user en bas) */
+    GtkAdjustment *adj;      /* adjustment vertical de l'historique :
+                              * scroll mécanique (set_value), sans
+                              * déplacer le curseur ni dépendre du
+                              * layout asynchrone de la vue */
     GString     *reply;     /* réponse en cours d'accumulation */
+    gsize        rendered_len; /* nb d'octets de reply déjà rendus dans
+                               * le fil (rendu incrémental) */
     GtkTextMark *reply_mark;/* marque de fin de la réponse en streaming */
     GArray      *history;   /* LlmMsg[] : fil de conversation envoyé */
     GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
@@ -1626,21 +1632,58 @@ hist_append(LlmTile *t, const char *text)
     gtk_text_buffer_insert(t->hist, &end, text, -1);
 }
 
-/* Remplace le contenu après reply_mark par la réponse accumulée, rendue
- * en Markdown (le streaming réécrit la fin du buffer au fil des chunks ;
- * le parseur tolère le markdown incomplet). */
+/* Livre dans le fil la portion de reply pas encore rendue (rendu
+ * INCREMENTAL : plus jamais de delete+réinsertion massive, donc plus
+ * de flicker, et un coût par chunk constant même sur des Mo). Seules
+ * les lignes complètes sont rendues : le fragment sans \n peut encore
+ * changer au chunk suivant ; hist_flush_reply le livre à la fin. */
 static void
 hist_update_reply(LlmTile *t)
 {
-    GtkTextIter start, end;
+    GtkTextIter end;
+    const char *s = t->reply->str;
+    gsize       len = t->reply->len;
+    gsize       safe;
 
-    gtk_text_buffer_get_iter_at_mark(t->hist, &start, t->reply_mark);
-    gtk_text_buffer_get_end_iter(t->hist, &end);
-    gtk_text_buffer_delete(t->hist, &start, &end);
-    gtk_text_buffer_get_end_iter(t->hist, &end);
-    md_insert(t->hist, &end, t->reply->str);
-    /* Suit le texte qui défile. */
+    if (len < t->rendered_len) {
+        /* Incohérence (ne devrait jamais arriver) : repli sûr —
+         * re-rendu complet depuis la marque du tour. */
+        GtkTextIter start;
+
+        gtk_text_buffer_get_iter_at_mark(t->hist, &start, t->reply_mark);
+        gtk_text_buffer_get_end_iter(t->hist, &end);
+        gtk_text_buffer_delete(t->hist, &start, &end);
+        gtk_text_buffer_get_end_iter(t->hist, &end);
+        md_insert(t->hist, &end, t->reply->str);
+        t->rendered_len = len;
+        llm_scroll_to_end(t);
+        return;
+    }
+    safe = len;
+    while (safe > 0 && s[safe - 1] != '\n')
+        safe--;
+    if (safe > t->rendered_len) {
+        gtk_text_buffer_get_end_iter(t->hist, &end);
+        md_insert_append(t->hist, &end, s + t->rendered_len,
+                         safe - t->rendered_len, FALSE);
+        t->rendered_len = safe;
+    }
     llm_scroll_to_end(t);
+}
+
+/* Livre le fragment final non rendu (fin de stream, annulation) : la
+ * dernière ligne sans \n rejoint l'affichage, rendered_len rattrape. */
+static void
+hist_flush_reply(LlmTile *t)
+{
+    GtkTextIter end;
+
+    if (t->rendered_len >= t->reply->len)
+        return;
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    md_insert_append(t->hist, &end, t->reply->str + t->rendered_len,
+                     t->reply->len - t->rendered_len, TRUE);
+    t->rendered_len = t->reply->len;
 }
 
 /* Traite une ligne SSE « data: … ». */
@@ -1879,6 +1922,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
     if (t->stop_requested) {
         if (error != NULL)
             g_error_free(error);
+        hist_flush_reply(t);
         history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
         hist_append(t, "\n〔annulé〕\n");
         llm_busy_set(t, FALSE);
@@ -1895,6 +1939,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
          * silencieuse. */
         if (cancelled) {
             g_error_free(error);
+            hist_flush_reply(t);
             history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
             hist_append(t, "\n〔annulé〕\n");
             llm_busy_set(t, FALSE);
@@ -1908,8 +1953,10 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
     }
 
     if (n <= 0) {
-        /* Fin du flux : la réponse complète rejoint l'historique
-         * (sans les tags thinking, qui ne sont que de l'affichage). */
+        /* Fin du flux : le fragment final rejoint l'affichage, la
+         * réponse complète rejoint l'historique (sans les tags
+         * thinking, qui ne sont que de l'affichage). */
+        hist_flush_reply(t);
         history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
         hist_append(t, "\n");
 
@@ -2399,8 +2446,15 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
             int         max_retries, delay_ms;
             gboolean    retry_on;
 
-            if (stream != NULL)
+            if (stream != NULL) {
                 g_object_unref(stream); /* corps d'erreur consommé */
+                /* CRUCIAL : si les retries sont épuisés plus bas, on
+                 * CHUTE vers le bloc `status != 200` — sans cette mise
+                 * à NULL, il relirait puis re-libérerait le flux déjà
+                 * mort (use-after-free + double free : crash
+                 * « malloc(): unaligned tcache » constaté). */
+                stream = NULL;
+            }
 
             if (is_429) {
                 LlmRetry429 rc;
@@ -2571,6 +2625,7 @@ llm_turn_new(LlmTile *t)
     hist_render_actor_header(t, LLMACTOR_LLM);
     g_string_truncate(t->reply, 0);
     md_thinking_reset(t->hist);
+    t->rendered_len = 0; /* nouveau tour : rendu incrémental repart à zéro */
     t->in_reasoning = FALSE;
     gtk_text_buffer_get_end_iter(t->hist, &end);
     if (t->reply_mark == NULL)
@@ -2760,8 +2815,11 @@ llm_agent_detect(LlmTile *t, const char *reply)
         do {
             CdbCmdSpec *s;
             char       *cmd = g_match_info_fetch(mi, 2);
-            int         tab = atoi(g_match_info_fetch(mi, 1));
+            char       *tabstr = g_match_info_fetch(mi, 1);
+            int         tab = atoi(tabstr);
             gboolean    dup = FALSE;
+
+            g_free(tabstr);
 
             /* Doublon exact déjà en file (ou en cours) : on ignore. */
             if (t->cmd_queue != NULL)
@@ -2955,20 +3013,21 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 
 /* Garde la vue collée en bas pendant/après le streaming — sauf si
  * l'utilisateur a remonté (il relit une zone : on ne le vole pas).
- * Le suivi reprend dès qu'il revient en bas. */
+ * Le suivi reprend dès qu'il revient en bas.
+ * Mécanique : set_value(upper - page) sur l'adjustment. Contrairement
+ * à scroll_to_mark(yalign=1.0), rien d'asynchrone, aucun déplacement
+ * du curseur d'insertion (les sélections survivent), et le geste en
+ * cours de l'utilisateur est naturellement respecté par GTK. */
 static void
 llm_scroll_to_end(LlmTile *t)
 {
-    GtkTextIter end;
+    double upper, page;
 
-    if (!t->follow)
+    if (!t->follow || t->adj == NULL)
         return;
-    gtk_text_buffer_get_end_iter(t->hist, &end);
-    /* Place le curseur invisible à la fin : la vue suit le curseur. */
-    gtk_text_buffer_place_cursor(t->hist, &end);
-    gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(t->view),
-                                 gtk_text_buffer_get_insert(t->hist),
-                                 0.0, TRUE, 0.0, 1.0);
+    upper = gtk_adjustment_get_upper(t->adj);
+    page = gtk_adjustment_get_page_size(t->adj);
+    gtk_adjustment_set_value(t->adj, upper - page);
 }
 
 /* Le user a scrolle : suivi auto seulement s'il est (presque) en bas. */
@@ -2981,6 +3040,21 @@ on_llm_scroll(GtkAdjustment *adj, gpointer data)
     double   page = gtk_adjustment_get_page_size(adj);
 
     t->follow = (val + page >= upper - 20.0);
+}
+
+/* Détachement FRANC : dès qu'Éric touche la scrollbar, le suivi auto
+ * est coupé — pas de course entre le geste et les rappels du stream
+ * (avec un long contexte, le seuil de 20 px seul laisse le collage
+ * arracher la vue vers le bas pendant les premiers pixels du geste). */
+static void
+on_scrollbar_pressed(GtkGestureClick G_GNUC_UNUSED *g,
+                     int G_GNUC_UNUSED n,
+                     double G_GNUC_UNUSED x, double G_GNUC_UNUSED y,
+                     gpointer data)
+{
+    LlmTile *t = data;
+
+    t->follow = FALSE;
 }
 
 /* Le buffer de saisie a changé : recalcule la hauteur de la zone. */
@@ -3032,11 +3106,23 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
                                    GTK_POLICY_AUTOMATIC,
                                    GTK_POLICY_AUTOMATIC);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), t->view);
-    /* Suivi auto tant que le user reste en bas de la vue. */
+    /* Suivi auto tant que le user reste en bas de la vue. L'adjustment
+     * est gardé : llm_scroll_to_end pilote la position mécaniquement. */
     t->follow = TRUE;
-    g_signal_connect(
-        gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroll)),
-        "value-changed", G_CALLBACK(on_llm_scroll), t);
+    t->adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroll));
+    g_signal_connect(t->adj, "value-changed",
+                     G_CALLBACK(on_llm_scroll), t);
+    /* Toute pression sur la scrollbar détache le suivi immédiatement. */
+    {
+        GtkWidget         *sb =
+            gtk_scrolled_window_get_vscrollbar(GTK_SCROLLED_WINDOW(scroll));
+        GtkGesture *gc = gtk_gesture_click_new();
+
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), 0);
+        g_signal_connect(gc, "pressed",
+                         G_CALLBACK(on_scrollbar_pressed), t);
+        gtk_widget_add_controller(sb, GTK_EVENT_CONTROLLER(gc));
+    }
 
     /* Saisie multi-lignes : GtkTextView dans un scrolled-window (1 ligne
      * au repos, jusqu'à 8, puis scroll interne). Entrée = saut de ligne ;

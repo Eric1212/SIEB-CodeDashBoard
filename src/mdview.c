@@ -221,6 +221,8 @@ typedef struct {
     GtkWidget *view;         /* ou ancre les boutons (non referencee)  */
     guint      gen;          /* generation courante                    */
     int        gen_count;    /* nb de blocs vus de la generation       */
+    gboolean   in_fence;     /* etat de rendu : fence ``` ouverte      */
+    gboolean   in_think;     /* etat de rendu : thinking ouvert        */
 } ThinkCtx;
 
 static void think_ctx_free(gpointer data); /* requis avant ctx_get (C23) */
@@ -464,12 +466,12 @@ think_close(ThinkCtx *ctx)
 /* ------------------------------------------------------------------ */
 
 /* Rendu d'une ligne (hors fence) avec detection des balises thinking.
- * Astuce zero-copy : terminaison temporaire des segments (les chaines
- * viennent de g_strsplit, donc modifiables) pour garder le rendu
- * inline complet autour des balises. */
+ * L'etat in_think vit dans ctx (survit d'un appel a l'autre : rendu
+ * incrementel). Astuce zero-copy : terminaison temporaire des segments
+ * (les chaines viennent de g_strsplit, donc modifiables) pour garder le
+ * rendu inline complet autour des balises. */
 static void
-md_line(GtkTextBuffer *buf, GtkTextIter *it, ThinkCtx *ctx,
-        char *line, gboolean *in_think)
+md_line(GtkTextBuffer *buf, GtkTextIter *it, ThinkCtx *ctx, char *line)
 {
     char *p = line;
 
@@ -480,7 +482,7 @@ md_line(GtkTextBuffer *buf, GtkTextIter *it, ThinkCtx *ctx,
         /* Pas de vue attachee ou pas de balise : inline ordinaire. */
         if (ctx->view == NULL || (open == NULL && close == NULL)) {
             md_inline(buf, it, p, FALSE, FALSE, FALSE,
-                      *in_think ? THINK_TAG_BODY : NULL);
+                      ctx->in_think ? THINK_TAG_BODY : NULL);
             return;
         }
 
@@ -491,14 +493,14 @@ md_line(GtkTextBuffer *buf, GtkTextIter *it, ThinkCtx *ctx,
 
                 *open = '\0';
                 md_inline(buf, it, p, FALSE, FALSE, FALSE,
-                          *in_think ? THINK_TAG_BODY : NULL);
+                          ctx->in_think ? THINK_TAG_BODY : NULL);
                 *open = saved;
             }
             p = open + strlen(THINK_OPEN);
             if (*p == ' ')
                 p++;
             think_open(buf, it, ctx);
-            *in_think = TRUE;
+            ctx->in_think = TRUE;
             continue;
         }
 
@@ -513,50 +515,54 @@ md_line(GtkTextBuffer *buf, GtkTextIter *it, ThinkCtx *ctx,
                 saved = *seg_end;
                 *seg_end = '\0';
                 md_inline(buf, it, p, FALSE, FALSE, FALSE,
-                          *in_think ? THINK_TAG_BODY : NULL);
+                          ctx->in_think ? THINK_TAG_BODY : NULL);
                 *seg_end = saved;
             }
             p = close + strlen(THINK_CLOSE);
             think_close(ctx);
-            *in_think = FALSE;
+            ctx->in_think = FALSE;
             continue;
         }
     }
 }
 
-void
-md_insert(GtkTextBuffer *buf, GtkTextIter *iter, const char *md)
+/* Traitement d'un lot de texte : decoupe en lignes, applique l'etat
+ * persistant (fence/thinking) du contexte. Les elements completes de
+ * la decomposition sont toujours rendus ; le fragment final (sans \n)
+ * ne l'est que si flush (fin de stream). */
+static void
+md_feed(GtkTextBuffer *buf, GtkTextIter *iter, ThinkCtx *ctx,
+        const char *text, gboolean flush)
 {
-    char     **lines = g_strsplit(md, "\n", 0);
-    gboolean   in_fence = FALSE;
-    gboolean   in_think = FALSE;
-    ThinkCtx  *ctx = think_ctx_get(buf);
+    char   **lines = g_strsplit(text, "\n", 0);
+    guint    n = lines != NULL ? g_strv_length(lines) : 0;
+    guint    complete = n > 0 ? n - 1 : 0; /* le dernier = fragment */
 
-    think_purge(ctx);
-    ctx->gen_count = 0; /* re-indexation de la generation courante */
+    if (flush && n > 0 && lines[n - 1][0] != '\0')
+        complete = n; /* fin de stream : le fragment aussi */
 
-    for (char **l = lines; *l != NULL; l++) {
-        char *line = *l;
+    for (guint i = 0; i < complete; i++) {
+        char *line = lines[i];
         int   len = (int)strlen(line);
 
         /* Fence de bloc de code (non fermee = jusqu'a la fin — cas
          * streaming). La ligne fence elle-meme est avalee.
          * Un thinking DANS une fence reste du code litteral. */
         if (len >= 3 && strncmp(line, "```", 3) == 0) {
-            in_fence = !in_fence;
+            ctx->in_fence = !ctx->in_fence;
             continue;
         }
-        if (in_fence) {
+        if (ctx->in_fence) {
             md_emit(buf, iter, line, len, FALSE, FALSE, TRUE,
-                    in_think ? THINK_TAG_CODE : "md-codeblock");
+                    ctx->in_think ? THINK_TAG_CODE : "md-codeblock");
             gtk_text_buffer_insert(buf, iter, "\n", 1);
             continue;
         }
 
         /* En plein thinking : prose attenue ; ni titres ni quotes ni
          * bullets speciaux (de la prose, comme ZED). */
-        if (in_think) {
-            md_line(buf, iter, ctx, line, &in_think);
+        if (ctx->in_think) {
+            md_line(buf, iter, ctx, line);
             gtk_text_buffer_insert(buf, iter, "\n", 1);
             continue;
         }
@@ -602,10 +608,41 @@ md_insert(GtkTextBuffer *buf, GtkTextIter *iter, const char *md)
         }
 
         /* Paragraphe ordinaire (peut contenir la balise ouvrante). */
-        md_line(buf, iter, ctx, line, &in_think);
+        md_line(buf, iter, ctx, line);
         gtk_text_buffer_insert(buf, iter, "\n", 1);
     }
     g_strfreev(lines);
+}
+
+void
+md_insert(GtkTextBuffer *buf, GtkTextIter *iter, const char *md)
+{
+    ThinkCtx *ctx = think_ctx_get(buf);
+
+    /* Rendu COMPLET : etat et indexation repartent de zero (les blocs
+     * detruits avec l'ancien texte seront purges ci-dessous). */
+    think_purge(ctx);
+    ctx->gen_count = 0;
+    ctx->in_fence = FALSE;
+    ctx->in_think = FALSE;
+    md_feed(buf, iter, ctx, md, TRUE);
+}
+
+void
+md_insert_append(GtkTextBuffer *buf, GtkTextIter *iter,
+                 const char *text, gsize len, gboolean flush)
+{
+    ThinkCtx *ctx = think_ctx_get(buf);
+    char     *copy;
+
+    /* Rendu INCREMENTAL : l'etat (fence/thinking) et la numerotation
+     * des blocs continuent exactement ou ils en etaient. Le texte n'est
+     * pas nul-terminal : copie bornee. */
+    if (len == 0)
+        return;
+    copy = g_strndup(text, len);
+    md_feed(buf, iter, ctx, copy, flush);
+    g_free(copy);
 }
 
 void
@@ -622,6 +659,9 @@ md_thinking_reset(GtkTextBuffer *buf)
     ThinkCtx *ctx = think_ctx_get(buf);
 
     ctx->gen++;
+    ctx->gen_count = 0; /* nouvelle numerotation pour la generation */
+    ctx->in_fence = FALSE;
+    ctx->in_think = FALSE;
     g_array_set_size(ctx->gen_expanded, 0);
     g_array_set_size(ctx->gen_touched, 0);
     think_purge(ctx);
