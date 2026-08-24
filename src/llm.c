@@ -3700,14 +3700,10 @@ llm_chat_clear_dialog(LlmTile *t)
     hist_cdb_announce(t, "chat actuel vidé.");
 }
 
-/* Dispatch des actions du menu persistance. */
+/* Dispatch commun des actions de persistance du menu slots. */
 static void
-on_slots_action(GSimpleAction *action, GVariant G_GNUC_UNUSED *param,
-                gpointer data)
+llm_slots_action_run(LlmTile *t, const char *name)
 {
-    LlmTile    *t = data;
-    const char *name = g_action_get_name(G_ACTION(action));
-
     if (g_strcmp0(name, "view") == 0)
         llm_slots_view(t);
     else if (g_strcmp0(name, "save") == 0)
@@ -3720,6 +3716,21 @@ on_slots_action(GSimpleAction *action, GVariant G_GNUC_UNUSED *param,
         llm_chat_clear_dialog(t);
     else if (g_strcmp0(name, "import") == 0)
         llm_slots_import_dialog(t);
+}
+
+/* Item du popover slots : ferme le popover puis exécute l'action. */
+static void
+on_slots_menu_item_clicked(GtkButton *btn, gpointer data)
+{
+    LlmTile    *t = data;
+    const char *name = g_object_get_data(G_OBJECT(btn), "slot-action");
+    GtkWidget  *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn),
+                                              GTK_TYPE_POPOVER);
+
+    if (pop != NULL)
+        gtk_popover_popdown(GTK_POPOVER(pop));
+
+    llm_slots_action_run(t, name);
 }
 
 static void
@@ -3907,47 +3918,55 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     g_signal_connect(t->send_btn, "clicked",
                      G_CALLBACK(on_llm_send_clicked), t);
 
-    /* Bouton persistance (slots JSON) : menu à 6 actions, à gauche du
-     * play/pause. Groupe d'actions LOCAL à la tuile (pas le global) —
-     * chaque tuile a ses propres slots. */
+    /* Bouton persistance (slots JSON) : popover custom à 6 actions,
+     * même langage visuel que le sélecteur de modèle. */
     {
-        GSimpleActionGroup *grp = g_simple_action_group_new();
-        GMenu              *menu;
-        /* Initialiseurs désignés : activate porte le callback, le
-         * reste (padding compris) est mis à zéro sans warning. */
-        static const GActionEntry entries[] = {
-            { .name = "view",   .activate = on_slots_action },
-            { .name = "save",   .activate = on_slots_action },
-            { .name = "load",   .activate = on_slots_action },
-            { .name = "clear",  .activate = on_slots_action },
-            { .name = "clear-chat", .activate = on_slots_action },
-            { .name = "import", .activate = on_slots_action },
+        GtkWidget *slots_pop;
+        GtkWidget *slots_box;
+        static const struct {
+            const char *label;
+            const char *action;
+        } items[] = {
+            { "Voir le JSON envoyé…",      "view" },
+            { "Sauvegarder dans un slot…", "save" },
+            { "Charger un slot…",          "load" },
+            { "Vider un slot…",            "clear" },
+            { "Vider le chat actuel…",     "clear-chat" },
+            { "Importer d'une session…",   "import" },
         };
 
-        g_action_map_add_action_entries(G_ACTION_MAP(grp), entries,
-                                        G_N_ELEMENTS(entries), t);
-        menu = g_menu_new();
-        g_menu_append(menu, "Voir le JSON envoyé…", "slots.view");
-        g_menu_append(menu, "Sauvegarder dans un slot…", "slots.save");
-        g_menu_append(menu, "Charger un slot…", "slots.load");
-        g_menu_append(menu, "Vider un slot…", "slots.clear");
-        g_menu_append(menu, "Vider le chat actuel…", "slots.clear-chat");
-        g_menu_append(menu, "Importer d'une session…", "slots.import");
+        slots_pop = gtk_popover_new();
+        gtk_popover_set_has_arrow(GTK_POPOVER(slots_pop), FALSE);
+        gtk_widget_add_css_class(slots_pop, "llm-slots-pop");
+
+        slots_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
+            GtkWidget *lbl = gtk_label_new(items[i].label);
+            GtkWidget *b = gtk_button_new();
+
+            gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+            gtk_button_set_child(GTK_BUTTON(b), lbl);
+            gtk_widget_add_css_class(b, "flat");
+            gtk_widget_set_hexpand(b, TRUE);
+            gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+            g_object_set_data(G_OBJECT(b), "slot-action",
+                              (gpointer)items[i].action);
+            g_signal_connect(b, "clicked",
+                             G_CALLBACK(on_slots_menu_item_clicked), t);
+            gtk_box_append(GTK_BOX(slots_box), b);
+        }
+
+        gtk_popover_set_child(GTK_POPOVER(slots_pop), slots_box);
+        gtk_widget_set_size_request(slots_pop, 300, -1);
 
         t->slots_btn = gtk_menu_button_new();
         gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(t->slots_btn),
                                       "folder-templates-symbolic");
-        gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(t->slots_btn),
-                                       G_MENU_MODEL(menu));
-        gtk_widget_insert_action_group(t->slots_btn, "slots",
-                                       G_ACTION_GROUP(grp));
+        gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->slots_btn), slots_pop);
         gtk_widget_set_tooltip_text(t->slots_btn,
                                     "Persistance du JSON envoyé");
         gtk_widget_add_css_class(t->slots_btn, "flat");
         gtk_widget_set_valign(t->slots_btn, GTK_ALIGN_CENTER);
-        g_object_unref(menu);
-        g_object_unref(grp); /* le widget prend une réf via
-                              * insert_action_group */
     }
 
     {

@@ -4365,6 +4365,15 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             "{ background: none; border-radius: 0; }\n"
             "popover.llm-model-pop listbox > row:hover "
             "{ background: alpha(@theme_fg_color, 0.06); }\n"
+            /* Popover du menu slots : même langage visuel que le sélecteur. */
+            "popover.llm-slots-pop > contents "
+            "{ border-radius: 0; background: @view_bg_color; }\n"
+            "popover.llm-slots-pop button "
+            "{ background: none; border: none; box-shadow: none; "
+            "border-radius: 0; padding: 6px 10px; min-height: 0; "
+            "font-size: 10pt; font-weight: normal; }\n"
+            "popover.llm-slots-pop button:hover "
+            "{ background: alpha(@theme_fg_color, 0.06); }\n"
             /* Titlebar : teintes uniformes, tout en 10 pt non gras. */
             "headerbar { font-size: 10pt; font-weight: normal; }\n"
             "headerbar .title { font-weight: normal; font-size: 10pt; }\n"
