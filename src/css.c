@@ -77,7 +77,24 @@ static const char *cdb_css =
             "min-width: 0; padding: 0 4px; margin: 0; border: none; "
             "border-radius: 0; }\n"
             "headerbar windowcontrols > button > image { min-height: 12px; "
-            "min-width: 12px; -gtk-icon-size: 12px; }\n";
+            "min-width: 12px; -gtk-icon-size: 12px; }\n"
+            /* Base commune des popovers harmonisés (menus CDB). */
+            "popover.cdb-pop > contents "
+            "{ border-radius: 0; background: @view_bg_color; "
+            "padding: 4px 0; }\n"
+            "popover.cdb-pop button.cdb-pop-item "
+            "{ background: none; border: none; box-shadow: none; "
+            "border-radius: 0; padding: 6px 10px; min-height: 0; "
+            "font-size: 10pt; font-weight: normal; }\n"
+            "popover.cdb-pop button.cdb-pop-item:hover "
+            "{ background: alpha(@theme_fg_color, 0.06); }\n"
+            "popover.cdb-pop button.cdb-pop-item label "
+            "{ font-size: 10pt; font-weight: normal; opacity: 0.9; }\n"
+            "popover.cdb-pop label.cdb-pop-title "
+            "{ font-size: 9pt; font-weight: normal; opacity: 0.65; "
+            "padding: 4px 10px 2px 10px; }\n"
+            "popover.cdb-pop separator.cdb-pop-sep "
+            "{ background: @borders; margin: 4px 0; min-height: 1px; }\n";
 
 void
 cdb_css_install(GdkDisplay *display)
