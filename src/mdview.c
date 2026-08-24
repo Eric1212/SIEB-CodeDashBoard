@@ -431,6 +431,10 @@ think_close(ThinkCtx *ctx)
             GtkTextIter e;
 
             gtk_text_buffer_get_iter_at_mark(blk->buf, &e, blk->end);
+            /* delete_mark : retire le mark de la table du buffer ET
+             * libere notre reference — un simple g_object_unref
+             * laisserait un mark orphelin trainer dans la table. */
+            gtk_text_buffer_delete_mark(blk->buf, blk->end);
             g_object_unref(blk->end);
             blk->end = gtk_text_buffer_create_mark(blk->buf, NULL, &e,
                                                    TRUE);

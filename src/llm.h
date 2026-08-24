@@ -96,6 +96,17 @@ typedef struct {
 
 #define LLM_RETRY429_DEFAULTS     (LlmRetry429){ .retry = TRUE, .max_retries = 200, .delay_ms = 250 }
 
+/* Configuration du retry sur HTTP 5xx (500-504 : erreurs transitoires
+ * de l'upstream — surcharge, maintenance). Rythme plus lent que le 429 :
+ * un serveur en 503 a besoin de temps, pas d'insistance. */
+typedef struct {
+    gboolean retry;        /* réessayer automatiquement ? (défaut TRUE) */
+    int      max_retries;  /* 120 par défaut ; 0 = infini ; borne 5000  */
+    int      delay_ms;     /* attente entre essais (défaut 1000 ; 10-100000) */
+} LlmRetry5xx;
+
+#define LLM_RETRY5XX_DEFAULTS     (LlmRetry5xx){ .retry = TRUE, .max_retries = 120, .delay_ms = 1000 }
+
 /* Prompt d'initialisation (« Init-Prompt ») :
  * raw = texte brut de prompts/default.txt (fallback défaut intégré),
  * save = écriture (crée les dossiers). Chaînes à libérer. */
@@ -107,6 +118,10 @@ void llm_retry429_load(LlmRetry429 *out);
 
 /* Sauvegarde la config de retry (bornes forcées : 0-5000 et 10-100000). */
 void llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms);
+
+/* Config de retry 5xx : mêmes principes, section harness.retry_5xx. */
+void llm_retry5xx_load(LlmRetry5xx *out);
+void llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms);
 
 /* Crée la VUE de la tuile « llm » (historique + saisie).
  * roots/multi_paths : résolution du projet courant pour les

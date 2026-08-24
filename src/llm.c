@@ -588,6 +588,87 @@ llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms)
     g_free(path);
 }
 
+void
+llm_retry5xx_load(LlmRetry5xx *out)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+
+    *out = LLM_RETRY5XX_DEFAULTS;
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        JsonObject *root =
+            json_node_get_object(json_parser_get_root(parser));
+
+        if (root != NULL && json_object_has_member(root, "harness")) {
+            JsonObject *h =
+                json_object_get_object_member(root, "harness");
+
+            if (h != NULL) {
+                if (json_object_has_member(h, "retry_5xx"))
+                    out->retry = json_object_get_boolean_member(
+                        h, "retry_5xx");
+                if (json_object_has_member(h, "max_retries_5xx"))
+                    out->max_retries = (int)json_object_get_int_member(
+                        h, "max_retries_5xx");
+                if (json_object_has_member(h, "delay_ms_5xx"))
+                    out->delay_ms = (int)json_object_get_int_member(
+                        h, "delay_ms_5xx");
+            }
+        }
+    }
+    g_object_unref(parser);
+    g_free(path);
+}
+
+void
+llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonObject *root;
+    JsonNode   *work = NULL;
+    JsonObject *harness;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        work = json_node_copy(json_parser_get_root(parser));
+        root = json_node_get_object(work);
+    } else {
+        root = json_object_new();
+        work = json_node_new(JSON_NODE_OBJECT);
+        json_node_set_object(work, root);
+    }
+
+    if (!json_object_has_member(root, "harness") ||
+        json_object_get_object_member(root, "harness") == NULL)
+        json_object_set_object_member(root, "harness",
+                                      json_object_new());
+    harness = json_object_get_object_member(root, "harness");
+    json_object_set_boolean_member(harness, "retry_5xx", retry);
+    json_object_set_int_member(harness, "max_retries_5xx", max_retries);
+    json_object_set_int_member(harness, "delay_ms_5xx", delay_ms);
+
+    {
+        JsonGenerator *gen = json_generator_new();
+        gchar         *text = json_to_string(work, TRUE);
+        GError        *error = NULL;
+
+        json_generator_set_root(gen, work);
+        if (!g_file_set_contents(path, text, -1, &error)) {
+            g_printerr("SIEB: écriture retry5xx : %s\n", error->message);
+            g_error_free(error);
+        }
+        g_free(text);
+        g_object_unref(gen);
+    }
+    json_node_unref(work);
+    g_object_unref(parser);
+    g_free(path);
+}
+
 char **
 llm_config_provider_names(void)
 {
@@ -1602,16 +1683,27 @@ llm_handle_sse_line(LlmTile *t, const char *line)
             if (piece == NULL || piece[0] == '\0')
                 piece = NULL;
         }
-        if (piece == NULL && json_object_has_member(delta, "reasoning")) {
-            piece = json_object_get_string_member(delta, "reasoning");
-            if (piece != NULL && piece[0] != '\0') {
-                /* Première apparition du reasoning : tag d'ouverture. */
-                if (!t->in_reasoning) {
-                    g_string_append(t->reply, "〔thinking〕 ");
-                    t->in_reasoning = TRUE;
+        if (piece == NULL) {
+            /* Champ reasoning : « reasoning » (OpenRouter) ou
+             * « reasoning_content » (style DeepSeek) selon le
+             * fournisseur — les deux sont acceptés, sinon le thinking
+             * disparaît silencieusement selon le modèle choisi. */
+            const char *rfield =
+                json_object_has_member(delta, "reasoning") ? "reasoning"
+                : json_object_has_member(delta, "reasoning_content")
+                    ? "reasoning_content" : NULL;
+
+            if (rfield != NULL) {
+                piece = json_object_get_string_member(delta, rfield);
+                if (piece != NULL && piece[0] != '\0') {
+                    /* Première apparition du reasoning : tag d'ouverture. */
+                    if (!t->in_reasoning) {
+                        g_string_append(t->reply, "〔thinking〕 ");
+                        t->in_reasoning = TRUE;
+                    }
+                } else {
+                    piece = NULL;
                 }
-            } else {
-                piece = NULL;
             }
         }
         if (piece != NULL) {
@@ -2296,24 +2388,50 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
     {
         guint status = soup_message_get_status(req->msg);
 
-        if (status == 429) {
-            LlmRetry429 rc;
+        /* Erreurs transitoires : 429 (rate limit, rythme rapide) et
+         * 500-504 (upstream indisponible, rythme lent — un serveur en
+         * 503 a besoin de temps, pas d'insistance). Chacune sa config
+         * harness ; 505+ exclu (réessayer est inutile). */
+        if (status == 429 ||
+            (status >= 500 && status <= 504)) {
+            gboolean    is_429 = status == 429;
             gboolean    infinite;
-
-            llm_retry429_load(&rc);
-            infinite = rc.max_retries == 0;
+            int         max_retries, delay_ms;
+            gboolean    retry_on;
 
             if (stream != NULL)
                 g_object_unref(stream); /* corps d'erreur consommé */
 
-            if (rc.retry && (infinite || req->attempt < rc.max_retries)) {
+            if (is_429) {
+                LlmRetry429 rc;
+
+                llm_retry429_load(&rc);
+                retry_on = rc.retry;
+                max_retries = rc.max_retries;
+                delay_ms = rc.delay_ms;
+            } else {
+                LlmRetry5xx rc;
+
+                llm_retry5xx_load(&rc);
+                retry_on = rc.retry;
+                max_retries = rc.max_retries;
+                delay_ms = rc.delay_ms;
+            }
+            infinite = max_retries == 0;
+
+            if (retry_on && (infinite || req->attempt < max_retries)) {
                 req->attempt++;
                 /* Réassemblage SSE repart à zéro pour l'essai suivant. */
                 g_string_truncate(req->pending, 0);
-                if (req->attempt == 1)
-                    hist_append(t,
-                        "\n[CDB] HTTP 429 — nouvelles tentatives en cours…\n");
-                g_timeout_add((guint)rc.delay_ms, llm_retry_tick, req);
+                if (req->attempt == 1) {
+                    char *note = g_strdup_printf(
+                        "\n[CDB] HTTP %u — nouvelles tentatives en "
+                        "cours…\n", status);
+
+                    hist_append(t, note);
+                    g_free(note);
+                }
+                g_timeout_add((guint)delay_ms, llm_retry_tick, req);
                 return; /* busy reste actif ; req vit pour l'essai suivant */
             }
         }

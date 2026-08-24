@@ -2725,7 +2725,7 @@ build_settings_section(const SettingsSection *sec)
         body = build_provider_form("OpenCode");
     else if (g_strcmp0(sec->title, "HyperCharm") == 0)
         body = build_provider_form("HyperCharm");
-    else if (g_strcmp0(sec->title, "429") == 0)
+    else if (g_strcmp0(sec->title, "Retry on error") == 0)
         body = build_harness_form();
     else if (g_strcmp0(sec->title, "Init-Prompt") == 0)
         body = build_initprompt_editor();
@@ -3073,20 +3073,30 @@ model_suggest_attach(GtkWidget *model_entry, const char *provider_name,
     }
 }
 
-/* Application de l'état du formulaire Harness : sensibilité + save. */
+/* Application de l'état du formulaire Harness : sensibilité + save.
+ * Chaque groupe (429 / 5xx) pose « h-kind » sur ses widgets : le save
+ * appelle la config correspondante. */
 static void
 harness_apply(GtkWidget *src)
 {
     GtkWidget *grid = gtk_widget_get_ancestor(src, GTK_TYPE_GRID);
+    const char *kind;
     GtkWidget *sw;
     GtkWidget *spin_max;
     GtkWidget *spin_delay;
 
     if (grid == NULL)
         return;
-    sw = GTK_WIDGET(g_object_get_data(G_OBJECT(grid), "h-sw"));
-    spin_max = GTK_WIDGET(g_object_get_data(G_OBJECT(grid), "h-max"));
-    spin_delay = GTK_WIDGET(g_object_get_data(G_OBJECT(grid), "h-delay"));
+    kind = g_object_get_data(G_OBJECT(src), "h-kind");
+    if (kind == NULL)
+        kind = "429";
+    sw = GTK_WIDGET(g_object_get_data(G_OBJECT(grid),
+                   kind != NULL && g_strcmp0(kind, "5xx") == 0
+                       ? "5-sw" : "h-sw"));
+    spin_max = GTK_WIDGET(g_object_get_data(G_OBJECT(grid),
+                   g_strcmp0(kind, "5xx") == 0 ? "5-max" : "h-max"));
+    spin_delay = GTK_WIDGET(g_object_get_data(G_OBJECT(grid),
+                     g_strcmp0(kind, "5xx") == 0 ? "5-delay" : "h-delay"));
     if (sw == NULL || spin_max == NULL || spin_delay == NULL)
         return;
 
@@ -3095,10 +3105,16 @@ harness_apply(GtkWidget *src)
 
         gtk_widget_set_sensitive(spin_max, on);
         gtk_widget_set_sensitive(spin_delay, on);
-        llm_config_save_retry429(
-            on,
-            (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_max)),
-            (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_delay)));
+        if (g_strcmp0(kind, "5xx") == 0)
+            llm_config_save_retry5xx(
+                on,
+                (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_max)),
+                (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_delay)));
+        else
+            llm_config_save_retry429(
+                on,
+                (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_max)),
+                (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_delay)));
     }
 }
 
@@ -3116,8 +3132,8 @@ on_harness_spin_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
     harness_apply(GTK_WIDGET(editable));
 }
 
-/* Formulaire Harness : politique de retry sur HTTP 429.
- * Défauts : oui / 200 répétitions / 250 ms. */
+/* Formulaire Harness : politiques de retry sur HTTP 429 (rapide) et
+ * 5xx (lent). Défauts : 429 = oui / 200 / 250 ms ; 5xx = oui / 120 / 1 s. */
 static GtkWidget *
 build_harness_form(void)
 {
@@ -3130,7 +3146,16 @@ build_harness_form(void)
     GtkWidget     *spin_max = gtk_spin_button_new(adj_max, 10, 0);
     GtkAdjustment *adj_d = gtk_adjustment_new(250, 10, 100000, 10, 1000, 0);
     GtkWidget     *spin_delay = gtk_spin_button_new(adj_d, 10, 0);
+    GtkWidget     *retry5_lbl = gtk_label_new("Retry sur HTTP 5xx :");
+    GtkWidget     *sw5 = gtk_switch_new();
+    GtkWidget     *max5_lbl = gtk_label_new("Répétitions (0 = infini) :");
+    GtkWidget     *delay5_lbl = gtk_label_new("Délai entre essais (ms) :");
+    GtkAdjustment *adj5_max = gtk_adjustment_new(120, 0, 5000, 10, 100, 0);
+    GtkWidget     *spin5_max = gtk_spin_button_new(adj5_max, 10, 0);
+    GtkAdjustment *adj5_d = gtk_adjustment_new(1000, 10, 100000, 100, 1000, 0);
+    GtkWidget     *spin5_delay = gtk_spin_button_new(adj5_d, 10, 0);
     LlmRetry429    rc;
+    LlmRetry5xx    rc5;
 
     llm_retry429_load(&rc);
     gtk_switch_set_active(GTK_SWITCH(sw), rc.retry);
@@ -3141,15 +3166,42 @@ build_harness_form(void)
     gtk_widget_set_sensitive(spin_max, rc.retry);
     gtk_widget_set_sensitive(spin_delay, rc.retry);
 
+    llm_retry5xx_load(&rc5);
+    gtk_switch_set_active(GTK_SWITCH(sw5), rc5.retry);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin5_max),
+                              (double)rc5.max_retries);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin5_delay),
+                              (double)rc5.delay_ms);
+    gtk_widget_set_sensitive(spin5_max, rc5.retry);
+    gtk_widget_set_sensitive(spin5_delay, rc5.retry);
+
     g_object_set_data_full(G_OBJECT(grid), "h-sw", sw, NULL);
     g_object_set_data_full(G_OBJECT(grid), "h-max", spin_max, NULL);
     g_object_set_data_full(G_OBJECT(grid), "h-delay", spin_delay, NULL);
+    g_object_set_data_full(G_OBJECT(grid), "5-sw", sw5, NULL);
+    g_object_set_data_full(G_OBJECT(grid), "5-max", spin5_max, NULL);
+    g_object_set_data_full(G_OBJECT(grid), "5-delay", spin5_delay, NULL);
+
+    /* h-kind sur chaque widget actif : route le save vers la bonne
+     * config (défaut « 429 » si absent). */
+    g_object_set_data_full(G_OBJECT(sw), "h-kind", g_strdup("429"), g_free);
+    g_object_set_data_full(G_OBJECT(spin_max), "h-kind", g_strdup("429"), g_free);
+    g_object_set_data_full(G_OBJECT(spin_delay), "h-kind", g_strdup("429"), g_free);
+    g_object_set_data_full(G_OBJECT(sw5), "h-kind", g_strdup("5xx"), g_free);
+    g_object_set_data_full(G_OBJECT(spin5_max), "h-kind", g_strdup("5xx"), g_free);
+    g_object_set_data_full(G_OBJECT(spin5_delay), "h-kind", g_strdup("5xx"), g_free);
 
     g_signal_connect(sw, "notify::active",
                      G_CALLBACK(on_harness_switch_changed), NULL);
     g_signal_connect(spin_max, "changed",
                      G_CALLBACK(on_harness_spin_changed), NULL);
     g_signal_connect(spin_delay, "changed",
+                     G_CALLBACK(on_harness_spin_changed), NULL);
+    g_signal_connect(sw5, "notify::active",
+                     G_CALLBACK(on_harness_switch_changed), NULL);
+    g_signal_connect(spin5_max, "changed",
+                     G_CALLBACK(on_harness_spin_changed), NULL);
+    g_signal_connect(spin5_delay, "changed",
                      G_CALLBACK(on_harness_spin_changed), NULL);
 
     gtk_widget_set_halign(retry_lbl, GTK_ALIGN_START);
@@ -3158,6 +3210,12 @@ build_harness_form(void)
     gtk_widget_set_halign(sw, GTK_ALIGN_START); /* pilule native, pas étirée */
     gtk_widget_set_hexpand(spin_max, TRUE);
     gtk_widget_set_hexpand(spin_delay, TRUE);
+    gtk_widget_set_halign(retry5_lbl, GTK_ALIGN_START);
+    gtk_widget_set_halign(max5_lbl, GTK_ALIGN_START);
+    gtk_widget_set_halign(delay5_lbl, GTK_ALIGN_START);
+    gtk_widget_set_halign(sw5, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(spin5_max, TRUE);
+    gtk_widget_set_hexpand(spin5_delay, TRUE);
 
     gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
     gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
@@ -3167,6 +3225,15 @@ build_harness_form(void)
     gtk_grid_attach(GTK_GRID(grid), spin_max, 1, 1, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), delay_lbl, 0, 2, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), spin_delay, 1, 2, 1, 1);
+    /* Section 5xx : séparateur + lignes 4-6. */
+    gtk_grid_attach(GTK_GRID(grid), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL),
+                    0, 3, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), retry5_lbl, 0, 4, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), sw5, 1, 4, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), max5_lbl, 0, 5, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), spin5_max, 1, 5, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), delay5_lbl, 0, 6, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), spin5_delay, 1, 6, 1, 1);
     return grid;
 }
 
@@ -3428,7 +3495,7 @@ build_settings(App *app G_GNUC_UNUSED)
         { "OpenRouter",        NULL, NULL, 0 }, /* formulaire provider */
     };
     static const SettingsSection harness_subs[] = {
-        { "429",         NULL, NULL, 0 }, /* formulaire retry */
+        { "Retry on error", NULL, NULL, 0 }, /* formulaire retry */
         { "Init-Prompt", NULL, NULL, 0 }, /* éditeur du prompt système */
     };
     static const SettingsSection llm_subs[] = {
