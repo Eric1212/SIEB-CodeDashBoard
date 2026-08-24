@@ -1045,6 +1045,10 @@ typedef struct {
     GQueue      *cmd_queue; /* commandes /CDB:: valides en attente */
     GQueue      *cdb_results; /* résultats pendants {label,text} */
     int          cdb_retries; /* malformations consécutives (max 3) */
+    int          slot_origin;     /* -1 = non sauvegardé, sinon numéro du slot */
+    int          turns_since_ref; /* tours utilisateur depuis la référence */
+    gsize        ref_body_size;   /* taille du body à la référence */
+    GtkWidget   *slots_title;     /* label titre du popover slots */
 } LlmTile;
 
 /* Résultat d'exécution en attente de livraison. */
@@ -1090,6 +1094,7 @@ static void llm_slots_load_dialog(LlmTile *t);
 static void llm_slots_clear_dialog(LlmTile *t);
 static void llm_slots_import_dialog(LlmTile *t);
 static void llm_chat_clear_dialog(LlmTile *t);
+static void llm_slots_title_update(LlmTile *t);
 
 static void
 llm_tile_free(gpointer data)
@@ -1936,6 +1941,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
             g_error_free(error);
         hist_flush_reply(t);
         history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
+        llm_slots_title_update(t);
         hist_append(t, "\n〔annulé〕\n");
         llm_busy_set(t, FALSE);
         llm_request_free(req);
@@ -1953,6 +1959,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
             g_error_free(error);
             hist_flush_reply(t);
             history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
+            llm_slots_title_update(t);
             hist_append(t, "\n〔annulé〕\n");
             llm_busy_set(t, FALSE);
             llm_request_free(req);
@@ -1970,6 +1977,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
          * thinking, qui ne sont que de l'affichage). */
         hist_flush_reply(t);
         history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
+        llm_slots_title_update(t);
         hist_append(t, "\n");
 
         /* Boucle agentique : des commandes /CDB:: dans la réponse ?
@@ -2960,6 +2968,8 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
      * slots) puis persisté dans last.json : trace exacte de l'envoi. */
     req->body = llm_body_build(t);
     llm_slots_last_save(req->body);
+    t->turns_since_ref++;
+    llm_slots_title_update(t);
 
     llm_send_attempt(req);
 }
@@ -3292,6 +3302,10 @@ llm_slots_save_dialog(LlmTile *t)
     }
     body = llm_body_build(t);
     if (llm_slots_save(slot, body)) {
+        t->slot_origin = slot;
+        t->turns_since_ref = 0;
+        t->ref_body_size = strlen(body);
+        llm_slots_title_update(t);
         msg = g_strdup_printf("Slot %d sauvegardé.", slot);
         hist_cdb_announce(t, msg);
     } else {
@@ -3457,6 +3471,15 @@ llm_slots_load_dialog(LlmTile *t)
     }
     g_object_unref(parser);
     llm_scroll_to_end(t);
+
+    t->slot_origin = slot;
+    t->turns_since_ref = 0;
+    {
+        char *b = llm_body_build(t);
+        t->ref_body_size = (b != NULL) ? strlen(b) : 0;
+        g_free(b);
+    }
+    llm_slots_title_update(t);
 
     msg = g_strdup_printf("Slot %d chargé — le fil a été remplacé.", slot);
     hist_cdb_announce(t, msg);
@@ -3696,8 +3719,81 @@ llm_chat_clear_dialog(LlmTile *t)
     }
     llm_entry_clear(t);
     t->cdb_retries = 0;
+    t->slot_origin = -1;
+    t->turns_since_ref = 0;
+    {
+        char *b = llm_body_build(t);
+        t->ref_body_size = (b != NULL) ? strlen(b) : 0;
+        g_free(b);
+    }
+    llm_slots_title_update(t);
 
     hist_cdb_announce(t, "chat actuel vidé.");
+}
+
+/* Formate une taille en octets / Ko / Mo. */
+static char *
+llm_slots_size_str(gsize bytes)
+{
+    if (bytes < 1024)
+        return g_strdup_printf("%zu o", bytes);
+    if (bytes < 1024 * 1024)
+        return g_strdup_printf("%.1f Ko", bytes / 1024.0);
+    return g_strdup_printf("%.1f Mo", bytes / (1024.0 * 1024.0));
+}
+
+/* Met à jour le titre d'état du popover slots. */
+static void
+llm_slots_title_update(LlmTile *t)
+{
+    char  *body;
+    char  *txt;
+    char  *sizestr;
+    gsize  cur_size;
+    long   delta;
+
+    if (t->slots_title == NULL)
+        return;
+
+    body = llm_body_build(t);
+    cur_size = (body != NULL) ? strlen(body) : 0;
+    g_free(body);
+
+    delta = (long)cur_size - (long)t->ref_body_size;
+    if (delta < 0)
+        delta = 0;
+
+    sizestr = llm_slots_size_str((gsize)delta);
+
+    if (t->slot_origin < 0) {
+        if (t->turns_since_ref == 0)
+            txt = g_strdup("Non sauvegardé");
+        else
+            txt = g_strdup_printf("Non sauvegardé — +%s · %d tour%s",
+                                  sizestr, t->turns_since_ref,
+                                  t->turns_since_ref > 1 ? "s" : "");
+    } else {
+        if (t->turns_since_ref == 0)
+            txt = g_strdup_printf("Slot %d — à jour", t->slot_origin);
+        else
+            txt = g_strdup_printf("Slot %d — +%s · %d tour%s",
+                                  t->slot_origin, sizestr,
+                                  t->turns_since_ref,
+                                  t->turns_since_ref > 1 ? "s" : "");
+    }
+
+    gtk_label_set_text(GTK_LABEL(t->slots_title), txt);
+    if (t->slots_btn != NULL)
+        gtk_widget_set_tooltip_text(t->slots_btn, txt);
+    g_free(txt);
+    g_free(sizestr);
+}
+
+/* Popover slots ouvert : rafraîchit le titre d'état. */
+static void
+on_slots_pop_mapped(GtkWidget G_GNUC_UNUSED *w, gpointer data)
+{
+    llm_slots_title_update(data);
 }
 
 /* Dispatch commun des actions de persistance du menu slots. */
@@ -3941,6 +4037,13 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         gtk_widget_add_css_class(slots_pop, "cdb-pop");
 
         slots_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+
+        /* Titre d'état du slot. */
+        t->slots_title = gtk_label_new("Non sauvegardé");
+        gtk_label_set_xalign(GTK_LABEL(t->slots_title), 0.0);
+        gtk_widget_add_css_class(t->slots_title, "cdb-pop-title");
+        gtk_box_append(GTK_BOX(slots_box), t->slots_title);
+
         for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
             GtkWidget *lbl = gtk_label_new(items[i].label);
             GtkWidget *b = gtk_button_new();
@@ -3960,13 +4063,15 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
 
         gtk_popover_set_child(GTK_POPOVER(slots_pop), slots_box);
         gtk_widget_set_size_request(slots_pop, 300, -1);
+        g_signal_connect(slots_pop, "map",
+                         G_CALLBACK(on_slots_pop_mapped), t);
 
         t->slots_btn = gtk_menu_button_new();
         gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(t->slots_btn),
                                       "folder-templates-symbolic");
         gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->slots_btn), slots_pop);
         gtk_widget_set_tooltip_text(t->slots_btn,
-                                    "Persistance du JSON envoyé");
+                                    gtk_label_get_text(GTK_LABEL(t->slots_title)));
         gtk_widget_add_css_class(t->slots_btn, "flat");
         gtk_widget_add_css_class(t->slots_btn, "cdb-flat");
         gtk_widget_set_valign(t->slots_btn, GTK_ALIGN_CENTER);
@@ -4102,6 +4207,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     g_object_set(t->soup, "timeout", 120, "idle-timeout", 180, NULL);
     t->reply = g_string_new("");
     t->history = g_array_new(FALSE, FALSE, sizeof(LlmMsg));
+    t->slot_origin = -1;
     g_object_set_data_full(G_OBJECT(box), "cdb-llm-tile", t, llm_tile_free);
     return box;
 }
