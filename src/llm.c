@@ -1089,6 +1089,7 @@ static void llm_slots_save_dialog(LlmTile *t);
 static void llm_slots_load_dialog(LlmTile *t);
 static void llm_slots_clear_dialog(LlmTile *t);
 static void llm_slots_import_dialog(LlmTile *t);
+static void llm_chat_clear_dialog(LlmTile *t);
 
 static void
 llm_tile_free(gpointer data)
@@ -3663,6 +3664,42 @@ llm_slots_import_dialog(LlmTile *t)
     }
 }
 
+/* 6 — Vider le chat actuel : wipe complet du fil vivant (historique,
+ * vue, saisie, files CDB, état de streaming). */
+static void
+llm_chat_clear_dialog(LlmTile *t)
+{
+    GtkWindow  *parent = tile_window(t);
+    GtkTextIter start, end;
+
+    if (t->busy) {
+        hist_cdb_announce(t,
+            "vidage impossible pendant une requête en cours.");
+        return;
+    }
+    if (!confirm_dialog(parent, "Vider le chat actuel",
+                        "Vider la conversation actuelle ?",
+                        "Vider", TRUE))
+        return;
+
+    llm_history_wipe(t);
+    llm_queues_purge(t);
+    gtk_text_buffer_get_bounds(t->hist, &start, &end);
+    gtk_text_buffer_delete(t->hist, &start, &end);
+    md_thinking_reset(t->hist);
+    g_string_truncate(t->reply, 0);
+    t->rendered_len = 0;
+    t->in_reasoning = FALSE;
+    if (t->reply_mark != NULL) {
+        gtk_text_buffer_get_end_iter(t->hist, &end);
+        gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
+    }
+    llm_entry_clear(t);
+    t->cdb_retries = 0;
+
+    hist_cdb_announce(t, "chat actuel vidé.");
+}
+
 /* Dispatch des actions du menu persistance. */
 static void
 on_slots_action(GSimpleAction *action, GVariant G_GNUC_UNUSED *param,
@@ -3679,6 +3716,8 @@ on_slots_action(GSimpleAction *action, GVariant G_GNUC_UNUSED *param,
         llm_slots_load_dialog(t);
     else if (g_strcmp0(name, "clear") == 0)
         llm_slots_clear_dialog(t);
+    else if (g_strcmp0(name, "clear-chat") == 0)
+        llm_chat_clear_dialog(t);
     else if (g_strcmp0(name, "import") == 0)
         llm_slots_import_dialog(t);
 }
@@ -3868,7 +3907,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     g_signal_connect(t->send_btn, "clicked",
                      G_CALLBACK(on_llm_send_clicked), t);
 
-    /* Bouton persistance (slots JSON) : menu à 5 actions, à gauche du
+    /* Bouton persistance (slots JSON) : menu à 6 actions, à gauche du
      * play/pause. Groupe d'actions LOCAL à la tuile (pas le global) —
      * chaque tuile a ses propres slots. */
     {
@@ -3881,6 +3920,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
             { .name = "save",   .activate = on_slots_action },
             { .name = "load",   .activate = on_slots_action },
             { .name = "clear",  .activate = on_slots_action },
+            { .name = "clear-chat", .activate = on_slots_action },
             { .name = "import", .activate = on_slots_action },
         };
 
@@ -3891,6 +3931,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         g_menu_append(menu, "Sauvegarder dans un slot…", "slots.save");
         g_menu_append(menu, "Charger un slot…", "slots.load");
         g_menu_append(menu, "Vider un slot…", "slots.clear");
+        g_menu_append(menu, "Vider le chat actuel…", "slots.clear-chat");
         g_menu_append(menu, "Importer d'une session…", "slots.import");
 
         t->slots_btn = gtk_menu_button_new();
