@@ -982,6 +982,7 @@ static void on_llm_scroll(GtkAdjustment *adj, gpointer data);
 static void llm_model_section_refresh(LlmTile *t, ModelSection *sec);
 static void llm_model_menu_apply_filter(LlmTile *t);
 static void llm_model_menu_ensure(LlmTile *t);
+static void llm_model_button_refresh(LlmTile *t);
 static void llm_cdb_polls_purge(LlmTile *t);
 static void llm_cdb_deliver(LlmTile *t, const char *text);
 static gboolean llm_cdb_malformed(const char *reply);
@@ -1064,6 +1065,51 @@ llm_model_matches(const char *query, const char *id)
 
 /* Reconstruit les rangées d'une section : filtre « autorisés » +
  * ✓ devant le modèle actif (provider ET id). */
+
+/* Label phrasique du bouton modèle : « [Nom long] par [provider] ·
+ * slug [slug] ». Le nom long vient des sections fetchées (models.dev) ;
+ * tant qu'elles ne sont pas chargées, le slug seul tient lieu de nom. */
+static void
+llm_model_button_refresh(LlmTile *t)
+{
+    const char *slug;
+    const char *name = NULL;
+    const char *prov = NULL;
+    char       *label;
+
+    if (t->cfg == NULL || t->cfg->model == NULL || t->cfg->model[0] == '\0') {
+        gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn), "?");
+        return;
+    }
+    slug = t->cfg->model;
+    /* Nom long : cherché dans les sections déjà fetchées. */
+    if (t->sections != NULL)
+        for (guint i = 0; i < t->sections->len && name == NULL; i++) {
+            ModelSection *sec = g_ptr_array_index(t->sections, i);
+
+            if (t->cfg->provider != NULL &&
+                g_strcmp0(sec->provider, t->cfg->provider) != 0)
+                continue;
+            prov = sec->provider;
+            if (sec->models != NULL)
+                for (int k = 0; sec->models[k].id != NULL; k++)
+                    if (g_strcmp0(sec->models[k].id, slug) == 0) {
+                        name = sec->models[k].name;
+                        break;
+                    }
+        }
+    if (prov == NULL)
+        prov = t->cfg->provider;
+    if (name != NULL)
+        label = g_strdup_printf("%s par %s · slug %s", name, prov, slug);
+    else if (prov != NULL)
+        label = g_strdup_printf("%s · slug %s", prov, slug);
+    else
+        label = g_strdup(slug);
+    gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn), label);
+    g_free(label);
+}
+
 static void
 llm_model_section_refresh(LlmTile *t, ModelSection *sec)
 {
@@ -1134,8 +1180,7 @@ on_llm_model_row_activated(GtkListBox G_GNUC_UNUSED *lb,
         return; /* déjà actif */
     }
     llm_config_switch_active(t->cfg, prov, id);
-    gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn),
-                              t->cfg->model != NULL ? t->cfg->model : "?");
+    llm_model_button_refresh(t);
     for (guint i = 0; i < t->sections->len; i++)
         llm_model_section_refresh(t, g_ptr_array_index(t->sections, i));
     llm_model_menu_apply_filter(t);
@@ -1203,6 +1248,8 @@ on_section_models_fetched(LlmModelInfo *models, gpointer data)
         ctx->sec->models = models != NULL ? llm_models_copy(models) : NULL;
         llm_model_section_refresh(ctx->t, ctx->sec);
         llm_model_menu_apply_filter(ctx->t);
+        /* Le nom long du modèle actif vient peut-être d'arriver. */
+        llm_model_button_refresh(ctx->t);
     }
     g_object_unref(ctx->anchor); /* lâche l'ancre : teardown normal */
     g_free(ctx);
@@ -2859,10 +2906,10 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
 
         t->model_btn = gtk_menu_button_new();
         gtk_widget_add_css_class(t->model_btn, "flat");
-        gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn),
-                                  cfg->model != NULL ? cfg->model : "?");
+        gtk_widget_add_css_class(t->model_btn, "llm-model-btn");
         gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->model_btn),
                                     model_pop);
+        llm_model_button_refresh(t);
 
         /* Barre de composition : bloc plein légèrement plus sombre que
          * la tuile (classe .llm-compose), deux rangées — saisie au-dessus,

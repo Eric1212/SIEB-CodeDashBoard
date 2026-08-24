@@ -4278,6 +4278,15 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             "{ background: none; }\n"
             ".llm-compose-entry { padding: 4px 8px; }\n"
             ".llm-compose-send { padding: 2px 8px; min-height: 0; }\n"
+            /* Sélecteur de modèle : label phrasique discret — pas de fond,
+             * pas de bordure, 10 pt, chevron atténué (style « gracile »). */
+            "menubutton.llm-model-btn > button { background: none; "
+            "border: none; box-shadow: none; min-height: 0; padding: 0 2px; "
+            "font-size: 10pt; font-weight: normal; }\n"
+            "menubutton.llm-model-btn > button:hover:not(:checked) "
+            "{ background: none; }\n"
+            "menubutton.llm-model-btn > button > box > label "
+            "{ opacity: 0.85; }\n"
             /* Titlebar : teintes uniformes, tout en 10 pt non gras. */
             "headerbar { font-size: 10pt; font-weight: normal; }\n"
             "headerbar .title { font-weight: normal; font-size: 10pt; }\n"
