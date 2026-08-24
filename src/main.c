@@ -3222,7 +3222,7 @@ build_initprompt_editor(void)
     static const IpSnippet snippets[] = {
         { "[PROJET]", "[PROJET]" },
         { "[CHEMIN]", "[CHEMIN]" },
-        { "/CDB::",   "/CDB::bash-0::\"COMMANDE\"" },
+        { "/CDB::",   "/CDB::bash-0::\"//\"CDB-IN\"//COMMANDE//\"CDB-OUT\"//\"" },
     };
     InitPromptCtx *ctx = g_new0(InitPromptCtx, 1);
     GtkWidget     *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);

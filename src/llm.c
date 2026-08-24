@@ -1393,9 +1393,11 @@ str_replace_all(const char *s, const char *old_s, const char *new_s)
     "## Contrôle à distance des terminaux\n"                              \
     "En tout temps, tu contrôles les terminaux de CDB en écrivant dans "   \
     "ta réponse une commande au format exact :\n"                          \
-    "/CDB::bash-N::\"COMMANDE-VOULU\"\n"                                   \
+    "/CDB::bash-N::\"//\"CDB-IN\"//COMMANDE-VOULU//\"CDB-OUT\"//\"\n"      \
     "- N : numéro du terminal (0 à 9 ; il est créé s'il n'existe pas)\n"   \
-    "- COMMANDE-VOULU : la commande shell à exécuter dans ce terminal\n"   \
+    "- COMMANDE-VOULU : la commande shell, écrite telle quelle entre\n"    \
+    "  les marqueurs //\"CDB-IN\"// et //\"CDB-OUT\"// — guillemets\n"     \
+    "  doubles et sauts de ligne y sont autorisés sans échappement.\n"     \
     "Le résultat est restitué intégralement (fenêtre de "                  \
     "100000 lignes). Pour paginer, utilise head/tail/sed DANS la "         \
     "commande.\n\n"                                                        \
@@ -1840,8 +1842,10 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                 note = g_strdup_printf(
                     "COMMANDE MAL FORMÉE (tentative %d/%d) : "
                     "le protocole est exactement "
-                    "/CDB::bash-N::\"COMMANDE\" — N entre 0 et 9, "
-                    "commande entre guillemets, rien d'autre. "
+                    "/CDB::bash-N::\"//\"CDB-IN\"//COMMANDE"
+                    "//\"CDB-OUT\"//\" — N entre 0 et 9, "
+                    "commande complète entre les deux marqueurs "
+                    "(les \" internes sont autorisés tels quels). "
                     "Réécris-la proprement.",
                     t->cdb_retries, CDB_RETRY_MAX);
                 llm_cdb_deliver(t, note);
@@ -1868,7 +1872,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
 /* ------------------------------------------------ */
 /* Acteur CDB : contrôle à distance des terminaux    */
 /*                                                   */
-/* Le modèle écrit /CDB::bash-N::"cmd" dans   */
+/* Le modèle écrit /CDB::bash-N::"//"CDB-IN"//cmd//"CDB-OUT"//" dans */
 /* sa réponse ; CDB demande l'approbation d'Éric,    */
 /* exécute DANS l'onglet bash N visible (sortie      */
 /* déroutée vers un fichier-sentinelle), livre le    */
@@ -2557,56 +2561,81 @@ llm_cdb_next(LlmTile *t)
     g_free(s);
 }
 
+/* Texte reply sans les blocs thinking : le modèle y rédige souvent des
+ * brouillons de commandes qu'il ne faut ni exécuter ni condamner. Les
+ * deux scans du protocole (détection + malformation) partent de là. */
+static char *
+llm_scan_text(const char *reply)
+{
+    static GRegex *think_re = NULL;
+
+    if (think_re == NULL)
+        /* DOTALL indispensable : le thinking s'étale sur des dizaines
+         * de lignes ; sans lui, .*? s'arrête en fin de première ligne,
+         * le tag fermant n'est jamais atteint (bug constaté : 3
+         * exécutions). */
+        think_re = g_regex_new("〔thinking〕.*?〔/thinking〕",
+                               G_REGEX_DOTALL, 0, NULL);
+    return g_regex_replace_literal(think_re, reply, -1, 0, " ", 0, NULL);
+}
+
 /* Y a-t-il une VRAIE malformation /CDB:: dans la réponse ? Une mention
  * du protocole dans la prose (ex. citation littérale « bash-N » avec le
- * N majuscule, ou « COMMANDE » non remplacé) n'est PAS une tentative —
- * c'est du texte explicatif. Logique inverse et plus sûre : on cherche
- * les occurrences de /CDB::bash-<digit> qui ne sont PAS immédiatement
- * suivies de ::" — toute autre forme (guillemets simples, N à 2 chiffres,
- * séparateur manquant) est une vraie tentative bâclée. */
+ * N majuscule) n'est PAS une tentative — c'est du texte explicatif.
+ * Deux vraies tentatives bâclées :
+ * - type A : /CDB::bash-<digit> non immédiatement suivi du marqueur IN
+ *   (::"//"CDB-IN"// — guillemets simples, N à deux chiffres…) ;
+ * - type B : marqueur IN présent sans OUT après lui (réponse coupée ou
+ *   gabarit incomplet) — sinon la commande resterait silencieuse. */
 static gboolean
 llm_cdb_malformed(const char *reply)
 {
-    static GRegex *re = NULL;
+    static GRegex *re_a = NULL;
+    static GRegex *re_b = NULL;
     GMatchInfo    *mi = NULL;
     gboolean      bad = FALSE;
+    char          *scan;
 
-    if (re == NULL)
-        re = g_regex_new("/CDB::bash-(\\d)(?!::\\\")", 0, 0, NULL);
-    if (g_regex_match(re, reply, 0, &mi))
+    scan = llm_scan_text(reply);
+    if (re_a == NULL)
+        re_a = g_regex_new("/CDB::bash-(\\d)(?!::\"//\"CDB-IN\"//)",
+                           0, 0, NULL);
+    if (re_b == NULL)
+        re_b = g_regex_new("/CDB::bash-(\\d)::\"//\"CDB-IN\"//"
+                           "(?!.*?//\"CDB-OUT\"//)",
+                           G_REGEX_DOTALL, 0, NULL);
+    if (g_regex_match(re_a, scan != NULL ? scan : reply, 0, &mi))
         bad = TRUE;
     g_match_info_free(mi);
+    if (!bad && g_regex_match(re_b, scan != NULL ? scan : reply, 0, &mi))
+        bad = TRUE;
+    g_match_info_free(mi);
+    g_free(scan);
     return bad;
 }
 
-/* Détection des commandes /CDB:: d'une réponse. Protocole à 2 champs :
- * /CDB::bash-N::"commande" — la pagination se fait dans la commande
- * (head/tail/sed). TOUTES les commandes valides partient en file.
+/* Détection des commandes /CDB:: d'une réponse. Protocole à 3 champs :
+ * /CDB::bash-N::"//"CDB-IN"//commande//"CDB-OUT"//"
+ * La commande est prise BRUTE entre marqueurs — guillemets doubles et
+ * sauts de ligne y sont autorisés (heredocs, scripts inline) ; la
+ * pagination se fait dans la commande (head/tail/sed). TOUTES les
+ * commandes valides partient en file.
  *
- * Anti-double-détection : le buffer reply contient AUSSI le thinking
- * (« 〔thinking〕 … 〔/thinking〕 »), où le modèle rédige souvent la même
- * commande avant de l'écrire dans son contenu final. On scanne donc le
- * texte SANS les blocs thinking, et on saute tout doublon exact déjà
- * présent dans la file (même bash + même commande). */
+ * Anti-double-détection : on scanne le texte SANS les blocs thinking
+ * (voir llm_scan_text), et on saute tout doublon exact déjà présent
+ * dans la file (même bash + même commande). */
 static gboolean
 llm_agent_detect(LlmTile *t, const char *reply)
 {
     static GRegex *re = NULL;
-    static GRegex *think_re = NULL;
     GMatchInfo    *mi = NULL;
     gboolean      found = FALSE;
     char          *scan;
 
     if (re == NULL)
-        re = g_regex_new("/CDB::bash-(\\d)::\"([^\"]*)\"", 0, 0, NULL);
-    if (think_re == NULL)
-        /* DOTALL indispensable : le thinking s'étale sur des dizaines
-         * de lignes ; sans lui, .*? s'arrête en fin de première ligne,
-         * le tag fermant n'est jamais atteint et les commandes brouillon
-         * du thinking restent détectées (bug constaté : 3 exécutions). */
-        think_re = g_regex_new("〔thinking〕.*?〔/thinking〕",
-                               G_REGEX_DOTALL, 0, NULL);
-    scan = g_regex_replace_literal(think_re, reply, -1, 0, " ", 0, NULL);
+        re = g_regex_new("/CDB::bash-(\\d)::\"//\"CDB-IN\"//(.*?)"
+                         "//\"CDB-OUT\"//\"", G_REGEX_DOTALL, 0, NULL);
+    scan = llm_scan_text(reply);
     if (g_regex_match(re, scan != NULL ? scan : reply, 0, &mi)) {
         found = TRUE;
         do {
