@@ -926,6 +926,9 @@ typedef struct {
     GtkWidget   *entry;     /* saisie multi-lignes (GtkTextView) */
     GtkTextBuffer *entry_buf; /* buffer de la saisie */
     GtkWidget   *entry_scroll; /* fenêtre scrollée de la saisie */
+    GtkWidget   *compose;      /* bloc de composition (réf pour largeur pop) */
+    GtkWidget   *chevron;      /* label ▾/▴ du sélecteur de modèle */
+    GtkWidget   *model_phrase; /* label phrasique du sélecteur */
     GtkWidget   *send_btn;
     GCancellable *cancel;   /* annulation de la requête en cours */
     LlmRequest  *cur_req;   /* requête active (annulation pendant flux) */
@@ -983,6 +986,8 @@ static void llm_model_section_refresh(LlmTile *t, ModelSection *sec);
 static void llm_model_menu_apply_filter(LlmTile *t);
 static void llm_model_menu_ensure(LlmTile *t);
 static void llm_model_button_refresh(LlmTile *t);
+static void llm_model_pop_width_sync(LlmTile *t);
+static void llm_model_chevron_update(GtkWidget *popover, gpointer data);
 static void llm_cdb_polls_purge(LlmTile *t);
 static void llm_cdb_deliver(LlmTile *t, const char *text);
 static gboolean llm_cdb_malformed(const char *reply);
@@ -1078,7 +1083,8 @@ llm_model_button_refresh(LlmTile *t)
     char       *label;
 
     if (t->cfg == NULL || t->cfg->model == NULL || t->cfg->model[0] == '\0') {
-        gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn), "?");
+        if (t->model_phrase != NULL)
+            gtk_label_set_text(GTK_LABEL(t->model_phrase), "?");
         return;
     }
     slug = t->cfg->model;
@@ -1106,7 +1112,8 @@ llm_model_button_refresh(LlmTile *t)
         label = g_strdup_printf("%s · slug %s", prov, slug);
     else
         label = g_strdup(slug);
-    gtk_menu_button_set_label(GTK_MENU_BUTTON(t->model_btn), label);
+    if (t->model_phrase != NULL)
+        gtk_label_set_text(GTK_LABEL(t->model_phrase), label);
     g_free(label);
 }
 
@@ -1261,8 +1268,41 @@ llm_model_pop_mapped(GtkWidget G_GNUC_UNUSED *w, gpointer data)
     LlmTile *t = data;
 
     llm_model_menu_ensure(t);
+    /* Largeur du popover = celle de la barre de composition : le menu
+     * s'aligne sur la barre au lieu de flotter étroit au-dessus du
+     * bouton. */
+    llm_model_pop_width_sync(t);
     /* Recherche réinitialisée à chaque ouverture. */
     gtk_editable_set_text(GTK_EDITABLE(t->model_search), "");
+}
+
+/* Aligne la largeur du contenu du popover sur le bloc de composition. */
+static void
+llm_model_pop_width_sync(LlmTile *t)
+{
+    int width;
+
+    if (t->compose == NULL || t->model_pop == NULL)
+        return;
+    width = gtk_widget_get_width(t->compose);
+    if (width > 100)
+        gtk_widget_set_size_request(gtk_popover_get_child(
+                                        GTK_POPOVER(t->model_pop)),
+                                    width, -1);
+}
+
+/* Chevron dynamique : ▾ menu fermé (il s'ouvre vers le bas), ▴ menu
+ * ouvert (déployé). Remplace l'icône flèche du GtkMenuButton — le child
+ * custom du bouton porte la phrase + ce label. */
+static void
+llm_model_chevron_update(GtkWidget *popover, gpointer data)
+{
+    LlmTile *t = data;
+
+    if (t->chevron != NULL)
+        gtk_image_set_from_icon_name(GTK_IMAGE(t->chevron),
+            gtk_widget_get_mapped(popover) ? "pan-up-symbolic"
+                                           : "pan-down-symbolic");
 }
 
 /* Peuple le menu au premier affichage : une section par provider connu
@@ -2864,7 +2904,9 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         GtkWidget *configure;
 
         /* Sélecteur multi-provider : recherche + sections + Configurer.
-         * Peuplement paresseux au premier affichage du popover. */
+         * Peuplement AU DÉMARRAGE de la tuile (pas au premier map du
+         * popover) : les noms longs models.dev arrivent en tâche de fond
+         * et le label phrasique est complet sans ouvrir le menu. */
         t->sections = g_ptr_array_new_with_free_func(model_section_free);
 
         t->model_search = gtk_search_entry_new();
@@ -2900,6 +2942,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
 
         model_pop = gtk_popover_new();
         gtk_popover_set_child(GTK_POPOVER(model_pop), model_outer);
+        gtk_widget_add_css_class(model_pop, "llm-model-pop");
         g_signal_connect(model_pop, "map",
                          G_CALLBACK(llm_model_pop_mapped), t);
         t->model_pop = model_pop;
@@ -2909,7 +2952,30 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         gtk_widget_add_css_class(t->model_btn, "llm-model-btn");
         gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->model_btn),
                                     model_pop);
+        /* Child custom : phrase + chevron dynamique (▾/▴). Remplace le
+         * label intégré ET l'icône flèche du GtkMenuButton — plus de
+         * triangle gris, jamais bien centré. */
+        {
+            GtkWidget *btn_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+            GtkWidget *phrase = gtk_label_new(NULL);
+
+            t->chevron = gtk_image_new_from_icon_name("pan-down-symbolic");
+            gtk_menu_button_set_child(GTK_MENU_BUTTON(t->model_btn), btn_box);
+            /* Le label phrase est mis à jour par llm_model_button_refresh
+             * via le label intégré… qui n'existe plus en mode child : on
+             * le remplace par une réf directe. */
+            t->model_phrase = phrase;
+            gtk_box_append(GTK_BOX(btn_box), phrase);
+            gtk_box_append(GTK_BOX(btn_box), t->chevron);
+        }
         llm_model_button_refresh(t);
+        /* Fetch immédiat des modèles : noms longs disponibles sans
+         * ouvrir le popover (le menu reste paresseux à l'affichage). */
+        llm_model_menu_ensure(t);
+        g_signal_connect(model_pop, "map",
+                         G_CALLBACK(llm_model_chevron_update), t);
+        g_signal_connect(model_pop, "unmap",
+                         G_CALLBACK(llm_model_chevron_update), t);
 
         /* Barre de composition : bloc plein légèrement plus sombre que
          * la tuile (classe .llm-compose), deux rangées — saisie au-dessus,
@@ -2918,6 +2984,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
             GtkWidget *compose = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
             GtkWidget *tools = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 
+            t->compose = compose;
             gtk_widget_add_css_class(compose, "llm-compose");
             gtk_box_append(GTK_BOX(compose), t->entry_scroll);
             gtk_widget_set_hexpand(t->model_btn, FALSE);

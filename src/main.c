@@ -4287,6 +4287,14 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             "{ background: none; }\n"
             "menubutton.llm-model-btn > button > box > label "
             "{ opacity: 0.85; }\n"
+            /* Popover du sélecteur : flat/square comme le thème — fond
+             * uni, coins droits, bordure fine ; rangées transparentes. */
+            "popover.llm-model-pop > contents "
+            "{ border-radius: 0; background: @view_bg_color; }\n"
+            "popover.llm-model-pop listbox > row "
+            "{ background: none; border-radius: 0; }\n"
+            "popover.llm-model-pop listbox > row:hover "
+            "{ background: alpha(@theme_fg_color, 0.06); }\n"
             /* Titlebar : teintes uniformes, tout en 10 pt non gras. */
             "headerbar { font-size: 10pt; font-weight: normal; }\n"
             "headerbar .title { font-weight: normal; font-size: 10pt; }\n"
