@@ -8,6 +8,7 @@
  */
 
 #include "bashpanel.h"
+#include <string.h>
 #include <vte/vte.h>
 
 #define BASH_TAB_MIN 1
@@ -210,6 +211,49 @@ bash_panel_exec_tab(guint index, const char *command)
     vte_terminal_feed_child(VTE_TERMINAL(page), line, -1);
     g_free(line);
     return TRUE;
+}
+
+/* Point orange sur l'onglet N : une commande /CDB:: y tourne encore.
+ * Inséré APRÈS le label « bash N » (avant le bouton fermer) ; retiré à
+ * la fin du poll, ou à la fermeture de l'onglet (le label meurt avec). */
+void
+bash_panel_set_busy(guint index, gboolean busy)
+{
+    BashPanel *p;
+    GtkWidget *page;
+    GtkWidget *tab;
+    GtkWidget *w;
+
+    if (cdb_first_panel == NULL)
+        return;
+    p = g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel");
+    if (p == NULL)
+        return;
+    page = gtk_notebook_get_nth_page(GTK_NOTEBOOK(cdb_first_panel),
+                                     (int)index);
+    if (page == NULL)
+        return;
+    tab = gtk_notebook_get_tab_label(GTK_NOTEBOOK(cdb_first_panel), page);
+    if (tab == NULL)
+        return;
+
+    for (w = gtk_widget_get_first_child(tab); w != NULL;
+         w = gtk_widget_get_next_sibling(w)) {
+        if (g_strcmp0(gtk_widget_get_name(w), "cdb-busy-dot") == 0) {
+            if (!busy)
+                gtk_box_remove(GTK_BOX(tab), w);
+            return;
+        }
+    }
+    if (busy) {
+        GtkWidget *dot = gtk_label_new("●");
+        GtkWidget *label = gtk_widget_get_first_child(tab);
+
+        gtk_widget_set_name(dot, "cdb-busy-dot");
+        gtk_widget_add_css_class(dot, "cdb-busy-dot");
+        /* Entre le label « bash N » et le bouton fermer. */
+        gtk_box_insert_child_after(GTK_BOX(tab), dot, label);
+    }
 }
 
 /* Terminal de l'onglet N, ou NULL. */

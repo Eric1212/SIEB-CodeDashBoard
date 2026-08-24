@@ -4278,6 +4278,8 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             "{ background: none; }\n"
             ".llm-compose-entry { padding: 4px 8px; }\n"
             ".llm-compose-send { padding: 2px 8px; min-height: 0; }\n"
+            /* Point orange d'onglet bash : commande /CDB:: en cours. */
+            ".cdb-busy-dot { color: orange; font-size: 8pt; }\n"
             /* Sélecteur de modèle : label phrasique discret — pas de fond,
              * pas de bordure, 10 pt, chevron atténué (style « gracile »). */
             "menubutton.llm-model-btn > button { background: none; "

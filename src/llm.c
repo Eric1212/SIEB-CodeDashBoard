@@ -1268,27 +1268,26 @@ llm_model_pop_mapped(GtkWidget G_GNUC_UNUSED *w, gpointer data)
     LlmTile *t = data;
 
     llm_model_menu_ensure(t);
-    /* Largeur du popover = celle de la barre de composition : le menu
-     * s'aligne sur la barre au lieu de flotter étroit au-dessus du
-     * bouton. */
+    /* Largeur du popover = celle du bouton sélecteur : le menu termine
+     * juste à droite du chevron. */
     llm_model_pop_width_sync(t);
     /* Recherche réinitialisée à chaque ouverture. */
     gtk_editable_set_text(GTK_EDITABLE(t->model_search), "");
 }
 
-/* Aligne la largeur du contenu du popover sur le bloc de composition. */
+/* Le popover termine juste à droite du chevron : même largeur que le
+ * bouton sélecteur (le chevron en est le dernier élément), ancré à
+ * gauche sur ce même bouton. */
 static void
 llm_model_pop_width_sync(LlmTile *t)
 {
     int width;
 
-    if (t->compose == NULL || t->model_pop == NULL)
+    if (t->model_btn == NULL || t->model_pop == NULL)
         return;
-    width = gtk_widget_get_width(t->compose);
+    width = gtk_widget_get_width(t->model_btn);
     if (width > 100)
-        gtk_widget_set_size_request(gtk_popover_get_child(
-                                        GTK_POPOVER(t->model_pop)),
-                                    width, -1);
+        gtk_widget_set_size_request(t->model_pop, width, -1);
 }
 
 /* Chevron dynamique : ▾ menu fermé (il s'ouvre vers le bas), ▴ menu
@@ -1936,9 +1935,12 @@ typedef struct {
 /* Prompt shell : [user]@[host]:[n'importe quoi]$ suivi UNIQUEMENT
  * d'espaces (le padding VTE remplit la fin de ligne ; une sortie du
  * type « user@host:$ Bonjour » ne matche PAS — il y a du texte après).
- * La ligne est donc évaluée BRUTE, sans retrait des espaces. */
+ * La ligne est donc évaluée BRUTE, sans retrait des espaces.
+ * SANS ancre ^ : un prompt collé derrière une sortie sans \n final
+ * (« fooeric@host:~$ ») compte aussi comme fin de commande — la
+ * capture rogne alors le morceau prompt et garde le texte avant. */
 #define CDB_PROMPT_RE \
-    "^[A-Za-z0-9_.@-]+@[A-Za-z0-9_.-]+:[^\\n]*\\$[ ]*$"
+    "[A-Za-z0-9_.@-]+@[A-Za-z0-9_.-]+:[^\\n]*\\$[ ]*$"
 
 /* Registre des polls actifs : chaque tick valide son appartenance avant
  * de toucher pl (la tuile peut être détruite par un re-rendu du layout
@@ -1993,6 +1995,7 @@ cdb_poll_finish(CdbPoll *pl, const char *text)
     CdbResult *r;
 
     cdd_poll_unregister(pl);
+    bash_panel_set_busy((guint)pl->tab, FALSE); /* éteint le point */
 
     /* Anti-spam (loi d'Éric) : pas de livraison immédiate — le résultat
      * attend la fin de la file ; les résultats contenus à 100 % dans un
@@ -2088,6 +2091,7 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data)
         g_free(pl);
         return;
     }
+    bash_panel_set_busy((guint)a->tab, TRUE); /* point orange */
 
     /* Surveillance du buffer VTE : prompt vu CDB_ROUND_MIN fois de
      * suite en fin de buffer = terminé (spécification Éric). Pas de
@@ -2121,6 +2125,7 @@ cdb_spawn_wait_tick(gpointer data)
         cdd_poll_unregister(pl); /* quitte le registre d'attente… */
         cdb_poll_register(pl);   /* …et y revient comme poll normal */
         bash_panel_exec_tab((guint)pl->tab, cmd);
+        bash_panel_set_busy((guint)pl->tab, TRUE); /* point orange */
         g_free(cmd);
         g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
         return G_SOURCE_REMOVE;
@@ -2205,12 +2210,25 @@ cdb_poll_tick(gpointer data)
             lines = g_strsplit(full, "\n", -1);
         n = lines != NULL ? g_strv_length(lines) : 0;
 
-        /* retire les lignes vides finales puis le prompt de fin */
+        /* retire les lignes vides finales puis le prompt de fin :
+         * ligne = prompt exact → jetée ; prompt collé derrière une
+         * sortie (regex sans ^) → rogné au match, le texte avant est
+         * conservé. */
         while (n > 0 && lines[n - 1][strspn(lines[n - 1], " \r")] == '\0')
             n--;
-        if (n > 0 &&
-            g_regex_match(prompt_re, lines[n - 1], 0, NULL))
-            n--;
+        if (n > 0) {
+            GMatchInfo *mi = NULL;
+
+            if (g_regex_match(prompt_re, lines[n - 1], 0, &mi)) {
+                int pos = 0;
+
+                g_match_info_fetch_pos(mi, 0, &pos, NULL);
+                lines[n - 1][pos] = '\0';
+                if (lines[n - 1][strspn(lines[n - 1], " \r")] == '\0')
+                    n--; /* la ligne ne portait que le prompt */
+            }
+            g_match_info_free(mi);
+        }
 
         /* fenêtre : les CDB_TAIL_LINES dernières lignes du corps,
          * débarrassées du padding d'espaces de fin de ligne */
@@ -2941,6 +2959,9 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         gtk_box_append(GTK_BOX(model_outer), configure);
 
         model_pop = gtk_popover_new();
+        /* Pas de flèche grise vers le bouton : GtkMenuButton ne la
+         * désactive que pour ses popovers internes, pas le nôtre. */
+        gtk_popover_set_has_arrow(GTK_POPOVER(model_pop), FALSE);
         gtk_popover_set_child(GTK_POPOVER(model_pop), model_outer);
         gtk_widget_add_css_class(model_pop, "llm-model-pop");
         g_signal_connect(model_pop, "map",
@@ -2968,6 +2989,9 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
             gtk_box_append(GTK_BOX(btn_box), phrase);
             gtk_box_append(GTK_BOX(btn_box), t->chevron);
         }
+        /* Largeur minimale : phrase courte (« ? ») → popover quand même
+         * lisible ; la synchro à l'ouverture l'aligne sur le bouton. */
+        gtk_widget_set_size_request(model_pop, 320, -1);
         llm_model_button_refresh(t);
         /* Fetch immédiat des modèles : noms longs disponibles sans
          * ouvrir le popover (le menu reste paresseux à l'affichage). */

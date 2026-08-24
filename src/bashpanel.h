@@ -44,4 +44,9 @@ gboolean bash_panel_term_alive(guint index);
  * feed_child avant ce point = commande perdue. */
 gboolean bash_panel_term_ready(guint index);
 
+/* Point orange sur l'étiquette de l'onglet N tant qu'une commande
+ * /CDB:: y tourne : l'humain voit d'un coup d'œil quel bash attend
+ * (TUI bloquante, prompt sale…) et va donner la touche attendue. */
+void bash_panel_set_busy(guint index, gboolean busy);
+
 #endif /* CDB_BASHPANEL_H */
