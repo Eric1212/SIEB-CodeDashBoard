@@ -1232,28 +1232,28 @@ llm_cancel_current(LlmTile *t)
      * on rend la main. Les polls bash en cours se termineront mais leur
      * résultat ne déclenchera plus de re-requête (file vide → flush →
      * requery est court-circuité par busy=FALSE ci-dessous). */
-    if (t->cmd_queue != NULL && !g_queue_is_empty(t->cmd_queue)) {
-        for (GList *l = t->cmd_queue->head; l != NULL; l = l->next) {
+    if (t->core->cmd_queue != NULL && !g_queue_is_empty(t->core->cmd_queue)) {
+        for (GList *l = t->core->cmd_queue->head; l != NULL; l = l->next) {
             CdbCmdSpec *s = l->data;
 
             g_free(s->cmd);
             g_free(s);
         }
-        g_queue_free(t->cmd_queue);
-        t->cmd_queue = NULL;
+        g_queue_free(t->core->cmd_queue);
+        t->core->cmd_queue = NULL;
         hist_cdb_announce(t, "〔annulé〕 file de commandes vidée.");
     }
     /* 3. Résultats pendants non livrés : jetés (le user a dit stop). */
-    if (t->cdb_results != NULL) {
-        for (GList *l = t->cdb_results->head; l != NULL; l = l->next) {
+    if (t->core->cdb_results != NULL) {
+        for (GList *l = t->core->cdb_results->head; l != NULL; l = l->next) {
             CdbResult *r = l->data;
 
             g_free(r->label);
             g_free(r->text);
             g_free(r);
         }
-        g_queue_free(t->cdb_results);
-        t->cdb_results = NULL;
+        g_queue_free(t->core->cdb_results);
+        t->core->cdb_results = NULL;
     }
     /* 4. Si aucun flux réseau n'était actif (attente approbation/poll),
      * personne ne remettra busy à FALSE : on le fait ici. Si un flux
@@ -1391,16 +1391,16 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
         hist_append(t, "\n");
 
         if (llm_agent_detect(t, c->reply->str)) {
-            t->cdb_retries = 0;
+            t->core->cdb_retries = 0;
             llm_request_free(req);
             return;
         }
         if (strstr(c->reply->str, "/CDB::") != NULL &&
             llm_cdb_malformed(c->reply->str)) {
-            if (t->cdb_retries < CDB_RETRY_MAX) {
+            if (t->core->cdb_retries < CDB_RETRY_MAX) {
                 char *note;
 
-                t->cdb_retries++;
+                t->core->cdb_retries++;
                 note = g_strdup_printf(
                     "COMMANDE MAL FORMÉE (tentative %d/%d) : "
                     "le protocole est exactement "
@@ -1409,7 +1409,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                     "commande complète entre les deux marqueurs "
                     "(les \" internes sont autorisés tels quels). "
                     "Réécris-la proprement.",
-                    t->cdb_retries, CDB_RETRY_MAX);
+                    t->core->cdb_retries, CDB_RETRY_MAX);
                 llm_cdb_deliver(t, note);
                 g_free(note);
                 llm_request_free(req);
@@ -1503,9 +1503,9 @@ cdb_poll_finish(CdbPoll *pl, const char *text)
     r = g_new0(CdbResult, 1);
     r->label = g_steal_pointer(&pl->tab_label);
     r->text = g_strdup(text);
-    if (pl->t->cdb_results == NULL)
-        pl->t->cdb_results = g_queue_new();
-    g_queue_push_tail(pl->t->cdb_results, r);
+    if (pl->t->core->cdb_results == NULL)
+        pl->t->core->cdb_results = g_queue_new();
+    g_queue_push_tail(pl->t->core->cdb_results, r);
 
     llm_cdb_next(pl->t);
 
@@ -1840,7 +1840,7 @@ llm_cdb_requery(LlmTile *t)
 void
 llm_cdb_results_flush(LlmTile *t)
 {
-    GQueue   *q = t->cdb_results;
+    GQueue   *q = t->core->cdb_results;
     guint     n;
     gboolean *drop;
     guint     i = 0;
@@ -1857,12 +1857,12 @@ llm_cdb_results_flush(LlmTile *t)
                 g_free(r);
             }
             g_queue_free(q);
-            t->cdb_results = NULL;
+            t->core->cdb_results = NULL;
         }
         return;
     }
 
-    t->cdb_results = NULL;
+    t->core->cdb_results = NULL;
     if (q == NULL) {
         llm_cdb_requery(t);
         return;
@@ -1911,11 +1911,11 @@ llm_cdb_results_flush(LlmTile *t)
 void
 llm_cdb_next(LlmTile *t)
 {
-    if (t->cmd_queue == NULL || g_queue_is_empty(t->cmd_queue)) {
+    if (t->core->cmd_queue == NULL || g_queue_is_empty(t->core->cmd_queue)) {
         llm_cdb_results_flush(t);
         return;
     }
-    CdbCmdSpec *s = g_queue_pop_head(t->cmd_queue);
+    CdbCmdSpec *s = g_queue_pop_head(t->core->cmd_queue);
 
     llm_cdb_ask(t, s->tab, s->cmd);
     g_free(s->cmd);
@@ -2009,8 +2009,8 @@ llm_agent_detect(LlmTile *t, const char *reply)
             g_free(tabstr);
 
             /* Doublon exact déjà en file (ou en cours) : on ignore. */
-            if (t->cmd_queue != NULL)
-                for (GList *l = t->cmd_queue->head; l != NULL; l = l->next) {
+            if (t->core->cmd_queue != NULL)
+                for (GList *l = t->core->cmd_queue->head; l != NULL; l = l->next) {
                     CdbCmdSpec *q = l->data;
 
                     if (q->tab == tab && g_strcmp0(q->cmd, cmd) == 0) {
@@ -2023,9 +2023,9 @@ llm_agent_detect(LlmTile *t, const char *reply)
 
                 s->tab = tab;
                 s->cmd = cmd;
-                if (t->cmd_queue == NULL)
-                    t->cmd_queue = g_queue_new();
-                g_queue_push_tail(t->cmd_queue, s);
+                if (t->core->cmd_queue == NULL)
+                    t->core->cmd_queue = g_queue_new();
+                g_queue_push_tail(t->core->cmd_queue, s);
             } else
                 g_free(cmd);
         } while (g_match_info_next(mi, NULL));
@@ -2198,26 +2198,26 @@ llm_history_wipe(LlmTile *t)
 void
 llm_queues_purge(LlmTile *t)
 {
-    if (t->cmd_queue != NULL) {
-        for (GList *l = t->cmd_queue->head; l != NULL; l = l->next) {
+    if (t->core->cmd_queue != NULL) {
+        for (GList *l = t->core->cmd_queue->head; l != NULL; l = l->next) {
             CdbCmdSpec *s = l->data;
 
             g_free(s->cmd);
             g_free(s);
         }
-        g_queue_free(t->cmd_queue);
-        t->cmd_queue = NULL;
+        g_queue_free(t->core->cmd_queue);
+        t->core->cmd_queue = NULL;
     }
-    if (t->cdb_results != NULL) {
-        for (GList *l = t->cdb_results->head; l != NULL; l = l->next) {
+    if (t->core->cdb_results != NULL) {
+        for (GList *l = t->core->cdb_results->head; l != NULL; l = l->next) {
             CdbResult *r = l->data;
 
             g_free(r->label);
             g_free(r->text);
             g_free(r);
         }
-        g_queue_free(t->cdb_results);
-        t->cdb_results = NULL;
+        g_queue_free(t->core->cdb_results);
+        t->core->cdb_results = NULL;
     }
 }
 
@@ -2259,6 +2259,25 @@ llm_core_free(LlmCore *c)
                 g_ptr_array_unref(m->images);
         }
         g_array_free(c->history, TRUE);
+    }
+    if (c->cmd_queue != NULL) {
+        for (GList *l = c->cmd_queue->head; l != NULL; l = l->next) {
+            CdbCmdSpec *s = l->data;
+
+            g_free(s->cmd);
+            g_free(s);
+        }
+        g_queue_free(c->cmd_queue);
+    }
+    if (c->cdb_results != NULL) {
+        for (GList *l = c->cdb_results->head; l != NULL; l = l->next) {
+            CdbResult *r = l->data;
+
+            g_free(r->label);
+            g_free(r->text);
+            g_free(r);
+        }
+        g_queue_free(c->cdb_results);
     }
     g_free(c);
 }

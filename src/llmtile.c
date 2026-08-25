@@ -55,25 +55,6 @@ llm_tile_free(gpointer data)
         g_ptr_array_unref(t->pending_images);
     /* cfg EMPRUNTÉE à App (app->llm_cfg) : PAS libérée ici — main()
      * la libère une seule fois en fin de programme. */
-    if (t->cmd_queue != NULL) {
-        for (GList *l = t->cmd_queue->head; l != NULL; l = l->next) {
-            CdbCmdSpec *s = l->data;
-
-            g_free(s->cmd);
-            g_free(s);
-        }
-        g_queue_free(t->cmd_queue);
-    }
-    if (t->cdb_results != NULL) {
-        for (GList *l = t->cdb_results->head; l != NULL; l = l->next) {
-            CdbResult *r = l->data;
-
-            g_free(r->label);
-            g_free(r->text);
-            g_free(r);
-        }
-        g_queue_free(t->cdb_results);
-    }
     if (t->sections != NULL)
         g_ptr_array_unref(t->sections); /* libère les ModelSection */
     if (t->actions != NULL)
@@ -1282,7 +1263,7 @@ llm_slots_load_dialog(LlmTile *t)
         gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
     }
     llm_entry_clear(t);
-    t->cdb_retries = 0;
+    t->core->cdb_retries = 0;
 
     /* --- Repeuplement + rendu du fil importé. --- */
     n = json_array_get_length(msgs);
@@ -1623,7 +1604,7 @@ llm_chat_clear_dialog(LlmTile *t)
         gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
     }
     llm_entry_clear(t);
-    t->cdb_retries = 0;
+    t->core->cdb_retries = 0;
     t->slot_origin = -1;
     t->turns_since_ref = 0;
     {
@@ -1766,7 +1747,7 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     /* llm_send ouvre lui-même le tour (llm_turn_new) : pas d'appel ici,
      * sinon l'en-tête « Claude » serait rendu deux fois. */
     llm_entry_clear(t);
-    t->cdb_retries = 0; /* nouveau tour : compteur malformations reset */
+    t->core->cdb_retries = 0; /* nouveau tour : compteur malformations reset */
     {
         GPtrArray *images = t->pending_images;
 

@@ -206,6 +206,10 @@ typedef struct {
     GString      *reply;     /* réponse en cours d'accumulation */
     GArray       *history;   /* LlmMsg[] : fil de conversation envoyé */
     LlmTile      *view;      /* vue attachée (transition C1-C2) */
+
+    GQueue      *cmd_queue;   /* commandes /CDB:: valides en attente */
+    GQueue      *cdb_results; /* résultats pendants {label,text} */
+    int          cdb_retries; /* malformations consécutives (max 3) */
 } LlmCore;
 
 typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
@@ -243,9 +247,6 @@ typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     GActionGroup *actions;  /* pour « Configurer… » (ref ; emprunté sinon) */
     GListStore  *roots;     /* résolution du projet courant (empruntés, */
     GHashTable  *multi_paths; /* comme BashPanel) */
-    GQueue      *cmd_queue; /* commandes /CDB:: valides en attente */
-    GQueue      *cdb_results; /* résultats pendants {label,text} */
-    int          cdb_retries; /* malformations consécutives (max 3) */
     int          slot_origin;     /* -1 = non sauvegardé, sinon numéro du slot */
     int          turns_since_ref; /* tours utilisateur depuis la référence */
     gsize        ref_body_size;   /* taille du body à la référence */
