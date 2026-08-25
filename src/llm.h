@@ -128,10 +128,6 @@ void llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms);
  * substitutions [PROJET]/[CHEMIN] du prompt (empruntés à App).
  * modal_count : compteur de modales d'App (modale « Voir le JSON »,
  * limité à MODAL_MAX — emprunté). */
-GtkWidget *llm_tile_new(const LlmConfig *cfg,
-                        GActionGroup *actions,
-                        GListStore *roots, GHashTable *multi_paths,
-                        int *modal_count);
 
 
 #include <libsoup/soup.h>
@@ -197,7 +193,23 @@ typedef struct {
 /* Requête en cours : définie plus bas, référencée par LlmTile. */
 typedef struct LlmRequest LlmRequest;
 
+typedef struct LlmTile LlmTile;
+
+/* État conversationnel PARTAGÉ : possède le réseau et la conversation,
+ * survit aux vues (Phase 1 : singleton App ; vue unique transitoire). */
 typedef struct {
+    SoupSession  *soup;      /* session réseau du fil */
+    GCancellable *cancel;    /* annulation de la requête en cours */
+    LlmRequest   *cur_req;   /* requête active */
+    gboolean      stop_requested; /* pause cliquée : jette tout entrant */
+    gboolean      in_reasoning; /* delta courant = thinking */
+    GString      *reply;     /* réponse en cours d'accumulation */
+    GArray       *history;   /* LlmMsg[] : fil de conversation envoyé */
+    LlmTile      *view;      /* vue attachée (transition C1-C2) */
+} LlmCore;
+
+typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
+    LlmCore      *core;      /* état partagé (possédé par App) */
     GtkWidget   *view;      /* historique (GtkTextView, non éditable) */
     GtkTextBuffer *hist;    /* buffer de l'historique */
     GtkWidget   *entry;     /* saisie multi-lignes (GtkTextView) */
@@ -207,12 +219,8 @@ typedef struct {
     GtkWidget   *chevron;      /* label ▾/▴ du sélecteur de modèle */
     GtkWidget   *model_phrase; /* label phrasique du sélecteur */
     GtkWidget   *send_btn;
-    GCancellable *cancel;   /* annulation de la requête en cours */
-    LlmRequest  *cur_req;   /* requête active (annulation pendant flux) */
-    gboolean     stop_requested; /* pause cliquée : jette tout entrant */
     GtkWidget   *hist_view; /* la vue (pour les boutons dans le fil) */
     LlmConfig   *cfg;
-    SoupSession *soup;
     gboolean     busy;      /* requête en cours */
     gboolean     in_reasoning; /* delta courant = thinking */
     gboolean     follow;     /* scroll auto actif (user en bas) */
@@ -220,11 +228,9 @@ typedef struct {
                               * scroll mécanique (set_value), sans
                               * déplacer le curseur ni dépendre du
                               * layout asynchrone de la vue */
-    GString     *reply;     /* réponse en cours d'accumulation */
     gsize        rendered_len; /* nb d'octets de reply déjà rendus dans
                                * le fil (rendu incrémental) */
     GtkTextMark *reply_mark;/* marque de fin de la réponse en streaming */
-    GArray      *history;   /* LlmMsg[] : fil de conversation envoyé */
     GPtrArray   *pending_images; /* images collées, envoyées au prochain tour */
     GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
     GtkWidget   *slots_btn; /* bouton menu persistance (slots JSON) */
@@ -294,7 +300,7 @@ typedef struct {
 } SectionFetchCtx;
 
 struct LlmRequest {
-    LlmTile      *tile;
+    LlmCore    *core;   /* état partagé — survit aux vues */
     SoupMessage  *msg;
     GInputStream *stream;
     char          scratch[4096]; /* buffer du read en cours */

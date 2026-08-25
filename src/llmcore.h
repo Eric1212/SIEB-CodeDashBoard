@@ -4,32 +4,25 @@
 /* Prototypes generes - split C0 */
 
 char *
-llm_config_path(void)
-;
+llm_config_path(void);
 
 const char *
-llm_provider_default_url(const char *provider)
-;
+llm_provider_default_url(const char *provider);
 
 LlmModelInfo *
-llm_models_copy(const LlmModelInfo *models)
-;
+llm_models_copy(const LlmModelInfo *models);
 
 void
-llm_models_free(LlmModelInfo *models)
-;
+llm_models_free(LlmModelInfo *models);
 
 void
-md_enrich(LlmModelInfo *models, const char *provider)
-;
+md_enrich(LlmModelInfo *models, const char *provider);
 
 void
-md_deliver(ModelsFetch *f, LlmModelInfo *models)
-;
+md_deliver(ModelsFetch *f, LlmModelInfo *models);
 
 MdPending *
-md_deferred_new(ModelsFetch *f, LlmModelInfo *models)
-;
+md_deferred_new(ModelsFetch *f, LlmModelInfo *models);
 
 void
 md_load_done(GObject *source, GAsyncResult *res,
@@ -37,12 +30,10 @@ md_load_done(GObject *source, GAsyncResult *res,
 ;
 
 void
-md_load_start(void)
-;
+md_load_start(void);
 
 void
-models_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
-;
+models_fetch_done(GObject *source, GAsyncResult *res, gpointer data);
 
 void
 llm_models_fetch(const char *provider, LlmModelsCallback cb,
@@ -50,44 +41,34 @@ llm_models_fetch(const char *provider, LlmModelsCallback cb,
 ;
 
 JsonObject *
-llm_config_provider_object(const char *provider, JsonNode **root_node)
-;
+llm_config_provider_object(const char *provider, JsonNode **root_node);
 
 char *
-llm_config_get_api_key(const char *provider)
-;
+llm_config_get_api_key(const char *provider);
 
 char *
-llm_config_get_allowed_models(const char *provider)
-;
+llm_config_get_allowed_models(const char *provider);
 
 void
-llm_config_set_allowed_models(const char *provider, const char *filter)
-;
+llm_config_set_allowed_models(const char *provider, const char *filter);
 
 gboolean
-llm_model_allowed(const char *filter, const char *id)
-;
+llm_model_allowed(const char *filter, const char *id);
 
 void
-llm_retry429_load(LlmRetry429 *out)
-;
+llm_retry429_load(LlmRetry429 *out);
 
 void
-llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms)
-;
+llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms);
 
 void
-llm_retry5xx_load(LlmRetry5xx *out)
-;
+llm_retry5xx_load(LlmRetry5xx *out);
 
 void
-llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms)
-;
+llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms);
 
 char **
-llm_config_provider_names(void)
-;
+llm_config_provider_names(void);
 
 void
 llm_config_switch_active(LlmConfig *cfg, const char *provider,
@@ -95,32 +76,25 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
 ;
 
 void
-llm_config_free(LlmConfig *cfg)
-;
+llm_config_free(LlmConfig *cfg);
 
 LlmConfig *
-llm_config_load(void)
-;
+llm_config_load(void);
 
 void
-llm_config_save_provider(const char *provider, const char *api_key)
-;
+llm_config_save_provider(const char *provider, const char *api_key);
 
 const char *
-llm_msg_wire_role(LlmActor a)
-;
+llm_msg_wire_role(LlmActor a);
 
 char *
-str_replace_all(const char *s, const char *old_s, const char *new_s)
-;
+str_replace_all(const char *s, const char *old_s, const char *new_s);
 
 char *
-llm_persona_raw(void)
-;
+llm_persona_raw(void);
 
 void
-llm_persona_save(const char *text)
-;
+llm_persona_save(const char *text);
 
 void
 history_push_images(LlmTile *t, LlmActor actor, gboolean local,
@@ -128,32 +102,25 @@ history_push_images(LlmTile *t, LlmActor actor, gboolean local,
 ;
 
 void
-history_push(LlmTile *t, LlmActor actor, gboolean local, const char *content)
-;
+history_push(LlmTile *t, LlmActor actor, gboolean local, const char *content);
 
 long
-llm_json_int(JsonObject *obj, const char *member, long fallback)
-;
+llm_json_int(JsonObject *obj, const char *member, long fallback);
 
 void
-llm_handle_sse_line(LlmTile *t, const char *line)
-;
+llm_handle_sse_line(LlmCore *c, LlmTile *t, const char *line);
 
 void
-llm_request_detach(LlmTile *t)
-;
+llm_request_detach(LlmTile *t);
 
 void
-llm_cancel_current(LlmTile *t)
-;
+llm_cancel_current(LlmTile *t);
 
 void
-llm_request_free(LlmRequest *req)
-;
+llm_request_free(LlmRequest *req);
 
 void
-llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
-;
+llm_process_bytes(LlmRequest *req, const char *bytes, gssize n);
 
 void
 llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
@@ -161,83 +128,69 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
 ;
 
 void
-cdb_poll_register(CdbPoll *pl)
-;
+cdb_poll_register(CdbPoll *pl);
 
 void
-cdd_poll_unregister(CdbPoll *pl)
-;
+cdd_poll_unregister(CdbPoll *pl);
 
 void
-llm_cdb_polls_purge(LlmTile *t)
-;
+llm_cdb_polls_purge(LlmTile *t);
 
 void
-cdb_poll_finish(CdbPoll *pl, const char *text)
-;
+cdb_poll_finish(CdbPoll *pl, const char *text);
 
 gboolean
-cdb_spawn_wait_tick(gpointer data)
-;
+cdb_spawn_wait_tick(gpointer data);
 
 gboolean
-cdb_poll_tick(gpointer data)
-;
+cdb_poll_tick(gpointer data);
 
 void
-llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
-;
+llm_send_done(GObject *source, GAsyncResult *res, gpointer data);
 
 void
-llm_send_attempt(LlmRequest *req)
-;
+llm_send_attempt(LlmRequest *req);
 
 gboolean
-llm_retry_tick(gpointer data)
-;
+llm_retry_tick(gpointer data);
 
 void
-llm_cdb_deliver(LlmTile *t, const char *text)
-;
+llm_cdb_deliver(LlmTile *t, const char *text);
 
 void
-llm_cdb_requery(LlmTile *t)
-;
+llm_cdb_requery(LlmTile *t);
 
 void
-llm_cdb_results_flush(LlmTile *t)
-;
+llm_cdb_results_flush(LlmTile *t);
 
 void
-llm_cdb_next(LlmTile *t)
-;
+llm_cdb_next(LlmTile *t);
 
 char *
-llm_scan_text(const char *reply)
-;
+llm_scan_text(const char *reply);
 
 gboolean
-llm_cdb_malformed(const char *reply)
-;
+llm_cdb_malformed(const char *reply);
 
 gboolean
-llm_agent_detect(LlmTile *t, const char *reply)
-;
+llm_agent_detect(LlmTile *t, const char *reply);
 
 char *
-llm_body_build(LlmTile *t)
-;
+llm_body_build(LlmTile *t);
 
 void
-llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
-;
+llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt);
 
 void
-llm_history_wipe(LlmTile *t)
-;
+llm_history_wipe(LlmTile *t);
 
 void
-llm_queues_purge(LlmTile *t)
-;
+llm_queues_purge(LlmTile *t);
+
+LlmCore *
+llm_core_new(void);
+
+void
+llm_core_free(LlmCore *c);
 
 #endif

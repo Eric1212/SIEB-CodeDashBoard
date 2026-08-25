@@ -83,6 +83,7 @@ typedef struct {
     gboolean           selection_guard;
     /* Config LLM de la session (llm.json), possédée par App. */
     LlmConfig         *llm_cfg;
+    LlmCore           *llm_core;
 } App;
 
 /* Libère un PerFile (buffer + baseline). */
@@ -3570,7 +3571,7 @@ create_piece(const char *id, App *app)
     else if (strcmp(id, "bash") == 0)
         w = bash_panel_new(app->roots, app->multi_paths);
     else if (strcmp(id, "llm") == 0)
-        w = llm_tile_new(app->llm_cfg, G_ACTION_GROUP(app->win),
+        w = llm_tile_new(app->llm_core, app->llm_cfg, G_ACTION_GROUP(app->win),
                          app->roots, app->multi_paths,
                          &app->modal_count);
     else if (strcmp(id, "settings") == 0) {
@@ -4771,6 +4772,7 @@ main(int argc, char **argv)
     app->files = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
                                        per_file_free);
     app->llm_cfg = llm_config_load();
+    app->llm_core = llm_core_new();
 
     /* NON_UNIQUE : chaque processus est sa propre application — sinon
      * l'enfant délègue son activation au primaire (même ID D-Bus) et
@@ -4794,6 +4796,7 @@ main(int argc, char **argv)
     g_hash_table_destroy(app->files); /* libère chaque PerFile */
     layout_free(app->layout);
     dirty_store_free(app->dirty);
+    llm_core_free(app->llm_core);
     llm_config_free(app->llm_cfg);
     g_free(app);
 

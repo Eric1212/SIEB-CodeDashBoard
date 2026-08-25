@@ -1074,7 +1074,7 @@ history_push_images(LlmTile *t, LlmActor actor, gboolean local,
     m.content = g_strdup(content);
     m.images = images; /* transfert de propriété */
 
-    g_array_append_vals(t->history, &m, 1);
+    g_array_append_vals(t->core->history, &m, 1);
 }
 
 void
@@ -1109,7 +1109,7 @@ llm_json_int(JsonObject *obj, const char *member, long fallback)
 
 /* Traite une ligne SSE « data: … ». */
 void
-llm_handle_sse_line(LlmTile *t, const char *line)
+llm_handle_sse_line(LlmCore *c, LlmTile *t, const char *line)
 {
     const char *payload;
     JsonParser *parser;
@@ -1133,11 +1133,8 @@ llm_handle_sse_line(LlmTile *t, const char *line)
         return;
     }
     obj = json_node_get_object(json_parser_get_root(parser));
-
-    /* Dernier chunk OpenAI-compatible : usage final du tour. Certains
-     * providers le renvoient avec choices vide, d'autres en même temps
-     * que les deltas. */
-    if (obj != NULL && json_object_has_member(obj, "usage")) {
+    /* Bilan tokens : purement affichage (vue). Gardé si vue fermée. */
+    if (t != NULL && obj != NULL && json_object_has_member(obj, "usage")) {
         JsonObject *usage = json_object_get_object_member(obj, "usage");
 
         t->tokens_sent = llm_json_int(usage, "prompt_tokens",
@@ -1159,7 +1156,7 @@ llm_handle_sse_line(LlmTile *t, const char *line)
         && (delta = json_object_get_object_member(choices0, "delta")) != NULL) {
         const char *piece = NULL;
 
-        /* Contenu final ; en repli, le reasoning (thinking) du modèle. */
+        /* Contenu final ; en repli, le reasoning (thinking). */
         if (json_object_has_member(delta, "content")) {
             piece = json_object_get_string_member(delta, "content");
             if (piece == NULL || piece[0] == '\0')
@@ -1179,9 +1176,9 @@ llm_handle_sse_line(LlmTile *t, const char *line)
                 piece = json_object_get_string_member(delta, rfield);
                 if (piece != NULL && piece[0] != '\0') {
                     /* Première apparition du reasoning : tag d'ouverture. */
-                    if (!t->in_reasoning) {
-                        g_string_append(t->reply, "〔thinking〕 ");
-                        t->in_reasoning = TRUE;
+                    if (!c->in_reasoning) {
+                        g_string_append(c->reply, "〔thinking〕 ");
+                        c->in_reasoning = TRUE;
                     }
                 } else {
                     piece = NULL;
@@ -1193,32 +1190,21 @@ llm_handle_sse_line(LlmTile *t, const char *line)
                                   && piece == json_object_get_string_member(
                                                  delta, "content");
 
-            if (t->in_reasoning && is_content) {
+            if (c->in_reasoning && is_content) {
                 /* Transition thinking → contenu : tag de fermeture. */
-                g_string_append(t->reply, " 〔/thinking〕\n\n");
-                t->in_reasoning = FALSE;
+                g_string_append(c->reply, " 〔/thinking〕\n\n");
+                c->in_reasoning = FALSE;
             }
-            g_string_append(t->reply, piece);
-            hist_update_reply(t);
+            g_string_append(c->reply, piece);
+            if (t != NULL)
+                hist_update_reply(t);
         }
     }
     g_object_unref(parser);
 }
 
 
-/* Détache la requête en vol d'une tuile sur le point de mourir :
- * les callbacks async verront req->tile == NULL et se retireront
- * sans déréférencer la tuile déjà libérée (sinon use-after-free).
- * Définie ici car le type LlmRequest doit être complet ; appelée
- * depuis llm_tile_free via la déclaration anticipée plus haut. */
-void
-llm_request_detach(LlmTile *t)
-{
-    if (t->cur_req != NULL) {
-        t->cur_req->tile = NULL;
-        t->cur_req = NULL;
-    }
-}
+
 
 /* Clic sur le bouton média : play = envoyer, pause = annuler la
  * requête en cours (le flux se termine en erreur G_IO_ERROR_CANCELLED,
@@ -1234,11 +1220,11 @@ llm_cancel_current(LlmTile *t)
      * déconnexion et stoppe sa génération (comportement Zed/OpenCode).
      * Le flag stop_requested complète le dispositif : tout chunk déjà
      * en vol est JETÉ à réception au lieu d'être affiché. */
-    t->stop_requested = TRUE;
-    if (t->cancel != NULL)
-        g_cancellable_cancel(t->cancel);
-    if (t->cur_req != NULL && t->cur_req->stream != NULL)
-        g_input_stream_close_async(t->cur_req->stream, G_PRIORITY_DEFAULT,
+    t->core->stop_requested = TRUE;
+    if (t->core->cancel != NULL)
+        g_cancellable_cancel(t->core->cancel);
+    if (t->core->cur_req != NULL && t->core->cur_req->stream != NULL)
+        g_input_stream_close_async(t->core->cur_req->stream, G_PRIORITY_DEFAULT,
                                    NULL, NULL, NULL);
 
     /* 2. Boucle agentique en attente (approbation, exécution bash,
@@ -1281,8 +1267,8 @@ void
 llm_request_free(LlmRequest *req)
 {
     /* La requête courante de la tuile meurt : plus rien à annuler. */
-    if (req->tile != NULL && req->tile->cur_req == req)
-        req->tile->cur_req = NULL;
+    if (req->core != NULL && req->core->cur_req == req)
+        req->core->cur_req = NULL;
     g_free(req->url);
     g_free(req->body);
     g_free(req->auth);
@@ -1305,7 +1291,8 @@ llm_request_free(LlmRequest *req)
 void
 llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
 {
-    LlmTile *t = req->tile;
+    LlmCore *c = req->core;
+    LlmTile *view = c != NULL ? c->view : NULL;
     char    *nl;
 
     if ((gsize)n <= 0)
@@ -1316,42 +1303,51 @@ llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
 
         *nl = '\0';
         if (req->pending->str[0] != '\0')
-            llm_handle_sse_line(t, req->pending->str);
+            llm_handle_sse_line(c, view, req->pending->str);
         g_string_erase(req->pending, 0, consumed);
     }
 }
+
+/* Poussée d'historique au niveau CORE : fonctionne même sans vue
+ * attachée (la conversation survit à la fermeture de la tuile). */
+static void
+core_history_push(LlmCore *c, LlmActor actor, const char *content)
+{
+    LlmMsg m;
+
+    m.actor = actor;
+    m.local = FALSE;
+    m.content = g_strdup(content);
+    m.images = NULL;
+    g_array_append_vals(c->history, &m, 1);
+}
+
 
 void
 llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                 gpointer data)
 {
     LlmRequest *req = data;
-    LlmTile    *t;
+    LlmCore    *c = req->core;
+    LlmTile    *t = c != NULL ? c->view : NULL;
     gssize      n;
     GError     *error = NULL;
 
-    /* Tuile détruite depuis l'envoi (pièce fermée, fenêtre fermée,
-     * re-rendu du layout) : rien à afficher — libérer et sortir. */
-    if (req->tile == NULL) {
-        llm_request_free(req);
-        return;
-    }
-    t = req->tile;
-
     n = g_input_stream_read_finish(req->stream, res, &error);
 
-    /* Pause cliquée : tout entrant est jeté, fin immédiate. Le flag
-     * couvre le cas où cancellable/close n'interrompent pas la lecture
-     * assez vite (chunks en vol, drain libsoup) — constaté : 100 % de
-     * la réponse arrivait APRÈS le clic. */
-    if (t->stop_requested) {
+    /* Pause cliquée : tout entrant est jeté, fin immédiate. */
+    if (c->stop_requested) {
         if (error != NULL)
             g_error_free(error);
-        hist_flush_reply(t);
-        history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
-        llm_slots_title_update(t);
-        hist_append(t, "\n〔annulé〕\n");
-        llm_busy_set(t, FALSE);
+        if (t != NULL) {
+            hist_flush_reply(t);
+            history_push(t, LLMACTOR_LLM, FALSE, c->reply->str);
+            llm_slots_title_update(t);
+            hist_append(t, "\n〔annulé〕\n");
+            llm_busy_set(t, FALSE);
+        } else {
+            core_history_push(c, LLMACTOR_LLM, c->reply->str);
+        }
         llm_request_free(req);
         return;
     }
@@ -1360,46 +1356,47 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
         gboolean cancelled = g_error_matches(error, G_IO_ERROR,
                                              G_IO_ERROR_CANCELLED);
 
-        /* Annulation (pause) : la réponse partielle rejoint quand même
-         * l'historique — le modèle a dit ce qu'il a dit — puis fin
-         * silencieuse. */
         if (cancelled) {
             g_error_free(error);
-            hist_flush_reply(t);
-            history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
-            llm_slots_title_update(t);
-            hist_append(t, "\n〔annulé〕\n");
-            llm_busy_set(t, FALSE);
+            if (t != NULL) {
+                hist_flush_reply(t);
+                history_push(t, LLMACTOR_LLM, FALSE, c->reply->str);
+                llm_slots_title_update(t);
+                hist_append(t, "\n〔annulé〕\n");
+                llm_busy_set(t, FALSE);
+            } else {
+                core_history_push(c, LLMACTOR_LLM, c->reply->str);
+            }
             llm_request_free(req);
             return;
         }
-        hist_append(t, error->message);
+        if (t != NULL)
+            hist_append(t, error->message);
         g_error_free(error);
         llm_request_free(req);
         return;
     }
 
     if (n <= 0) {
-        /* Fin du flux : le fragment final rejoint l'affichage, la
-         * réponse complète rejoint l'historique (sans les tags
-         * thinking, qui ne sont que de l'affichage). */
-        hist_flush_reply(t);
-        history_push(t, LLMACTOR_LLM, FALSE, t->reply->str);
+        if (t != NULL)
+            hist_flush_reply(t);
+        core_history_push(c, LLMACTOR_LLM, c->reply->str);
+        if (t == NULL) {
+            /* Vue absente : historique à jour dans le core ; la boucle
+             * agentique passera au core en C2. */
+            llm_request_free(req);
+            return;
+        }
         llm_slots_title_update(t);
         hist_append(t, "\n");
 
-        /* Boucle agentique : des commandes /CDB:: dans la réponse ?
-         * Si oui, busy RESTE actif — la suite passe par l'approbation
-         * puis le résultat injecté (re-requête automatique).
-         * /CDB:: présent mais MAL FORMÉ → feedback au modèle + retry
-         * automatique (borné, anti-boucle infinie). */
-        if (llm_agent_detect(t, t->reply->str)) {
+        if (llm_agent_detect(t, c->reply->str)) {
             t->cdb_retries = 0;
             llm_request_free(req);
             return;
         }
-        if (strstr(t->reply->str, "/CDB::") != NULL &&
-            llm_cdb_malformed(t->reply->str)) {
+        if (strstr(c->reply->str, "/CDB::") != NULL &&
+            llm_cdb_malformed(c->reply->str)) {
             if (t->cdb_retries < CDB_RETRY_MAX) {
                 char *note;
 
@@ -1433,7 +1430,6 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                               sizeof(req->scratch), G_PRIORITY_DEFAULT,
                               NULL, llm_stream_read, req);
 }
-
 
 #define CDB_POLL_MS   250    /* cadence de surveillance (décision Éric) */
 #define CDB_ROUND_MIN 2      /* prompt vu 2 rounds de suite = terminé */
@@ -1686,45 +1682,30 @@ void
 llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
 {
     LlmRequest   *req = data;
-    LlmTile      *t = req->tile;
+    LlmCore      *c = req->core;
+    LlmTile      *t = c != NULL ? c->view : NULL;
     GError       *error = NULL;
     GInputStream *stream = soup_session_send_finish(SOUP_SESSION(source),
                                                     res, &error);
-
-    /* Tuile détruite pendant l'envoi : jeter flux et erreur, sortir
-     * sans toucher à la tuile libérée. */
-    if (req->tile == NULL) {
-        if (stream != NULL)
-            g_object_unref(stream);
-        if (error != NULL)
-            g_error_free(error);
-        llm_request_free(req);
-        return;
-    }
 
     if (error != NULL) {
         gboolean cancelled = g_error_matches(error, G_IO_ERROR,
                                              G_IO_ERROR_CANCELLED);
 
-        /* Annulation utilisateur : silencieuse (la réponse partielle
-         * déjà affichée reste dans le fil). */
-        if (!cancelled) {
+        if (!cancelled && t != NULL) {
             hist_append(t, "\n[erreur : ");
             hist_append(t, error->message);
             hist_append(t, "]\n");
         }
         g_error_free(error);
-        llm_busy_set(t, FALSE);
+        if (t != NULL)
+            llm_busy_set(t, FALSE);
         llm_request_free(req);
         return;
     }
     {
         guint status = soup_message_get_status(req->msg);
 
-        /* Erreurs transitoires : 429 (rate limit, rythme rapide) et
-         * 500-504 (upstream indisponible, rythme lent — un serveur en
-         * 503 a besoin de temps, pas d'insistance). Chacune sa config
-         * harness ; 505+ exclu (réessayer est inutile). */
         if (status == 429 ||
             (status >= 500 && status <= 504)) {
             gboolean    is_429 = status == 429;
@@ -1733,12 +1714,7 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
             gboolean    retry_on;
 
             if (stream != NULL) {
-                g_object_unref(stream); /* corps d'erreur consommé */
-                /* CRUCIAL : si les retries sont épuisés plus bas, on
-                 * CHUTE vers le bloc `status != 200` — sans cette mise
-                 * à NULL, il relirait puis re-libérerait le flux déjà
-                 * mort (use-after-free + double free : crash
-                 * « malloc(): unaligned tcache » constaté). */
+                g_object_unref(stream);
                 stream = NULL;
             }
 
@@ -1761,9 +1737,8 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
 
             if (retry_on && (infinite || req->attempt < max_retries)) {
                 req->attempt++;
-                /* Réassemblage SSE repart à zéro pour l'essai suivant. */
                 g_string_truncate(req->pending, 0);
-                if (req->attempt == 1) {
+                if (req->attempt == 1 && t != NULL) {
                     char *note = g_strdup_printf(
                         "\n[CDB] HTTP %u — nouvelles tentatives en "
                         "cours…\n", status);
@@ -1772,7 +1747,7 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
                     g_free(note);
                 }
                 g_timeout_add((guint)delay_ms, llm_retry_tick, req);
-                return; /* busy reste actif ; req vit pour l'essai suivant */
+                return;
             }
         }
 
@@ -1781,27 +1756,27 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
             char err_body[1024] = "";
             gsize nerr = 0;
 
-            /* Corps d'erreur (message JSON d'OpenRouter) pour diagnostic. */
             if (stream != NULL)
                 g_input_stream_read_all(stream, err_body,
                                         sizeof(err_body) - 1, &nerr, NULL,
                                         NULL);
             g_snprintf(msg, sizeof(msg), "\n[HTTP %u] %.*s\n", status,
                        (int)nerr, err_body);
-            hist_append(t, msg);
+            if (t != NULL)
+                hist_append(t, msg);
             if (stream != NULL)
                 g_object_unref(stream);
-            llm_busy_set(t, FALSE);
+            if (t != NULL)
+                llm_busy_set(t, FALSE);
             llm_request_free(req);
             return;
         }
     }
-    req->stream = stream; /* transfert : libéré par llm_request_free */
+    req->stream = stream;
     g_input_stream_read_async(req->stream, req->scratch,
                               sizeof(req->scratch), G_PRIORITY_DEFAULT,
-                              req->tile->cancel, llm_stream_read, req);
+                              req->core->cancel, llm_stream_read, req);
 }
-
 /* Un essai d'envoi : reconstruit un SoupMessage neuf depuis la
  * requête stockée (la session possède le message après send_async,
  * donc chaque tentative repart d'une instance fraîche). */
@@ -1823,10 +1798,11 @@ llm_send_attempt(LlmRequest *req)
         g_bytes_new_take((guint8 *)g_strdup(req->body),
                          strlen(req->body)));
 
-    llm_busy_set(req->tile, TRUE); /* icône pause = annuler */
+    if (req->core->view != NULL)
+        llm_busy_set(req->core->view, TRUE); /* icône pause = annuler */
     req->msg = msg;
-    soup_session_send_async(req->tile->soup, msg, G_PRIORITY_DEFAULT,
-                            req->tile->cancel, llm_send_done, req);
+    soup_session_send_async(req->core->soup, msg, G_PRIORITY_DEFAULT,
+                            req->core->cancel, llm_send_done, req);
 }
 
 gboolean
@@ -1834,16 +1810,10 @@ llm_retry_tick(gpointer data)
 {
     LlmRequest *req = data;
 
-    /* Timer orphelin : la tuile est morte pendant le délai de retry.
-     * Sans ce garde, le timer explosait dans la mémoire libérée. */
-    if (req->tile == NULL) {
-        llm_request_free(req);
-        return G_SOURCE_REMOVE;
-    }
+    /* Relance après délai : le core vit indépendamment de la vue. */
     llm_send_attempt(req);
     return G_SOURCE_REMOVE;
 }
-
 /* Livraison immédiate (décisions d'Éric, malformations) puis avance. */
 void
 llm_cdb_deliver(LlmTile *t, const char *text)
@@ -1854,7 +1824,7 @@ llm_cdb_deliver(LlmTile *t, const char *text)
 
 /* Re-interrogation du modèle après livraison des résultats. L'ouverture
  * du tour neuf est faite par llm_send elle-même : chaque départ de
- * requête réinitialise t->reply — c'est LE correctif du re-comptage
+ * requête réinitialise t->core->reply — c'est LE correctif du re-comptage
  * infini des commandes /CDB::. */
 void
 llm_cdb_requery(LlmTile *t)
@@ -2109,8 +2079,8 @@ llm_body_build(LlmTile *t)
     }
 
     /* Le fil des trois acteurs. */
-    for (guint i = 0; i < t->history->len; i++) {
-        LlmMsg     *m = &g_array_index(t->history, LlmMsg, i);
+    for (guint i = 0; i < t->core->history->len; i++) {
+        LlmMsg     *m = &g_array_index(t->core->history, LlmMsg, i);
         const char *wire = llm_msg_wire_role(m->actor);
 
         if (m->local)
@@ -2169,10 +2139,10 @@ llm_body_build(LlmTile *t)
 }
 
 /* Construit et envoie la requête chat/completions (stream=true).
- * Ouvre un NOUVEAU tour de réponse : en-tête acteur, t->reply remis à
+ * Ouvre un NOUVEAU tour de réponse : en-tête acteur, t->core->reply remis à
  * zéro, marque de streaming déplacée en fin de fil. Sans cette remise
  * à zéro, la boucle agentique ré-accumulait les réponses précédentes
- * dans t->reply et llm_agent_detect redétectait indéfiniment les MÊMES
+ * dans t->core->reply et llm_agent_detect redétectait indéfiniment les MÊMES
  * commandes /CDB:: (comptage infini, exécutions multiples). */
 void
 llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
@@ -2183,12 +2153,12 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     llm_turn_new(t);
     /* Cancellable FRAIS par requête : l'ancien peut rester dans l'état
      * « annulé » (un GCancellable annulé le reste). Flag stop aussi. */
-    t->stop_requested = FALSE;
-    if (t->cancel != NULL)
-        g_object_unref(t->cancel);
-    t->cancel = g_cancellable_new();
-    t->cur_req = req;
-    req->tile = t;
+    t->core->stop_requested = FALSE;
+    if (t->core->cancel != NULL)
+        g_object_unref(t->core->cancel);
+    t->core->cancel = g_cancellable_new();
+    t->core->cur_req = req;
+    req->core = t->core;
     req->attempt = 0;
     req->url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
 
@@ -2200,7 +2170,7 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     req->body = llm_body_build(t);
     llm_slots_last_save(req->body);
     t->tokens_sent = (long)((strlen(req->body) + 3) / 4);
-    t->tokens_received = (long)((t->reply->len + 3) / 4);
+    t->tokens_received = (long)((t->core->reply->len + 3) / 4);
     t->tokens_context = t->tokens_sent + t->tokens_received;
     t->tokens_estimated = TRUE;
     llm_status_update(t);
@@ -2210,18 +2180,18 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     llm_send_attempt(req);
 }
 
-/* Vide t->history (contenus et images) sans toucher au GArray. */
+/* Vide t->core->history (contenus et images) sans toucher au GArray. */
 void
 llm_history_wipe(LlmTile *t)
 {
-    for (guint i = 0; i < t->history->len; i++) {
-        LlmMsg *m = &g_array_index(t->history, LlmMsg, i);
+    for (guint i = 0; i < t->core->history->len; i++) {
+        LlmMsg *m = &g_array_index(t->core->history, LlmMsg, i);
 
         g_free(m->content);
         if (m->images != NULL)
             g_ptr_array_unref(m->images);
     }
-    g_array_set_size(t->history, 0);
+    g_array_set_size(t->core->history, 0);
 }
 
 /* Purge les files /CDB:: (elles référençaient l'ancien fil). */
@@ -2249,4 +2219,46 @@ llm_queues_purge(LlmTile *t)
         g_queue_free(t->cdb_results);
         t->cdb_results = NULL;
     }
+}
+
+/* ===== Core conversationnel (Phase 1) ===== */
+
+LlmCore *
+llm_core_new(void)
+{
+    LlmCore *c = g_new0(LlmCore, 1);
+
+    c->soup = soup_session_new();
+    c->cancel = g_cancellable_new();
+    c->reply = g_string_new(NULL);
+    c->history = g_array_new(FALSE, FALSE, sizeof(LlmMsg));
+    return c;
+}
+
+void
+llm_core_free(LlmCore *c)
+{
+    guint i;
+
+    if (c == NULL)
+        return;
+    if (c->cur_req != NULL)
+        llm_request_free(c->cur_req);
+    if (c->cancel != NULL)
+        g_object_unref(c->cancel);
+    if (c->soup != NULL)
+        g_object_unref(c->soup);
+    if (c->reply != NULL)
+        g_string_free(c->reply, TRUE);
+    if (c->history != NULL) {
+        for (i = 0; i < c->history->len; i++) {
+            LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
+
+            g_free(m->content);
+            if (m->images != NULL)
+                g_ptr_array_unref(m->images);
+        }
+        g_array_free(c->history, TRUE);
+    }
+    g_free(c);
 }

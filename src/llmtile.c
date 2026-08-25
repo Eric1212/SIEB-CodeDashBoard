@@ -1,6 +1,4 @@
 #define _POSIX_C_SOURCE 200809L
-
-#define _POSIX_C_SOURCE 200809L
 #include "llm.h"
 #include "session.h"
 #include "mdview.h"
@@ -14,7 +12,6 @@
 #include <string.h>
 #include <gdk/gdkkeysyms.h>
 
-#include "llm.h"
 
 /* ===== Constantes de vue (split C0) ===== */
 
@@ -44,32 +41,15 @@ llm_tile_free(gpointer data)
      * toucher à la tuile morte. Sans ce garde-fou, fermer une pièce
      * ou la fenêtre pendant un streaming = use-after-free sur
      * req->tile (crash « malloc(): unaligned tcache » constaté). */
-    llm_request_detach(t);
-    /* Tue le transport réseau au plus vite : sans annulation, libsoup
-     * peut continuer à drainer le socket en arrière-plan. */
-    if (t->cancel != NULL)
-        g_cancellable_cancel(t->cancel);
+    /* La vue se détache du core : les callbacks réseau continuent
+     * sans UI (l'état vit dans le core, Phase 1). */
+    if (t->core != NULL && t->core->view == t)
+        t->core->view = NULL;
 
     llm_cdb_polls_purge(t); /* polls actifs rattachés à cette tuile */
     if (t->status_timeout_id != 0) {
         g_source_remove(t->status_timeout_id);
         t->status_timeout_id = 0;
-    }
-    if (t->cancel != NULL)
-        g_object_unref(t->cancel);
-    if (t->soup != NULL)
-        g_object_unref(t->soup);
-    if (t->reply != NULL)
-        g_string_free(t->reply, TRUE);
-    if (t->history != NULL) {
-        for (guint i = 0; i < t->history->len; i++) {
-            LlmMsg *m = &g_array_index(t->history, LlmMsg, i);
-
-            g_free(m->content);
-            if (m->images != NULL)
-                g_ptr_array_unref(m->images);
-        }
-        g_array_free(t->history, TRUE);
     }
     if (t->pending_images != NULL)
         g_ptr_array_unref(t->pending_images);
@@ -481,8 +461,8 @@ void
 hist_update_reply(LlmTile *t)
 {
     GtkTextIter end;
-    const char *s = t->reply->str;
-    gsize       len = t->reply->len;
+    const char *s = t->core->reply->str;
+    gsize       len = t->core->reply->len;
     gsize       safe;
 
     if (len < t->rendered_len) {
@@ -494,7 +474,7 @@ hist_update_reply(LlmTile *t)
         gtk_text_buffer_get_end_iter(t->hist, &end);
         gtk_text_buffer_delete(t->hist, &start, &end);
         gtk_text_buffer_get_end_iter(t->hist, &end);
-        md_insert(t->hist, &end, t->reply->str);
+        md_insert(t->hist, &end, t->core->reply->str);
         t->rendered_len = len;
         llm_scroll_to_end(t);
         return;
@@ -510,7 +490,7 @@ hist_update_reply(LlmTile *t)
     }
 
     if (t->tokens_estimated) {
-        t->tokens_received = (long)((t->reply->len + 3) / 4);
+        t->tokens_received = (long)((t->core->reply->len + 3) / 4);
         t->tokens_context = t->tokens_sent + t->tokens_received;
     }
     llm_status_update(t);
@@ -522,12 +502,12 @@ hist_flush_reply(LlmTile *t)
 {
     GtkTextIter end;
 
-    if (t->rendered_len >= t->reply->len)
+    if (t->rendered_len >= t->core->reply->len)
         return;
     gtk_text_buffer_get_end_iter(t->hist, &end);
-    md_insert_append(t->hist, &end, t->reply->str + t->rendered_len,
-                     t->reply->len - t->rendered_len, TRUE);
-    t->rendered_len = t->reply->len;
+    md_insert_append(t->hist, &end, t->core->reply->str + t->rendered_len,
+                     t->core->reply->len - t->rendered_len, TRUE);
+    t->rendered_len = t->core->reply->len;
 }
 
 void
@@ -825,7 +805,7 @@ llm_turn_new(LlmTile *t)
     GtkTextIter end;
 
     hist_render_actor_header(t, LLMACTOR_LLM);
-    g_string_truncate(t->reply, 0);
+    g_string_truncate(t->core->reply, 0);
     md_thinking_reset(t->hist);
     t->rendered_len = 0; /* nouveau tour : rendu incrémental repart à zéro */
     t->in_reasoning = FALSE;
@@ -1294,7 +1274,7 @@ llm_slots_load_dialog(LlmTile *t)
     gtk_text_buffer_get_bounds(t->hist, &start, &end);
     gtk_text_buffer_delete(t->hist, &start, &end);
     md_thinking_reset(t->hist);
-    g_string_truncate(t->reply, 0);
+    g_string_truncate(t->core->reply, 0);
     t->rendered_len = 0;
     t->in_reasoning = FALSE;
     if (t->reply_mark != NULL) {
@@ -1635,7 +1615,7 @@ llm_chat_clear_dialog(LlmTile *t)
     gtk_text_buffer_get_bounds(t->hist, &start, &end);
     gtk_text_buffer_delete(t->hist, &start, &end);
     md_thinking_reset(t->hist);
-    g_string_truncate(t->reply, 0);
+    g_string_truncate(t->core->reply, 0);
     t->rendered_len = 0;
     t->in_reasoning = FALSE;
     if (t->reply_mark != NULL) {
@@ -1877,7 +1857,7 @@ on_llm_entry_changed(GtkTextBuffer G_GNUC_UNUSED *buf, gpointer data)
 }
 
 GtkWidget *
-llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
+llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
              GListStore *roots, GHashTable *multi_paths,
              int *modal_count)
 {
@@ -1899,6 +1879,9 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     }
 
     t = g_new0(LlmTile, 1);
+    t->core = core;
+    /* Attachement : le core diffuse vers cette vue tant quelle vit. */
+    core->view = t;
     t->cfg = (LlmConfig *)cfg;
     t->actions = actions != NULL ? g_object_ref(actions) : NULL;
     t->modal_count = modal_count; /* emprunté à App */
@@ -2218,11 +2201,8 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
         }
     }
 
-    t->soup = soup_session_new();
     /* Anti-hang : pas de données pendant 120 s = abandon. */
-    g_object_set(t->soup, "timeout", 120, "idle-timeout", 180, NULL);
-    t->reply = g_string_new("");
-    t->history = g_array_new(FALSE, FALSE, sizeof(LlmMsg));
+    g_object_set(t->core->soup, "timeout", 120, "idle-timeout", 180, NULL);
     t->pending_images = g_ptr_array_new_with_free_func(g_free);
     t->slot_origin = -1;
     g_object_set_data_full(G_OBJECT(box), "cdb-llm-tile", t, llm_tile_free);
