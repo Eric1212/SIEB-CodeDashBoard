@@ -502,7 +502,12 @@ bash_panel_new(GListStore *roots, GHashTable *multi_paths)
                                      (gpointer *)&cdb_first_panel);
     g_object_add_weak_pointer(G_OBJECT(p->notebook),
                               (gpointer *)&cdb_first_panel);
+    if (cdb_first_panel != NULL)
+        g_object_remove_weak_pointer(G_OBJECT(cdb_first_panel),
+                                     (gpointer *)&cdb_first_panel);
     cdb_first_panel = p->notebook;
+    g_object_add_weak_pointer(G_OBJECT(p->notebook),
+                              (gpointer *)&cdb_first_panel);
     g_signal_connect(p->notebook, "destroy", G_CALLBACK(bash_panel_destroy), p);
 
     /* Bouton « + » : nouvel onglet (désactivé à la limite). */

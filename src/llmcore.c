@@ -1839,7 +1839,7 @@ llm_cdb_results_flush(LlmCore *c)
 
     /* Boucle annulée par l'utilisateur : plus de re-requête. Les
      * résultats tardifs d'un poll bash encore actif sont jetés. */
-    if (c->cur_req == NULL) {
+    if (c->stop_requested) {
         if (q != NULL) {
             for (GList *l = q->head; l != NULL; l = l->next) {
                 CdbResult *r = l->data;
@@ -1885,11 +1885,13 @@ llm_cdb_results_flush(LlmCore *c)
         }
     }
 
-    for (guint vi = 0; vi < c->views->len; vi++) {
-        LlmTile *v = g_ptr_array_index(c->views, vi);
-        i = 0;
-        for (GList *l = q->head; l != NULL; l = l->next, i++) {
-            CdbResult *r = l->data;
+    i = 0;
+    for (GList *l = q->head; l != NULL; l = l->next, i++) {
+        CdbResult *r = l->data;
+
+        core_history_push(c, LLMACTOR_CDB, FALSE, r->text);
+        for (guint vi = 0; vi < c->views->len; vi++) {
+            LlmTile *v = g_ptr_array_index(c->views, vi);
 
             if (!drop[i])
                 llm_cdb_say_display(v, r->text);
