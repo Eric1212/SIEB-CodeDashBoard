@@ -196,4 +196,10 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data);
 void
 on_cdb_refuse_clicked(GtkButton *btn, gpointer data);
 
+void
+llm_core_turn_new(LlmCore *c);
+
+void
+core_cdb_announce(LlmCore *c, const char *text);
+
 #endif

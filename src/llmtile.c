@@ -657,15 +657,13 @@ hist_cdb_say(LlmTile *t, const char *text)
 
 
 void
-llm_turn_new(LlmTile *t)
+llm_tile_turn_reset(LlmTile *t)
 {
     GtkTextIter end;
 
     hist_render_actor_header(t, LLMACTOR_LLM);
-    g_string_truncate(t->core->reply, 0);
     md_thinking_reset(t->hist);
-    t->rendered_len = 0; /* nouveau tour : rendu incrémental repart à zéro */
-    t->in_reasoning = FALSE;
+    t->rendered_len = 0; /* rendu incrémental repart à zéro */
     gtk_text_buffer_get_end_iter(t->hist, &end);
     if (t->reply_mark == NULL)
         t->reply_mark = gtk_text_buffer_create_mark(t->hist, NULL,
@@ -726,7 +724,7 @@ on_llm_clip_texture(GObject *source_object,
             error != NULL ? error->message : "erreur inconnue");
 
         g_clear_error(&error);
-        hist_cdb_announce(t, msg);
+        core_cdb_announce(t->core, msg);
         g_free(msg);
         return;
     }
@@ -734,7 +732,7 @@ on_llm_clip_texture(GObject *source_object,
     png = gdk_texture_save_to_png_bytes(texture);
     g_object_unref(texture);
     if (png == NULL) {
-        hist_cdb_announce(t, "collage image impossible : encodage PNG.");
+        core_cdb_announce(t->core, "collage image impossible : encodage PNG.");
         return;
     }
 
@@ -1064,10 +1062,10 @@ llm_slots_save_dialog(LlmTile *t)
         t->ref_body_size = strlen(body);
         llm_slots_title_update(t);
         msg = g_strdup_printf("Slot %d sauvegardé.", slot);
-        hist_cdb_announce(t, msg);
+        core_cdb_announce(t->core, msg);
     } else {
         msg = g_strdup_printf("Échec de la sauvegarde du slot %d.", slot);
-        hist_cdb_announce(t, msg);
+        core_cdb_announce(t->core, msg);
     }
     g_free(msg);
     g_free(body);
@@ -1099,7 +1097,7 @@ llm_slots_load_dialog(LlmTile *t)
     json = llm_slots_load(slot);
     if (json == NULL) {
         msg = g_strdup_printf("Slot %d vide.", slot);
-        hist_cdb_announce(t, msg);
+        core_cdb_announce(t->core, msg);
         g_free(msg);
         return;
     }
@@ -1110,7 +1108,7 @@ llm_slots_load_dialog(LlmTile *t)
         g_clear_error(&error);
         g_object_unref(parser);
         g_free(json);
-        hist_cdb_announce(t, msg);
+        core_cdb_announce(t->core, msg);
         g_free(msg);
         return;
     }
@@ -1120,7 +1118,7 @@ llm_slots_load_dialog(LlmTile *t)
                         : NULL;
     if (msgs == NULL) {
         g_object_unref(parser);
-        hist_cdb_announce(t, "pas de tableau « messages » dans ce slot.");
+        core_cdb_announce(t->core, "pas de tableau « messages » dans ce slot.");
         return;
     }
 
@@ -1260,7 +1258,7 @@ llm_slots_load_dialog(LlmTile *t)
     llm_slots_title_update(t);
 
     msg = g_strdup_printf("Slot %d chargé — le fil a été remplacé.", slot);
-    hist_cdb_announce(t, msg);
+    core_cdb_announce(t->core, msg);
     g_free(msg);
 }
 
@@ -1277,7 +1275,7 @@ llm_slots_clear_dialog(LlmTile *t)
         return;
     if (!llm_slots_exists(slot)) {
         msg = g_strdup_printf("Slot %d déjà vide.", slot);
-        hist_cdb_announce(t, msg);
+        core_cdb_announce(t->core, msg);
         g_free(msg);
         return;
     }
@@ -1289,7 +1287,7 @@ llm_slots_clear_dialog(LlmTile *t)
     g_free(msg);
     llm_slots_clear(slot);
     msg = g_strdup_printf("Slot %d vidé.", slot);
-    hist_cdb_announce(t, msg);
+    core_cdb_announce(t->core, msg);
     g_free(msg);
 }
 
@@ -1443,10 +1441,10 @@ llm_slots_import_dialog(LlmTile *t)
         char *msg = g_strdup_printf("Slot importé dans le slot %d.",
                                     ctx.dst_slot);
 
-        hist_cdb_announce(t, msg);
+        core_cdb_announce(t->core, msg);
         g_free(msg);
     } else if (ctx.attempted) {
-        hist_cdb_announce(t, "échec de l'import.");
+        core_cdb_announce(t->core, "échec de l'import.");
     }
 }
 
@@ -1490,7 +1488,7 @@ llm_chat_clear_dialog(LlmTile *t)
     }
     llm_slots_title_update(t);
 
-    hist_cdb_announce(t, "chat actuel vidé.");
+    core_cdb_announce(t->core, "chat actuel vidé.");
 }
 
 char *
@@ -1618,8 +1616,12 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
         return;
     }
 
-    hist_render_actor_header(t, LLMACTOR_USER);
-    hist_append(t, prompt);
+    for (guint vi = 0; vi < t->core->views->len; vi++) {
+        LlmTile *v = g_ptr_array_index(t->core->views, vi);
+
+        hist_render_actor_header(v, LLMACTOR_USER);
+        hist_append(v, prompt);
+    }
     /* llm_send ouvre lui-même le tour (llm_turn_new) : pas d'appel ici,
      * sinon l'en-tête « Claude » serait rendu deux fois. */
     llm_entry_clear(t);
@@ -1713,6 +1715,54 @@ on_llm_entry_changed(GtkTextBuffer G_GNUC_UNUSED *buf, gpointer data)
     llm_entry_resize(data);
 }
 
+/* Rejoue la conversation du core dans cette vue (attachement) :
+ * chaque message avec son en-tête d'acteur, puis le fragment de
+ * réponse en cours s'il existe. Appelée après création du buffer. */
+static void
+llm_tile_replay_history(LlmTile *t)
+{
+    LlmCore    *c = t->core;
+    GtkTextIter eit;
+
+    if (c == NULL)
+        return;
+
+    for (guint i = 0; i < c->history->len; i++) {
+        LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
+
+        hist_render_actor_header(t, m->actor);
+        gtk_text_buffer_get_end_iter(t->hist, &eit);
+        if (m->actor == LLMACTOR_LLM)
+            md_insert(t->hist, &eit, m->content != NULL ? m->content : "");
+        else if (m->actor == LLMACTOR_CDB)
+            gtk_text_buffer_insert_with_tags_by_name(
+                t->hist, &eit, m->content != NULL ? m->content : "", -1,
+                "voice-cdb", NULL);
+        else
+            gtk_text_buffer_insert(t->hist, &eit,
+                                   m->content != NULL ? m->content : "", -1);
+        hist_append(t, "\n");
+    }
+
+    if (c->reply->len > 0) {
+        /* Stream en cours : rattrape le fragment (rendered_len a zero). */
+        hist_render_actor_header(t, LLMACTOR_LLM);
+        t->rendered_len = 0;
+        hist_flush_reply(t);
+    }
+
+    gtk_text_buffer_get_end_iter(t->hist, &eit);
+    if (t->reply_mark == NULL)
+        t->reply_mark = gtk_text_buffer_create_mark(t->hist, NULL,
+                                                    &eit, TRUE);
+    else
+        gtk_text_buffer_move_mark(t->hist, t->reply_mark, &eit);
+
+    llm_tile_decision_render(t);
+    llm_scroll_to_end(t);
+}
+
+
 GtkWidget *
 llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
              GListStore *roots, GHashTable *multi_paths,
@@ -1754,6 +1804,7 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     gtk_text_view_set_editable(GTK_TEXT_VIEW(t->view), FALSE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(t->view), GTK_WRAP_WORD_CHAR);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(t->view), FALSE);
+    llm_tile_replay_history(t);
 
     scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),

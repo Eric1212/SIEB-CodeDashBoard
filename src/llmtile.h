@@ -240,4 +240,6 @@ void llm_tile_decision_render(LlmTile *t);
 void llm_tile_decision_lock(LlmTile *t);
 void llm_cdb_say_display(LlmTile *t, const char *text);
 
+void llm_tile_turn_reset(LlmTile *t);
+
 #endif

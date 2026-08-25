@@ -1249,7 +1249,7 @@ llm_cancel_current(LlmTile *t)
         }
         g_queue_free(t->core->cmd_queue);
         t->core->cmd_queue = NULL;
-        hist_cdb_announce(t, "〔annulé〕 file de commandes vidée.");
+        core_cdb_announce(t->core, "〔annulé〕 file de commandes vidée.");
     }
     /* 3. Résultats pendants non livrés : jetés (le user a dit stop). */
     if (t->core->cdb_results != NULL) {
@@ -1266,7 +1266,8 @@ llm_cancel_current(LlmTile *t)
     /* 4. Si aucun flux réseau n'était actif (attente approbation/poll),
      * personne ne remettra busy à FALSE : on le fait ici. Si un flux
      * était actif, son callback de fin le fera — double appel inoffensif. */
-    llm_busy_set(t, FALSE);
+    for (guint vi = 0; vi < t->core->views->len; vi++)
+        llm_busy_set(g_ptr_array_index(t->core->views, vi), FALSE);
 }
 
 /* Libère la requête une seule fois (les callbacks de complétion
@@ -1337,7 +1338,6 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
 {
     LlmRequest *req = data;
     LlmCore    *c = req->core;
-    LlmTile    *t = c->views->len ? g_ptr_array_index(c->views, 0) : NULL;
     guint       vi;
     gssize      n;
     GError     *error = NULL;
@@ -1348,14 +1348,14 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
     if (c->stop_requested) {
         if (error != NULL)
             g_error_free(error);
-        if (t != NULL) {
-            hist_flush_reply(t);
-            history_push(t, LLMACTOR_LLM, FALSE, c->reply->str);
-            llm_slots_title_update(t);
-            hist_append(t, "\n〔annulé〕\n");
-            llm_busy_set(t, FALSE);
-        } else {
-            core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
+        core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
+        for (vi = 0; vi < c->views->len; vi++) {
+            LlmTile *v = g_ptr_array_index(c->views, vi);
+
+            hist_flush_reply(v);
+            llm_slots_title_update(v);
+            hist_append(v, "\n〔annulé〕\n");
+            llm_busy_set(v, FALSE);
         }
         llm_request_free(req);
         return;
@@ -1367,43 +1367,46 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
 
         if (cancelled) {
             g_error_free(error);
-            if (t != NULL) {
-                hist_flush_reply(t);
-                history_push(t, LLMACTOR_LLM, FALSE, c->reply->str);
-                llm_slots_title_update(t);
-                hist_append(t, "\n〔annulé〕\n");
-                llm_busy_set(t, FALSE);
-            } else {
-                core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
+            core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
+            for (vi = 0; vi < c->views->len; vi++) {
+                LlmTile *v = g_ptr_array_index(c->views, vi);
+
+                hist_flush_reply(v);
+                llm_slots_title_update(v);
+                hist_append(v, "\n〔annulé〕\n");
+                llm_busy_set(v, FALSE);
             }
             llm_request_free(req);
             return;
         }
-        if (t != NULL)
-            hist_append(t, error->message);
+        for (vi = 0; vi < c->views->len; vi++)
+            hist_append(g_ptr_array_index(c->views, vi), error->message);
         g_error_free(error);
         llm_request_free(req);
         return;
     }
 
     if (n <= 0) {
-        if (t != NULL)
-            hist_flush_reply(t);
         core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
-        llm_slots_title_update(t);
-        hist_append(t, "\n");
+        for (vi = 0; vi < c->views->len; vi++) {
+            LlmTile *v = g_ptr_array_index(c->views, vi);
+
+            hist_flush_reply(v);
+            llm_slots_title_update(v);
+            hist_append(v, "\n");
+        }
 
         if (llm_agent_detect(c, c->reply->str)) {
-            t->core->cdb_retries = 0;
+            c->cdb_retries = 0;
             llm_request_free(req);
             return;
         }
         if (strstr(c->reply->str, "/CDB::") != NULL &&
             llm_cdb_malformed(c->reply->str)) {
-            if (t->core->cdb_retries < CDB_RETRY_MAX) {
+            if (c->cdb_retries < CDB_RETRY_MAX) {
                 char *note;
 
-                t->core->cdb_retries++;
+                c->cdb_retries++;
                 note = g_strdup_printf(
                     "COMMANDE MAL FORMÉE (tentative %d/%d) : "
                     "le protocole est exactement "
@@ -1412,7 +1415,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                     "commande complète entre les deux marqueurs "
                     "(les \" internes sont autorisés tels quels). "
                     "Réécris-la proprement.",
-                    t->core->cdb_retries, CDB_RETRY_MAX);
+                    c->cdb_retries, CDB_RETRY_MAX);
                 core_cdb_deliver(c, note);
                 g_free(note);
                 llm_request_free(req);
@@ -1427,7 +1430,8 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                     "cette boucle. Réponds en texte ou reformule entièrement.");
         }
 
-        llm_busy_set(t, FALSE);
+        for (vi = 0; vi < c->views->len; vi++)
+            llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
         llm_request_free(req);
         return;
     }
@@ -1669,7 +1673,7 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
 {
     LlmRequest   *req = data;
     LlmCore      *c = req->core;
-    LlmTile      *t = c->views->len ? g_ptr_array_index(c->views, 0) : NULL;
+    guint       vi;
     GError       *error = NULL;
     GInputStream *stream = soup_session_send_finish(SOUP_SESSION(source),
                                                     res, &error);
@@ -1678,14 +1682,16 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
         gboolean cancelled = g_error_matches(error, G_IO_ERROR,
                                              G_IO_ERROR_CANCELLED);
 
-        if (!cancelled && t != NULL) {
-            hist_append(t, "\n[erreur : ");
-            hist_append(t, error->message);
-            hist_append(t, "]\n");
+        if (!cancelled) {
+            char *note = g_strdup_printf("\n[erreur : %s]\n",
+                                         error->message);
+
+            core_cdb_announce(c, note);
+            g_free(note);
         }
         g_error_free(error);
-        if (t != NULL)
-            llm_busy_set(t, FALSE);
+        for (vi = 0; vi < c->views->len; vi++)
+            llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
         llm_request_free(req);
         return;
     }
@@ -1724,12 +1730,12 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
             if (retry_on && (infinite || req->attempt < max_retries)) {
                 req->attempt++;
                 g_string_truncate(req->pending, 0);
-                if (req->attempt == 1 && t != NULL) {
+                if (req->attempt == 1) {
                     char *note = g_strdup_printf(
                         "\n[CDB] HTTP %u — nouvelles tentatives en "
                         "cours…\n", status);
 
-                    hist_append(t, note);
+                    core_cdb_announce(c, note);
                     g_free(note);
                 }
                 g_timeout_add((guint)delay_ms, llm_retry_tick, req);
@@ -1748,12 +1754,11 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
                                         NULL);
             g_snprintf(msg, sizeof(msg), "\n[HTTP %u] %.*s\n", status,
                        (int)nerr, err_body);
-            if (t != NULL)
-                hist_append(t, msg);
+            core_cdb_announce(c, msg);
             if (stream != NULL)
                 g_object_unref(stream);
-            if (t != NULL)
-                llm_busy_set(t, FALSE);
+            for (vi = 0; vi < c->views->len; vi++)
+                llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
             llm_request_free(req);
             return;
         }
@@ -1805,6 +1810,15 @@ llm_retry_tick(gpointer data)
     return G_SOURCE_REMOVE;
 }
 /* Livraison immédiate (décisions d'Éric, malformations) puis avance. */
+void
+core_cdb_announce(LlmCore *c, const char *text)
+{
+    core_history_push(c, LLMACTOR_CDB, TRUE, text);
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_cdb_say_display(g_ptr_array_index(c->views, vi), text);
+}
+
+
 void
 core_cdb_deliver(LlmCore *c, const char *text)
 {
@@ -2251,38 +2265,52 @@ llm_body_build(LlmTile *t)
  * à zéro, la boucle agentique ré-accumulait les réponses précédentes
  * dans t->core->reply et llm_agent_detect redétectait indéfiniment les MÊMES
  * commandes /CDB:: (comptage infini, exécutions multiples). */
+/* Ouverture d'un tour : état au core, reset d'affichage par vue. */
+void
+llm_core_turn_new(LlmCore *c)
+{
+    g_string_truncate(c->reply, 0);
+    c->in_reasoning = FALSE;
+    c->stop_requested = FALSE;
+
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_tile_turn_reset(g_ptr_array_index(c->views, vi));
+}
+
 void
 llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
 {
+    LlmCore    *c = t->core;
     LlmRequest *req = g_new0(LlmRequest, 1);
 
-    req->pending = g_string_new(NULL); /* réassemblage des lignes SSE */
-    llm_turn_new(t);
-    /* Cancellable FRAIS par requête : l'ancien peut rester dans l'état
-     * « annulé » (un GCancellable annulé le reste). Flag stop aussi. */
-    t->core->stop_requested = FALSE;
-    if (t->core->cancel != NULL)
-        g_object_unref(t->core->cancel);
-    t->core->cancel = g_cancellable_new();
-    t->core->cur_req = req;
-    req->core = t->core;
+    req->pending = g_string_new(NULL);
+    llm_core_turn_new(c);
+    if (c->cancel != NULL)
+        g_object_unref(c->cancel);
+    c->cancel = g_cancellable_new();
+    c->cur_req = req;
+    req->core = c;
     req->attempt = 0;
-    req->url = g_strdup_printf("%s/chat/completions", t->cfg->api_url);
+    req->url = g_strdup_printf("%s/chat/completions", c->cfg->api_url);
 
-    if (t->cfg->api_key != NULL && t->cfg->api_key[0] != '\0')
-        req->auth = g_strdup_printf("Bearer %s", t->cfg->api_key);
+    if (c->cfg->api_key != NULL && c->cfg->api_key[0] != '\0')
+        req->auth = g_strdup_printf("Bearer %s", c->cfg->api_key);
 
-    /* Le body est construit par llm_body_build (même code que la vue
-     * slots) puis persisté dans last.json : trace exacte de l'envoi. */
     req->body = llm_body_build(t);
     llm_slots_last_save(req->body);
-    t->tokens_sent = (long)((strlen(req->body) + 3) / 4);
-    t->tokens_received = (long)((t->core->reply->len + 3) / 4);
-    t->tokens_context = t->tokens_sent + t->tokens_received;
-    t->tokens_estimated = TRUE;
-    llm_status_update(t);
-    t->turns_since_ref++;
-    llm_slots_title_update(t);
+
+    /* Bilan estimé : propre à chaque vue (bandeau). */
+    for (guint vi = 0; vi < c->views->len; vi++) {
+        LlmTile *v = g_ptr_array_index(c->views, vi);
+
+        v->tokens_sent = (long)((strlen(req->body) + 3) / 4);
+        v->tokens_received = (long)((c->reply->len + 3) / 4);
+        v->tokens_context = v->tokens_sent + v->tokens_received;
+        v->tokens_estimated = TRUE;
+        llm_status_update(v);
+        v->turns_since_ref++;
+        llm_slots_title_update(v);
+    }
 
     llm_send_attempt(req);
 }
