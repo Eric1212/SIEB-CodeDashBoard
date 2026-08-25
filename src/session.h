@@ -20,7 +20,7 @@
 
 /* Numéro de session résolu au démarrage (variable globale simple : le
  * module est initialisé une fois dans main avant toute use). */
-extern int sieb_session;
+extern int cdb_session;
 
 /* Initialise la session : lit CDB_SESSION si présent et valide ;
  * sinon détecte les autres instances (même binaire) — 000 si aucune,

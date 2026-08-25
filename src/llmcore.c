@@ -217,7 +217,7 @@ md_load_done(GObject *source, GAsyncResult *res,
         g_object_unref(parser);
         g_bytes_unref(bytes);
     } else {
-        g_printerr("SIEB: models.dev échoué : %s\n", err->message);
+        g_printerr("CDB: models.dev échoué : %s\n", err->message);
         g_error_free(err);
     }
 
@@ -297,7 +297,7 @@ models_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
         g_object_unref(parser);
         g_bytes_unref(bytes);
     } else {
-        g_printerr("SIEB: /models échoué : %s\n", err->message);
+        g_printerr("CDB: /models échoué : %s\n", err->message);
         g_error_free(err);
     }
 
@@ -465,7 +465,7 @@ llm_config_set_allowed_models(const char *provider, const char *filter)
     json_generator_set_root(gen, work_root);
     text = json_to_string(work_root, TRUE);
     if (!g_file_set_contents(path, text, -1, &error)) {
-        g_printerr("SIEB: écriture allowed_models : %s\n", error->message);
+        g_printerr("CDB: écriture allowed_models : %s\n", error->message);
         g_error_free(error);
     }
     g_free(text);
@@ -569,7 +569,7 @@ llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms)
         json_generator_set_root(gen, work);
         text = json_to_string(work, TRUE);
         if (!g_file_set_contents(path, text, -1, &error)) {
-            g_printerr("SIEB: écriture retry429 : %s\n", error->message);
+            g_printerr("CDB: écriture retry429 : %s\n", error->message);
             g_error_free(error);
         }
         g_free(text);
@@ -650,7 +650,7 @@ llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms)
 
         json_generator_set_root(gen, work);
         if (!g_file_set_contents(path, text, -1, &error)) {
-            g_printerr("SIEB: écriture retry5xx : %s\n", error->message);
+            g_printerr("CDB: écriture retry5xx : %s\n", error->message);
             g_error_free(error);
         }
         g_free(text);
@@ -763,7 +763,7 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
         gen = json_generator_new();
         text = json_to_string(work, TRUE);
         if (!g_file_set_contents(path, text, -1, &error)) {
-            g_printerr("SIEB: écriture switch active : %s\n",
+            g_printerr("CDB: écriture switch active : %s\n",
                        error->message);
             g_error_free(error);
         }
@@ -1055,7 +1055,7 @@ llm_persona_save(const char *text)
 
     g_mkdir_with_parents(dir, 0755);
     if (!g_file_set_contents(path, text != NULL ? text : "", -1, &error)) {
-        g_printerr("SIEB: écriture prompts/default.txt : %s\n",
+        g_printerr("CDB: écriture prompts/default.txt : %s\n",
                    error->message);
         g_error_free(error);
     }

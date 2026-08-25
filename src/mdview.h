@@ -14,8 +14,8 @@
  * injectees ici par sed (placeholders @OPEN@ / @CLOSE@).
  */
 
-#ifndef SIEB_MDVIEW_H
-#define SIEB_MDVIEW_H
+#ifndef CDB_MDVIEW_H
+#define CDB_MDVIEW_H
 
 #include <gtk/gtk.h>
 
@@ -42,4 +42,4 @@ void md_thinking_attach(GtkTextBuffer *buf, GtkWidget *view);
  * independemment cliquables. */
 void md_thinking_reset(GtkTextBuffer *buf);
 
-#endif /* SIEB_MDVIEW_H */
+#endif /* CDB_MDVIEW_H */

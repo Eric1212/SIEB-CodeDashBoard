@@ -496,7 +496,7 @@ update_diff(App *app)
         return;
     ranges = g_ptr_array_new_with_free_func(g_free);
     if (app->current_file != NULL && app->saved_content != NULL)
-        siebd_diff_compute(app->saved_content, buffer_text(app), ranges, &total);
+        cdb_diff_compute(app->saved_content, buffer_text(app), ranges, &total);
     else
         total = 0;
     cdb_diff_bar_set_ranges(CDB_DIFF_BAR(app->diffbar), ranges, total);

@@ -97,7 +97,7 @@ add_range(GPtrArray *out, guint line_start, guint count,
 #define LCS_MAX_CELLS 5000000u
 
 void
-siebd_diff_compute(const char *saved, const char *current,
+cdb_diff_compute(const char *saved, const char *current,
                    GPtrArray *out, guint *total_lines)
 {
     gchar **a, **b;          /* a = référence, b = buffer */

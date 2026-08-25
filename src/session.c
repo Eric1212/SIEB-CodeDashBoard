@@ -19,7 +19,7 @@
 
 extern char **environ;
 
-int sieb_session = 0;
+int cdb_session = 0;
 
 /* ------------------------------------------------------------------ */
 /* Détection d'instances                                              */
@@ -104,7 +104,7 @@ session_dir_n(int n)
 char *
 session_config_path(const char *path)
 {
-    char *dir = session_dir_n(sieb_session);
+    char *dir = session_dir_n(cdb_session);
 
     if (g_path_is_absolute(path)) {
         /* Compat : certains appelants passent déjà un chemin complet
@@ -151,7 +151,7 @@ session_lowest_existing(void)
 void
 session_ensure(void)
 {
-    char *dir = session_dir_n(sieb_session);
+    char *dir = session_dir_n(cdb_session);
     int   src;
 
     if (g_file_test(dir, G_FILE_TEST_IS_DIR)) {
@@ -160,7 +160,7 @@ session_ensure(void)
     }
 
     src = session_lowest_existing();
-    if (src >= 0 && src != sieb_session) {
+    if (src >= 0 && src != cdb_session) {
         /* Copie du plus petit canal existant. */
         char *src_dir = session_dir_n(src);
         char *cmd;
@@ -345,7 +345,7 @@ session_init(void)
         long  v = strtol(env, &end, 10);
 
         if (*end == '\0' && v >= SESSION_MIN && v <= SESSION_MAX) {
-            sieb_session = (int)v;
+            cdb_session = (int)v;
             session_ensure();
             return TRUE;
         }
@@ -353,7 +353,7 @@ session_init(void)
     }
 
     if (!session_other_instance_running()) {
-        sieb_session = 0;
+        cdb_session = 0;
         session_ensure();
         return TRUE;
     }
@@ -364,7 +364,7 @@ session_init(void)
 
         if (picked < 0)
             return FALSE; /* annulé */
-        sieb_session = picked;
+        cdb_session = picked;
         session_ensure();
         return TRUE;
     }

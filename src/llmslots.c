@@ -31,7 +31,7 @@ slots_dir_of(int session)
 char *
 llm_slots_dir(void)
 {
-    char *dir = slots_dir_of(sieb_session);
+    char *dir = slots_dir_of(cdb_session);
 
     g_mkdir_with_parents(dir, 0700);
     return dir;
@@ -104,7 +104,7 @@ llm_slots_last_save(const char *json)
 char *
 llm_slots_last_load(void)
 {
-    char *dir = slots_dir_of(sieb_session);
+    char *dir = slots_dir_of(cdb_session);
     char *path = g_build_filename(dir, "last.json", NULL);
     char *text = read_json_file(path);
 
@@ -128,7 +128,7 @@ llm_slots_save(int slot, const char *json)
 char *
 llm_slots_load(int slot)
 {
-    char *dir = slots_dir_of(sieb_session);
+    char *dir = slots_dir_of(cdb_session);
     char *path = slot_path_in(dir, slot);
     char *text = read_json_file(path);
 
@@ -140,7 +140,7 @@ llm_slots_load(int slot)
 gboolean
 llm_slots_exists(int slot)
 {
-    char     *dir = slots_dir_of(sieb_session);
+    char     *dir = slots_dir_of(cdb_session);
     char     *path = slot_path_in(dir, slot);
     gboolean  ok = g_file_test(path, G_FILE_TEST_IS_REGULAR);
 
@@ -165,7 +165,7 @@ llm_slots_exists_in(int session, int slot)
 void
 llm_slots_clear(int slot)
 {
-    char *dir = slots_dir_of(sieb_session);
+    char *dir = slots_dir_of(cdb_session);
     char *path = slot_path_in(dir, slot);
 
     if (g_unlink(path) != 0 && errno != ENOENT)

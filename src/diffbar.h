@@ -47,7 +47,7 @@ void cdb_diff_bar_set_ranges(CdbDiffBar *bar, GPtrArray *ranges,
  * (current). Remplit out (GPtrArray de SiebdDiffRange* alloués via
  * g_malloc, à libérer) et définit *total_lines au nombre de lignes de
  * current. */
-void siebd_diff_compute(const char *saved, const char *current,
+void cdb_diff_compute(const char *saved, const char *current,
                         GPtrArray *out, guint *total_lines);
 
 #endif /* CDB_DIFFBAR_H */
