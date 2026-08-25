@@ -982,9 +982,10 @@ typedef enum {
  * local = TRUE : affiché dans le fil mais JAMAIS envoyé au modèle
  * (annonces CDB : erreurs HTTP, changements d'état…). */
 typedef struct {
-    LlmActor actor;
-    gboolean local;
-    char    *content;
+    LlmActor  actor;
+    gboolean  local;
+    char     *content;
+    GPtrArray *images; /* Data URLs ; éléments gchar* possédés. */
 } LlmMsg;
 
 static const char *
@@ -1032,6 +1033,7 @@ typedef struct {
                                * le fil (rendu incrémental) */
     GtkTextMark *reply_mark;/* marque de fin de la réponse en streaming */
     GArray      *history;   /* LlmMsg[] : fil de conversation envoyé */
+    GPtrArray   *pending_images; /* images collées, envoyées au prochain tour */
     GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
     GtkWidget   *slots_btn; /* bouton menu persistance (slots JSON) */
     int         *modal_count; /* compteur de modales d'App (emprunté) */
@@ -1114,9 +1116,13 @@ llm_tile_free(gpointer data)
             LlmMsg *m = &g_array_index(t->history, LlmMsg, i);
 
             g_free(m->content);
+            if (m->images != NULL)
+                g_ptr_array_unref(m->images);
         }
         g_array_free(t->history, TRUE);
     }
+    if (t->pending_images != NULL)
+        g_ptr_array_unref(t->pending_images);
     /* cfg EMPRUNTÉE à App (app->llm_cfg) : PAS libérée ici — main()
      * la libère une seule fois en fin de programme. */
     if (t->cmd_queue != NULL) {
@@ -1575,11 +1581,23 @@ llm_persona_load(LlmTile *t)
 }
 
 static void
-history_push(LlmTile *t, LlmActor actor, gboolean local, const char *content)
+history_push_images(LlmTile *t, LlmActor actor, gboolean local,
+                    const char *content, GPtrArray *images)
 {
-    LlmMsg m = { actor, local, g_strdup(content) };
+    LlmMsg m;
+
+    m.actor = actor;
+    m.local = local;
+    m.content = g_strdup(content);
+    m.images = images; /* transfert de propriété */
 
     g_array_append_vals(t->history, &m, 1);
+}
+
+static void
+history_push(LlmTile *t, LlmActor actor, gboolean local, const char *content)
+{
+    history_push_images(t, actor, local, content, NULL);
 }
 
 /* Tags de voix (créés une fois par buffer). */
@@ -2923,6 +2941,35 @@ llm_body_build(LlmTile *t)
             json_builder_set_member_name(builder, "content");
             json_builder_add_string_value(builder, framed);
             g_free(framed);
+        } else if (m->actor == LLMACTOR_USER &&
+                   m->images != NULL && m->images->len > 0) {
+            json_builder_set_member_name(builder, "content");
+            json_builder_begin_array(builder);
+
+            if (m->content != NULL && m->content[0] != '\0') {
+                json_builder_begin_object(builder);
+                json_builder_set_member_name(builder, "type");
+                json_builder_add_string_value(builder, "text");
+                json_builder_set_member_name(builder, "text");
+                json_builder_add_string_value(builder, m->content);
+                json_builder_end_object(builder);
+            }
+
+            for (guint j = 0; j < m->images->len; j++) {
+                const char *url = g_ptr_array_index(m->images, j);
+
+                json_builder_begin_object(builder);
+                json_builder_set_member_name(builder, "type");
+                json_builder_add_string_value(builder, "image_url");
+                json_builder_set_member_name(builder, "image_url");
+                json_builder_begin_object(builder);
+                json_builder_set_member_name(builder, "url");
+                json_builder_add_string_value(builder, url);
+                json_builder_end_object(builder);
+                json_builder_end_object(builder);
+            }
+
+            json_builder_end_array(builder);
         } else {
             json_builder_set_member_name(builder, "content");
             json_builder_add_string_value(builder, m->content);
@@ -3006,6 +3053,95 @@ llm_entry_resize(LlmTile *t)
     /* ~19 px par ligne : hauteur de ligne + padding (mesuré GTK défaut). */
     gtk_scrolled_window_set_min_content_height(
         GTK_SCROLLED_WINDOW(t->entry_scroll), lines * 19 + 12);
+}
+
+/* Collage d'image : la texture du presse-papiers devient un Data URL
+ * PNG/base64. Aucune détection de capacité modèle : la pièce est
+ * envoyée telle quelle au prochain tour. */
+static void
+on_llm_clip_texture(GObject *source_object,
+                    GAsyncResult *res,
+                    gpointer data)
+{
+    LlmTile     *t = data;
+    GdkClipboard *clip = GDK_CLIPBOARD(source_object);
+    GdkTexture   *texture;
+    GBytes       *png;
+    GError       *error = NULL;
+    const guchar *bytes_data;
+    gsize         bytes_len;
+    gchar        *b64;
+    gchar        *url;
+    gchar        *marker;
+    GtkTextBuffer *buf = t->entry_buf;
+    GtkTextIter   start, end, iter;
+
+    texture = gdk_clipboard_read_texture_finish(clip, res, &error);
+    if (texture == NULL) {
+        char *msg = g_strdup_printf(
+            "collage image impossible : %s",
+            error != NULL ? error->message : "erreur inconnue");
+
+        g_clear_error(&error);
+        hist_cdb_announce(t, msg);
+        g_free(msg);
+        return;
+    }
+
+    png = gdk_texture_save_to_png_bytes(texture);
+    g_object_unref(texture);
+    if (png == NULL) {
+        hist_cdb_announce(t, "collage image impossible : encodage PNG.");
+        return;
+    }
+
+    bytes_data = g_bytes_get_data(png, &bytes_len);
+    b64 = g_base64_encode(bytes_data, bytes_len);
+    url = g_strdup_printf("data:image/png;base64,%s", b64);
+    g_free(b64);
+    g_bytes_unref(png);
+    g_ptr_array_add(t->pending_images, url);
+
+    marker = g_strdup_printf("[image %u]",
+                             (guint)t->pending_images->len);
+
+    /* Comportement cohérent avec un collage : remplace la sélection,
+     * puis insère un marqueur textuel à la position du curseur. */
+    gtk_text_buffer_get_selection_bounds(buf, &start, &end);
+    if (gtk_text_iter_compare(&start, &end) != 0)
+        gtk_text_buffer_delete(buf, &start, &end);
+    gtk_text_buffer_get_iter_at_mark(
+        buf, &iter, gtk_text_buffer_get_insert(buf));
+    if (gtk_text_iter_get_line_offset(&iter) > 0)
+        gtk_text_buffer_insert(buf, &iter, "\n", -1);
+    gtk_text_buffer_insert(buf, &iter, marker, -1);
+    g_free(marker);
+}
+
+static void
+on_llm_entry_paste(GtkTextView *view, gpointer data)
+{
+    LlmTile          *t = data;
+    GdkClipboard     *clip = gtk_widget_get_clipboard(GTK_WIDGET(view));
+    GdkContentFormats *formats;
+
+    formats = gdk_clipboard_get_formats(clip);
+    if (formats == NULL ||
+        !gdk_content_formats_contain_gtype(formats, GDK_TYPE_TEXTURE))
+        return;
+
+    /* Image détectée : empêche le collage texte/binaire par défaut. */
+    g_signal_stop_emission_by_name(view, "paste-clipboard");
+    gdk_clipboard_read_texture_async(clip, NULL,
+                                     (GAsyncReadyCallback)on_llm_clip_texture,
+                                     t);
+}
+
+static void
+llm_pending_images_clear(LlmTile *t)
+{
+    if (t->pending_images != NULL)
+        g_ptr_array_set_size(t->pending_images, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -3317,7 +3453,7 @@ llm_slots_save_dialog(LlmTile *t)
     g_free(body);
 }
 
-/* Vide t->history (les contenus) sans toucher au GArray. */
+/* Vide t->history (contenus et images) sans toucher au GArray. */
 static void
 llm_history_wipe(LlmTile *t)
 {
@@ -3325,6 +3461,8 @@ llm_history_wipe(LlmTile *t)
         LlmMsg *m = &g_array_index(t->history, LlmMsg, i);
 
         g_free(m->content);
+        if (m->images != NULL)
+            g_ptr_array_unref(m->images);
     }
     g_array_set_size(t->history, 0);
 }
@@ -3417,6 +3555,7 @@ llm_slots_load_dialog(LlmTile *t)
 
     /* --- Wipe complet : comme si le fil n'avait jamais existé. --- */
     llm_history_wipe(t);
+    llm_pending_images_clear(t);
     llm_queues_purge(t);
     gtk_text_buffer_get_bounds(t->hist, &start, &end);
     gtk_text_buffer_delete(t->hist, &start, &end);
@@ -3437,38 +3576,105 @@ llm_slots_load_dialog(LlmTile *t)
         JsonObject *m = json_array_get_object_element(msgs, i);
         const char *role = m != NULL
                            ? json_object_get_string_member(m, "role") : NULL;
-        const char *content = m != NULL
-                              ? json_object_get_string_member(m, "content")
-                              : NULL;
+        JsonNode *content_node =
+            m != NULL && json_object_has_member(m, "content")
+                ? json_object_get_member(m, "content") : NULL;
+        GPtrArray *images = NULL;
+        char      *content = NULL;
         GtkTextIter eit;
 
-        if (content == NULL)
+        if (content_node != NULL && JSON_NODE_HOLDS_VALUE(content_node)) {
+            if (json_node_get_value_type(content_node) == G_TYPE_STRING)
+                content = g_strdup(json_node_get_string(content_node));
+        } else if (content_node != NULL && JSON_NODE_HOLDS_ARRAY(content_node)) {
+            JsonArray *parts = json_node_get_array(content_node);
+            GString    *text = g_string_new(NULL);
+
+            images = g_ptr_array_new_with_free_func(g_free);
+            for (guint k = 0; k < json_array_get_length(parts); k++) {
+                JsonObject *part =
+                    json_array_get_object_element(parts, k);
+                const char *type = part != NULL &&
+                                   json_object_has_member(part, "type")
+                                   ? json_object_get_string_member(part, "type")
+                                   : NULL;
+
+                if (part == NULL)
+                    continue;
+                if (g_strcmp0(type, "text") == 0 &&
+                    json_object_has_member(part, "text")) {
+                    if (text->len > 0)
+                        g_string_append(text, "\n");
+                    g_string_append(
+                        text, json_object_get_string_member(part, "text"));
+                } else if (g_strcmp0(type, "image_url") == 0 &&
+                           json_object_has_member(part, "image_url")) {
+                    JsonNode *node =
+                        json_object_get_member(part, "image_url");
+                    JsonObject *obj;
+                    const char *url = NULL;
+
+                    if (JSON_NODE_HOLDS_VALUE(node) &&
+                        json_node_get_value_type(node) == G_TYPE_STRING)
+                        url = json_node_get_string(node);
+                    else if (JSON_NODE_HOLDS_OBJECT(node)) {
+                        obj = json_node_get_object(node);
+                        if (json_object_has_member(obj, "url"))
+                            url = json_object_get_string_member(obj, "url");
+                    }
+                    if (url != NULL && url[0] != '\0')
+                        g_ptr_array_add(images, g_strdup(url));
+                }
+            }
+
+            content = g_string_free(text, FALSE);
+            if (images->len == 0) {
+                g_ptr_array_unref(images);
+                images = NULL;
+            }
+        }
+
+        if (content == NULL && images == NULL)
             continue;
+
         if (g_strcmp0(role, "system") == 0) {
-            if (i == 0)
+            if (i == 0) {
+                g_free(content);
+                if (images != NULL)
+                    g_ptr_array_unref(images);
                 continue; /* persona : ré-injecté live à chaque envoi */
-            if (g_str_has_prefix(content, "[CDB] "))
-                content += 6; /* retire le cadre (rajouté à l'envoi) */
-            history_push(t, LLMACTOR_CDB, FALSE, content);
+            }
+            if (content != NULL && g_str_has_prefix(content, "[CDB] ")) {
+                char *stripped = g_strdup(content + 6);
+
+                g_free(content);
+                content = stripped;
+            }
+            history_push_images(t, LLMACTOR_CDB, FALSE, content, NULL);
             hist_render_actor_header(t, LLMACTOR_CDB);
             hist_ensure_voice_tags(t);
             gtk_text_buffer_get_end_iter(t->hist, &eit);
             gtk_text_buffer_insert_with_tags_by_name(
-                t->hist, &eit, content, -1, "voice-cdb", NULL);
+                t->hist, &eit, content != NULL ? content : "", -1,
+                "voice-cdb", NULL);
             hist_append(t, "\n");
         } else if (g_strcmp0(role, "assistant") == 0) {
-            history_push(t, LLMACTOR_LLM, FALSE, content);
+            history_push_images(t, LLMACTOR_LLM, FALSE, content, NULL);
             hist_render_actor_header(t, LLMACTOR_LLM);
             gtk_text_buffer_get_end_iter(t->hist, &eit);
-            md_insert(t->hist, &eit, content); /* rendu markdown */
+            md_insert(t->hist, &eit, content != NULL ? content : "");
             hist_append(t, "\n");
         } else {
-            /* user + tout rôle inconnu. */
-            history_push(t, LLMACTOR_USER, FALSE, content);
+            history_push_images(t, LLMACTOR_USER, FALSE, content, images);
+            images = NULL; /* transférée à l'historique */
             hist_render_actor_header(t, LLMACTOR_USER);
-            hist_append(t, content);
+            hist_append(t, content != NULL ? content : "");
             hist_append(t, "\n");
         }
+
+        g_free(content);
+        if (images != NULL)
+            g_ptr_array_unref(images);
     }
     g_object_unref(parser);
     llm_scroll_to_end(t);
@@ -3707,6 +3913,7 @@ llm_chat_clear_dialog(LlmTile *t)
         return;
 
     llm_history_wipe(t);
+    llm_pending_images_clear(t);
     llm_queues_purge(t);
     gtk_text_buffer_get_bounds(t->hist, &start, &end);
     gtk_text_buffer_delete(t->hist, &start, &end);
@@ -3843,7 +4050,8 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     }
     t->busy = TRUE;
     prompt = llm_entry_text(t);
-    if (prompt[0] == '\0') {
+    if (prompt[0] == '\0' &&
+        (t->pending_images == NULL || t->pending_images->len == 0)) {
         g_free(prompt);
         t->busy = FALSE;
         return;
@@ -3867,7 +4075,12 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
      * sinon l'en-tête « Claude » serait rendu deux fois. */
     llm_entry_clear(t);
     t->cdb_retries = 0; /* nouveau tour : compteur malformations reset */
-    history_push(t, LLMACTOR_USER, FALSE, prompt);
+    {
+        GPtrArray *images = t->pending_images;
+
+        t->pending_images = g_ptr_array_new_with_free_func(g_free);
+        history_push_images(t, LLMACTOR_USER, FALSE, prompt, images);
+    }
     llm_send(t, prompt);
     llm_scroll_to_end(t);
     g_free(prompt); /* copie : l'entry a été vidée */
@@ -4050,6 +4263,8 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     gtk_widget_add_css_class(t->entry, "llm-compose-entry");
     g_signal_connect(t->entry_buf, "changed",
                      G_CALLBACK(on_llm_entry_changed), t);
+    g_signal_connect(t->entry, "paste-clipboard",
+                     G_CALLBACK(on_llm_entry_paste), t);
 
     t->entry_scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(t->entry_scroll),
@@ -4260,6 +4475,7 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
     g_object_set(t->soup, "timeout", 120, "idle-timeout", 180, NULL);
     t->reply = g_string_new("");
     t->history = g_array_new(FALSE, FALSE, sizeof(LlmMsg));
+    t->pending_images = g_ptr_array_new_with_free_func(g_free);
     t->slot_origin = -1;
     g_object_set_data_full(G_OBJECT(box), "cdb-llm-tile", t, llm_tile_free);
     return box;
