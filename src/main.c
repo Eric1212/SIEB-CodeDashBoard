@@ -4218,9 +4218,18 @@ on_new_session_activated(GSimpleAction G_GNUC_UNUSED *action,
     while (environ[envc] != NULL)
         envc++;
     envp = g_new(char *, envc + 1);
-    for (i = 0; i < envc; i++)
-        envp[i] = environ[i];
-    envp[envc] = NULL;
+    /* Spawn sans CDB_SESSION : ne pas transmettre le numéro de session
+     * du parent, afin que l enfant revienne à la logique standard :
+     * 000 si aucune autre instance, dialogue sinon. */
+    {
+        gsize j = 0;
+        for (i = 0; i < envc; i++) {
+            if (g_str_has_prefix(environ[i], "CDB_SESSION="))
+                continue;
+            envp[j++] = environ[i];
+        }
+        envp[j] = NULL;
+    }
 
     argv[0] = self;
     argv[1] = NULL;

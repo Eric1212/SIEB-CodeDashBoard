@@ -25,6 +25,21 @@ int cdb_session = 0;
 /* Détection d'instances                                              */
 /* ------------------------------------------------------------------ */
 
+/* Retire le suffixe " (deleted)" ajouté par le kernel quand le fichier
+ * exécutable a été remplacé/supprimé pendant que le processus tourne.
+ * Sans ça, une instance lancée avant un make n'est pas détectée par
+ * l'instance lancée après (make run). */
+static void
+strip_deleted_suffix(char *s)
+{
+    static const char suffix[] = " (deleted)";
+    size_t len = strlen(s);
+    size_t slen = sizeof(suffix) - 1;
+
+    if (len >= slen && strcmp(s + len - slen, suffix) == 0)
+        s[len - slen] = '\0';
+}
+
 /* Cible réelle (readlink) du symlink exe du processus pid. */
 static char *
 proc_exe(pid_t pid)
@@ -38,6 +53,9 @@ proc_exe(pid_t pid)
     if (n <= 0)
         return NULL;
     buf[n] = '\0';
+
+    strip_deleted_suffix(buf);
+
     return g_strdup(buf);
 }
 
