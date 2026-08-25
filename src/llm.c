@@ -1052,6 +1052,20 @@ typedef struct {
     int          turns_since_ref; /* tours utilisateur depuis la référence */
     gsize        ref_body_size;   /* taille du body à la référence */
     GtkWidget   *slots_title;     /* label titre du popover slots */
+    GtkWidget   *status_rev;      /* bandeau activité / bilan tokens */
+    GtkWidget   *status_logo;       /* animation tournante type RClot */
+    int          status_logo_frame;
+    GtkWidget   *status_label;    /* temps écoulé */
+    GtkWidget   *status_sent_label;
+    GtkWidget   *status_received_label;
+    GtkWidget   *status_context_label;
+    guint        status_timeout_id;
+    gint64       status_started_us;
+    gint64       status_elapsed_us;
+    long         tokens_sent;
+    long         tokens_received;
+    long         tokens_context;
+    gboolean     tokens_estimated;
 } LlmTile;
 
 /* Résultat d'exécution en attente de livraison. */
@@ -1098,6 +1112,9 @@ static void llm_slots_clear_dialog(LlmTile *t);
 static void llm_slots_import_dialog(LlmTile *t);
 static void llm_chat_clear_dialog(LlmTile *t);
 static void llm_slots_title_update(LlmTile *t);
+static void llm_status_start(LlmTile *t);
+static void llm_status_stop(LlmTile *t);
+static void llm_status_update(LlmTile *t);
 
 static void
 llm_tile_free(gpointer data)
@@ -1105,6 +1122,10 @@ llm_tile_free(gpointer data)
     LlmTile *t = data;
 
     llm_cdb_polls_purge(t); /* polls actifs rattachés à cette tuile */
+    if (t->status_timeout_id != 0) {
+        g_source_remove(t->status_timeout_id);
+        t->status_timeout_id = 0;
+    }
     if (t->cancel != NULL)
         g_object_unref(t->cancel);
     if (t->soup != NULL)
@@ -1704,6 +1725,12 @@ hist_update_reply(LlmTile *t)
                          safe - t->rendered_len, FALSE);
         t->rendered_len = safe;
     }
+
+    if (t->tokens_estimated) {
+        t->tokens_received = (long)((t->reply->len + 3) / 4);
+        t->tokens_context = t->tokens_sent + t->tokens_received;
+    }
+    llm_status_update(t);
     llm_scroll_to_end(t);
 }
 
@@ -1720,6 +1747,30 @@ hist_flush_reply(LlmTile *t)
     md_insert_append(t->hist, &end, t->reply->str + t->rendered_len,
                      t->reply->len - t->rendered_len, TRUE);
     t->rendered_len = t->reply->len;
+}
+
+/* Lit un entier JSON en tolérant int64/double/chaîne numérique. */
+static long
+llm_json_int(JsonObject *obj, const char *member, long fallback)
+{
+    JsonNode *node;
+
+    if (obj == NULL || !json_object_has_member(obj, member))
+        return fallback;
+    node = json_object_get_member(obj, member);
+    if (!JSON_NODE_HOLDS_VALUE(node))
+        return fallback;
+
+    switch (json_node_get_value_type(node)) {
+    case G_TYPE_INT64:
+        return (long)json_node_get_int(node);
+    case G_TYPE_DOUBLE:
+        return (long)json_node_get_double(node);
+    case G_TYPE_STRING:
+        return strtol(json_node_get_string(node), NULL, 10);
+    default:
+        return fallback;
+    }
 }
 
 /* Traite une ligne SSE « data: … ». */
@@ -1748,6 +1799,24 @@ llm_handle_sse_line(LlmTile *t, const char *line)
         return;
     }
     obj = json_node_get_object(json_parser_get_root(parser));
+
+    /* Dernier chunk OpenAI-compatible : usage final du tour. Certains
+     * providers le renvoient avec choices vide, d'autres en même temps
+     * que les deltas. */
+    if (obj != NULL && json_object_has_member(obj, "usage")) {
+        JsonObject *usage = json_object_get_object_member(obj, "usage");
+
+        t->tokens_sent = llm_json_int(usage, "prompt_tokens",
+                                      t->tokens_sent);
+        t->tokens_received = llm_json_int(usage, "completion_tokens",
+                                          t->tokens_received);
+        t->tokens_context = llm_json_int(usage, "total_tokens",
+                                         t->tokens_sent +
+                                         t->tokens_received);
+        t->tokens_estimated = FALSE;
+        llm_status_update(t);
+    }
+
     if (obj != NULL && json_object_has_member(obj, "choices")
         && (choices = json_object_get_array_member(obj, "choices")) != NULL
         && json_array_get_length(choices) > 0
@@ -1837,6 +1906,132 @@ llm_busy_set(LlmTile *t, gboolean busy)
                                 ? "Annuler la génération"
                                 : "Envoyer");
     gtk_widget_set_sensitive(t->send_btn, TRUE);
+
+    if (busy)
+        llm_status_start(t);
+    else
+        llm_status_stop(t);
+}
+
+/* Tick du bandeau d'activité : rafraîchit le temps écoulé. */
+/* Animation manuelle : GtkSpinner est peu expressif et son frame
+ * clock peut être irrégulier selon le contenu. Frames type RClot. */
+static const char *const LLM_STATUS_FRAMES[] = {
+    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"
+};
+#define LLM_STATUS_N_FRAMES 10
+#define LLM_STATUS_TICK_MS 80
+
+static gboolean
+llm_status_tick(gpointer data)
+{
+    LlmTile *t = data;
+
+    t->status_logo_frame++;
+    gtk_label_set_text(
+        GTK_LABEL(t->status_logo),
+        LLM_STATUS_FRAMES[t->status_logo_frame % LLM_STATUS_N_FRAMES]);
+    llm_status_update(t);
+    return G_SOURCE_CONTINUE;
+}
+
+/* Démarre l'indicateur animé. Un appel répété ne remet pas le chrono
+ * à zéro : la boucle agentique reste un seul activité continue. */
+static void
+llm_status_start(LlmTile *t)
+{
+    if (t->status_rev == NULL || t->status_label == NULL)
+        return;
+
+    if (t->status_timeout_id == 0) {
+        t->status_started_us = g_get_monotonic_time();
+        t->status_timeout_id = g_timeout_add(
+            LLM_STATUS_TICK_MS, llm_status_tick, t);
+    }
+
+    gtk_widget_set_visible(t->status_rev, TRUE);
+    gtk_widget_set_visible(t->status_logo, TRUE);
+    t->status_logo_frame = 0;
+    gtk_label_set_text(GTK_LABEL(t->status_logo), LLM_STATUS_FRAMES[0]);
+    llm_status_update(t);
+}
+
+/* Arrête l'icône mouvante mais conserve le bilan visible. */
+static void
+llm_status_stop(LlmTile *t)
+{
+    if (t->status_timeout_id != 0) {
+        g_source_remove(t->status_timeout_id);
+        t->status_timeout_id = 0;
+    }
+    t->status_elapsed_us = g_get_monotonic_time() - t->status_started_us;
+
+    if (t->status_logo != NULL)
+        gtk_label_set_text(GTK_LABEL(t->status_logo), " ");
+    if (t->status_rev != NULL &&
+        (t->tokens_sent > 0 || t->tokens_received > 0 ||
+         t->tokens_context > 0))
+        gtk_widget_set_visible(t->status_rev, TRUE);
+
+    llm_status_update(t);
+}
+
+/* Met à jour le bilan : temps, tokens envoyés, reçus, total contexte.
+ * Les flèches utilisent les mêmes icônes que le sélecteur de modèle. */
+static void
+llm_status_update(LlmTile *t)
+{
+    gint64 now, elapsed;
+    gint64 total_sec, display_sec;
+    char *elapsed_txt;
+    char *sent_txt;
+    char *received_txt;
+    char *context_txt;
+    const char *approx;
+
+    if (t->status_rev == NULL || t->status_label == NULL ||
+        t->status_sent_label == NULL || t->status_received_label == NULL ||
+        t->status_context_label == NULL)
+        return;
+
+    now = g_get_monotonic_time();
+    elapsed = t->status_timeout_id != 0
+              ? now - t->status_started_us
+              : t->status_elapsed_us;
+    if (elapsed < 0)
+        elapsed = 0;
+
+    total_sec = elapsed / G_USEC_PER_SEC;
+    display_sec = total_sec % 60;
+    if (total_sec >= 3600)
+        elapsed_txt = g_strdup_printf(
+            "%dh %02dm %02ds",
+            (int)(total_sec / 3600),
+            (int)((total_sec % 3600) / 60),
+            (int)display_sec);
+    else if (total_sec >= 60)
+        elapsed_txt = g_strdup_printf(
+            "%dm %02ds", (int)(total_sec / 60), (int)display_sec);
+    else
+        elapsed_txt = g_strdup_printf("%ds", (int)display_sec);
+
+    if (t->tokens_context <= 0)
+        t->tokens_context = t->tokens_sent + t->tokens_received;
+    approx = t->tokens_estimated ? "~" : "";
+
+    sent_txt = g_strdup_printf("%s%ld", approx, t->tokens_sent);
+    received_txt = g_strdup_printf("%s%ld", approx, t->tokens_received);
+    context_txt = g_strdup_printf("%s%ld", approx, t->tokens_context);
+
+    gtk_label_set_text(GTK_LABEL(t->status_label), elapsed_txt);
+    gtk_label_set_text(GTK_LABEL(t->status_sent_label), sent_txt);
+    gtk_label_set_text(GTK_LABEL(t->status_received_label), received_txt);
+    gtk_label_set_text(GTK_LABEL(t->status_context_label), context_txt);
+
+    g_free(context_txt);
+    g_free(received_txt);
+    g_free(sent_txt);
+    g_free(elapsed_txt);
 }
 
 /* Clic sur le bouton média : play = envoyer, pause = annuler la
@@ -2909,6 +3104,11 @@ llm_body_build(LlmTile *t)
     json_builder_add_string_value(builder, t->cfg->model);
     json_builder_set_member_name(builder, "stream");
     json_builder_add_boolean_value(builder, TRUE);
+    json_builder_set_member_name(builder, "stream_options");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "include_usage");
+    json_builder_add_boolean_value(builder, TRUE);
+    json_builder_end_object(builder);
     json_builder_set_member_name(builder, "messages");
     json_builder_begin_array(builder);
 
@@ -3016,6 +3216,11 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
      * slots) puis persisté dans last.json : trace exacte de l'envoi. */
     req->body = llm_body_build(t);
     llm_slots_last_save(req->body);
+    t->tokens_sent = (long)((strlen(req->body) + 3) / 4);
+    t->tokens_received = (long)((t->reply->len + 3) / 4);
+    t->tokens_context = t->tokens_sent + t->tokens_received;
+    t->tokens_estimated = TRUE;
+    llm_status_update(t);
     t->turns_since_ref++;
     llm_slots_title_update(t);
 
@@ -4440,6 +4645,58 @@ llm_tile_new(const LlmConfig *cfg, GActionGroup *actions,
 
             t->compose = compose;
             gtk_widget_add_css_class(compose, "llm-compose");
+
+            /* Activité / bilan façon ZED. */
+            {
+                GtkWidget *up_icon;
+                GtkWidget *down_icon;
+                GtkWidget *context_icon;
+
+                t->status_rev = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+                t->status_logo = gtk_label_new(
+                    LLM_STATUS_FRAMES[0]);
+                t->status_label = gtk_label_new("");
+                t->status_sent_label = gtk_label_new("");
+                t->status_received_label = gtk_label_new("");
+                t->status_context_label = gtk_label_new("");
+
+                gtk_widget_add_css_class(t->status_rev, "llm-status");
+                gtk_widget_set_halign(t->status_label, GTK_ALIGN_START);
+                gtk_widget_set_size_request(t->status_logo, 16, 16);
+                gtk_widget_set_valign(t->status_logo, GTK_ALIGN_CENTER);
+                gtk_widget_add_css_class(t->status_logo, "llm-status-logo");
+                gtk_widget_set_valign(t->status_label, GTK_ALIGN_CENTER);
+                gtk_widget_set_valign(t->status_sent_label, GTK_ALIGN_CENTER);
+                gtk_widget_set_valign(t->status_received_label,
+                                      GTK_ALIGN_CENTER);
+                gtk_widget_set_valign(t->status_context_label,
+                                      GTK_ALIGN_CENTER);
+                gtk_label_set_xalign(GTK_LABEL(t->status_context_label),
+                                     GTK_ALIGN_START);
+                gtk_widget_set_visible(t->status_rev, FALSE);
+
+                up_icon = gtk_image_new_from_icon_name("pan-up-symbolic");
+                down_icon = gtk_image_new_from_icon_name("pan-down-symbolic");
+                context_icon = gtk_image_new_from_icon_name(
+                    "go-first-symbolic-rtl");
+                gtk_image_set_pixel_size(GTK_IMAGE(up_icon), 12);
+                gtk_image_set_pixel_size(GTK_IMAGE(down_icon), 12);
+                gtk_image_set_pixel_size(GTK_IMAGE(context_icon), 12);
+                gtk_widget_set_valign(up_icon, GTK_ALIGN_CENTER);
+                gtk_widget_set_valign(down_icon, GTK_ALIGN_CENTER);
+                gtk_widget_set_valign(context_icon, GTK_ALIGN_CENTER);
+
+                gtk_box_append(GTK_BOX(t->status_rev), t->status_logo);
+                gtk_box_append(GTK_BOX(t->status_rev), t->status_label);
+                gtk_box_append(GTK_BOX(t->status_rev), up_icon);
+                gtk_box_append(GTK_BOX(t->status_rev), t->status_sent_label);
+                gtk_box_append(GTK_BOX(t->status_rev), down_icon);
+                gtk_box_append(GTK_BOX(t->status_rev), t->status_received_label);
+                gtk_box_append(GTK_BOX(t->status_rev), context_icon);
+                gtk_box_append(GTK_BOX(t->status_rev), t->status_context_label);
+                gtk_box_append(GTK_BOX(compose), t->status_rev);
+            }
+
             gtk_box_append(GTK_BOX(compose), t->entry_scroll);
             gtk_widget_set_hexpand(t->model_btn, FALSE);
             gtk_box_append(GTK_BOX(tools), t->model_btn);

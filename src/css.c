@@ -16,6 +16,11 @@ static const char *cdb_css =
     ".cdb-busy-dot { color: orange; font-size: 8pt; }\n"
 
     /* --- LLM : barre de composition --- */
+    ".llm-status { padding: 2px 8px 0 8px; }\n"
+    ".llm-status label { font-size: 10pt; font-weight: normal; "
+    "opacity: 0.72; }\n"
+    ".llm-status image { opacity: 0.72; }\n"
+    ".llm-status-logo { font-size: 10pt; opacity: 0.8; }\n"
     ".llm-compose { background: alpha(shade(@view_bg_color, 0.92), 1); "
     "border: 1px solid @borders; border-radius: 6px; }\n"
     ".llm-compose-entry, .llm-compose-entry text { background: none; }\n"
