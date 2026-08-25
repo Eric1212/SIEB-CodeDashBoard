@@ -4690,7 +4690,7 @@ test_modal_idle(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-/* MODE TEST (debug) : SIEB_TEST_SETTINGS=1 ouvre/ferme la fenêtre
+/* MODE TEST (debug) : CDB_TEST_SETTINGS=1 ouvre/ferme la fenêtre
  * settings deux fois (reproduction du crash au X). */
 static gboolean
 test_settings_step(gpointer data)
