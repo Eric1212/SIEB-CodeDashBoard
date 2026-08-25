@@ -195,6 +195,20 @@ typedef struct LlmRequest LlmRequest;
 
 typedef struct LlmTile LlmTile;
 
+/* Décision d'approbation /CDB:: : état au CORE, rendu par les vues.
+ * Une seule instance active à la fois (tête de la file agentique). */
+typedef enum {
+    CDB_A_PENDING,
+    CDB_A_APPROVED,
+    CDB_A_REFUSED
+} CdbApprovalState;
+
+typedef struct {
+    int              tab;
+    char            *cmd;
+    CdbApprovalState state;
+} CdbDecision;
+
 /* État conversationnel PARTAGÉ : possède le réseau et la conversation,
  * survit aux vues (Phase 1 : singleton App ; vue unique transitoire). */
 typedef struct {
@@ -205,7 +219,13 @@ typedef struct {
     gboolean      in_reasoning; /* delta courant = thinking */
     GString      *reply;     /* réponse en cours d'accumulation */
     GArray       *history;   /* LlmMsg[] : fil de conversation envoyé */
-    LlmTile      *view;      /* vue attachée (transition C1-C2) */
+    GPtrArray    *views;     /* vues attachées (pointeurs empruntés) */
+    /* Ressources de session (empruntées à App, vivent plus longtemps) */
+    LlmConfig    *cfg;
+    GListStore   *roots;
+    GHashTable   *multi_paths;
+    /* Décision en attente (NULL si aucune) */
+    CdbDecision  *decision;
 
     GQueue      *cmd_queue;   /* commandes /CDB:: valides en attente */
     GQueue      *cdb_results; /* résultats pendants {label,text} */
@@ -215,6 +235,10 @@ typedef struct {
 typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     LlmCore      *core;      /* état partagé (possédé par App) */
     GtkWidget   *view;      /* historique (GtkTextView, non éditable) */
+    CdbDecision *shown_decision; /* décision actuellement rendue */
+    GtkWidget   *approval_bar;  /* rangée de boutons (ou NULL) */
+    GtkWidget   *approval_ok;
+    GtkWidget   *approval_no;
     GtkTextBuffer *hist;    /* buffer de l'historique */
     GtkWidget   *entry;     /* saisie multi-lignes (GtkTextView) */
     GtkTextBuffer *entry_buf; /* buffer de la saisie */
@@ -347,7 +371,7 @@ typedef struct {
  * clic sur une structure déjà libérée (segfault bash-1467761504). */
 
 typedef struct {
-    LlmTile *t;
+    LlmCore *core;
     char    *tab_label;
     int      tab;        /* index d'onglet surveillé */
     gchar   *prev_tail;  /* dernière ligne du round précédent */

@@ -1109,7 +1109,7 @@ llm_json_int(JsonObject *obj, const char *member, long fallback)
 
 /* Traite une ligne SSE « data: … ». */
 void
-llm_handle_sse_line(LlmCore *c, LlmTile *t, const char *line)
+llm_handle_sse_line(LlmCore *c, const char *line)
 {
     const char *payload;
     JsonParser *parser;
@@ -1133,8 +1133,10 @@ llm_handle_sse_line(LlmCore *c, LlmTile *t, const char *line)
         return;
     }
     obj = json_node_get_object(json_parser_get_root(parser));
-    /* Bilan tokens : purement affichage (vue). Gardé si vue fermée. */
-    if (t != NULL && obj != NULL && json_object_has_member(obj, "usage")) {
+    /* Bilan tokens : par vue (bandeau propre à chacune). */
+    for (guint vi = 0; c->views != NULL && vi < c->views->len; vi++) {
+        LlmTile *t = g_ptr_array_index(c->views, vi);
+        if (obj != NULL && json_object_has_member(obj, "usage")) {
         JsonObject *usage = json_object_get_object_member(obj, "usage");
 
         t->tokens_sent = llm_json_int(usage, "prompt_tokens",
@@ -1146,6 +1148,7 @@ llm_handle_sse_line(LlmCore *c, LlmTile *t, const char *line)
                                          t->tokens_received);
         t->tokens_estimated = FALSE;
         llm_status_update(t);
+        }
     }
 
     if (obj != NULL && json_object_has_member(obj, "choices")
@@ -1196,9 +1199,14 @@ llm_handle_sse_line(LlmCore *c, LlmTile *t, const char *line)
                 c->in_reasoning = FALSE;
             }
             g_string_append(c->reply, piece);
-            if (t != NULL)
-                hist_update_reply(t);
         }
+    }
+
+    /* Diffusion : chaque vue rattrape à son rythme (rendered_len). */
+    for (guint vi = 0; c->views != NULL && vi < c->views->len; vi++) {
+        LlmTile *t = g_ptr_array_index(c->views, vi);
+
+        hist_update_reply(t);
     }
     g_object_unref(parser);
 }
@@ -1292,7 +1300,6 @@ void
 llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
 {
     LlmCore *c = req->core;
-    LlmTile *view = c != NULL ? c->view : NULL;
     char    *nl;
 
     if ((gsize)n <= 0)
@@ -1303,7 +1310,7 @@ llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
 
         *nl = '\0';
         if (req->pending->str[0] != '\0')
-            llm_handle_sse_line(c, view, req->pending->str);
+            llm_handle_sse_line(c, req->pending->str);
         g_string_erase(req->pending, 0, consumed);
     }
 }
@@ -1311,12 +1318,13 @@ llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
 /* Poussée d'historique au niveau CORE : fonctionne même sans vue
  * attachée (la conversation survit à la fermeture de la tuile). */
 static void
-core_history_push(LlmCore *c, LlmActor actor, const char *content)
+core_history_push(LlmCore *c, LlmActor actor, gboolean local,
+                  const char *content)
 {
     LlmMsg m;
 
     m.actor = actor;
-    m.local = FALSE;
+    m.local = local;
     m.content = g_strdup(content);
     m.images = NULL;
     g_array_append_vals(c->history, &m, 1);
@@ -1329,7 +1337,8 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
 {
     LlmRequest *req = data;
     LlmCore    *c = req->core;
-    LlmTile    *t = c != NULL ? c->view : NULL;
+    LlmTile    *t = c->views->len ? g_ptr_array_index(c->views, 0) : NULL;
+    guint       vi;
     gssize      n;
     GError     *error = NULL;
 
@@ -1346,7 +1355,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
             hist_append(t, "\n〔annulé〕\n");
             llm_busy_set(t, FALSE);
         } else {
-            core_history_push(c, LLMACTOR_LLM, c->reply->str);
+            core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
         }
         llm_request_free(req);
         return;
@@ -1365,7 +1374,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                 hist_append(t, "\n〔annulé〕\n");
                 llm_busy_set(t, FALSE);
             } else {
-                core_history_push(c, LLMACTOR_LLM, c->reply->str);
+                core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
             }
             llm_request_free(req);
             return;
@@ -1380,17 +1389,11 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
     if (n <= 0) {
         if (t != NULL)
             hist_flush_reply(t);
-        core_history_push(c, LLMACTOR_LLM, c->reply->str);
-        if (t == NULL) {
-            /* Vue absente : historique à jour dans le core ; la boucle
-             * agentique passera au core en C2. */
-            llm_request_free(req);
-            return;
-        }
+        core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
         llm_slots_title_update(t);
         hist_append(t, "\n");
 
-        if (llm_agent_detect(t, c->reply->str)) {
+        if (llm_agent_detect(c, c->reply->str)) {
             t->core->cdb_retries = 0;
             llm_request_free(req);
             return;
@@ -1410,14 +1413,18 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                     "(les \" internes sont autorisés tels quels). "
                     "Réécris-la proprement.",
                     t->core->cdb_retries, CDB_RETRY_MAX);
-                llm_cdb_deliver(t, note);
+                core_cdb_deliver(c, note);
                 g_free(note);
                 llm_request_free(req);
                 return;
             }
-            hist_cdb_announce(t,
+            core_history_push(c, LLMACTOR_CDB, TRUE,
                 "trois commandes mal formées d'affilée : j'abandonne "
                 "cette boucle. Réponds en texte ou reformule entièrement.");
+            for (guint vi = 0; vi < c->views->len; vi++)
+                llm_cdb_say_display(g_ptr_array_index(c->views, vi),
+                    "trois commandes mal formées d'affilée : j'abandonne "
+                    "cette boucle. Réponds en texte ou reformule entièrement.");
         }
 
         llm_busy_set(t, FALSE);
@@ -1466,27 +1473,6 @@ cdd_poll_unregister(CdbPoll *pl)
         g_ptr_array_remove_fast(cdb_polls, pl);
 }
 
-/* Purge les polls rattachés à une tuile mourante (appelé par
- * llm_tile_free) : libère pl ; le tick suivant verra son pointeur
- * retiré du registre et se retirera silencieusement. */
-void
-llm_cdb_polls_purge(LlmTile *t)
-{
-    if (cdb_polls == NULL)
-        return;
-    for (guint i = 0; i < cdb_polls->len; ) {
-        CdbPoll *pl = g_ptr_array_index(cdb_polls, i);
-
-        if (pl->t == t) {
-            g_ptr_array_remove_index_fast(cdb_polls, i);
-            g_free(pl->prev_tail);
-            g_free(pl->tab_label);
-            g_free(pl->pending_cmd);
-            g_free(pl);
-        } else
-            i++;
-    }
-}
 
 
 void
@@ -1503,11 +1489,11 @@ cdb_poll_finish(CdbPoll *pl, const char *text)
     r = g_new0(CdbResult, 1);
     r->label = g_steal_pointer(&pl->tab_label);
     r->text = g_strdup(text);
-    if (pl->t->core->cdb_results == NULL)
-        pl->t->core->cdb_results = g_queue_new();
-    g_queue_push_tail(pl->t->core->cdb_results, r);
+    if (pl->core->cdb_results == NULL)
+        pl->core->cdb_results = g_queue_new();
+    g_queue_push_tail(pl->core->cdb_results, r);
 
-    llm_cdb_next(pl->t);
+    llm_cdb_next(pl->core);
 
     g_free(pl->prev_tail);
     g_free(pl);
@@ -1683,7 +1669,7 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
 {
     LlmRequest   *req = data;
     LlmCore      *c = req->core;
-    LlmTile      *t = c != NULL ? c->view : NULL;
+    LlmTile      *t = c->views->len ? g_ptr_array_index(c->views, 0) : NULL;
     GError       *error = NULL;
     GInputStream *stream = soup_session_send_finish(SOUP_SESSION(source),
                                                     res, &error);
@@ -1798,8 +1784,12 @@ llm_send_attempt(LlmRequest *req)
         g_bytes_new_take((guint8 *)g_strdup(req->body),
                          strlen(req->body)));
 
-    if (req->core->view != NULL)
-        llm_busy_set(req->core->view, TRUE); /* icône pause = annuler */
+    /* Icône pause = annuler : miroir sur chaque vue attachée. */
+    for (guint vi = 0; vi < req->core->views->len; vi++) {
+        LlmTile *tv = g_ptr_array_index(req->core->views, vi);
+
+        llm_busy_set(tv, TRUE); /* icône pause = annuler */
+    }
     req->msg = msg;
     soup_session_send_async(req->core->soup, msg, G_PRIORITY_DEFAULT,
                             req->core->cancel, llm_send_done, req);
@@ -1816,10 +1806,12 @@ llm_retry_tick(gpointer data)
 }
 /* Livraison immédiate (décisions d'Éric, malformations) puis avance. */
 void
-llm_cdb_deliver(LlmTile *t, const char *text)
+core_cdb_deliver(LlmCore *c, const char *text)
 {
-    hist_cdb_say(t, text);
-    llm_cdb_next(t);
+    core_history_push(c, LLMACTOR_CDB, FALSE, text);
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_cdb_say_display(g_ptr_array_index(c->views, vi), text);
+    llm_cdb_next(c);
 }
 
 /* Re-interrogation du modèle après livraison des résultats. L'ouverture
@@ -1838,16 +1830,16 @@ llm_cdb_requery(LlmTile *t)
  * Aucune perte : la capture lit tout le buffer, donc le plus récent
  * inclut fatalement les précédents du même terminal. */
 void
-llm_cdb_results_flush(LlmTile *t)
+llm_cdb_results_flush(LlmCore *c)
 {
-    GQueue   *q = t->core->cdb_results;
+    GQueue   *q = c->cdb_results;
     guint     n;
     gboolean *drop;
     guint     i = 0;
 
     /* Boucle annulée par l'utilisateur : plus de re-requête. Les
      * résultats tardifs d'un poll bash encore actif sont jetés. */
-    if (!t->busy) {
+    if (c->cur_req == NULL) {
         if (q != NULL) {
             for (GList *l = q->head; l != NULL; l = l->next) {
                 CdbResult *r = l->data;
@@ -1857,19 +1849,23 @@ llm_cdb_results_flush(LlmTile *t)
                 g_free(r);
             }
             g_queue_free(q);
-            t->core->cdb_results = NULL;
+        c->cdb_results = NULL;
         }
         return;
     }
 
-    t->core->cdb_results = NULL;
+    c->cdb_results = NULL;
     if (q == NULL) {
-        llm_cdb_requery(t);
+        if (c->views->len > 0)
+            llm_cdb_requery(g_ptr_array_index(c->views, 0));
+        /* C4 : sans vue, différer la re-interrogation */
         return;
     }
     if (g_queue_is_empty(q)) {
         g_queue_free(q);
-        llm_cdb_requery(t);
+        if (c->views->len > 0)
+            llm_cdb_requery(g_ptr_array_index(c->views, 0));
+        /* C4 : sans vue, différer la re-interrogation */
         return;
     }
 
@@ -1889,12 +1885,20 @@ llm_cdb_results_flush(LlmTile *t)
         }
     }
 
+    for (guint vi = 0; vi < c->views->len; vi++) {
+        LlmTile *v = g_ptr_array_index(c->views, vi);
+        i = 0;
+        for (GList *l = q->head; l != NULL; l = l->next, i++) {
+            CdbResult *r = l->data;
+
+            if (!drop[i])
+                llm_cdb_say_display(v, r->text);
+        }
+    }
     i = 0;
     for (GList *l = q->head; l != NULL; l = l->next, i++) {
         CdbResult *r = l->data;
 
-        if (!drop[i])
-            hist_cdb_say(t, r->text);
         g_free(r->label);
         g_free(r->text);
         g_free(r);
@@ -1902,22 +1906,123 @@ llm_cdb_results_flush(LlmTile *t)
     g_free(drop);
     g_queue_free(q);
 
-    llm_cdb_requery(t);
+    if (c->views->len > 0)
+            llm_cdb_requery(g_ptr_array_index(c->views, 0));
+        /* C4 : sans vue, différer la re-interrogation */
 }
 
 /* Avance la file : commande suivante → approbation ; vide →
  * livraison des résultats pendants (dédupliqués), puis
  * re-interrogation du modèle. */
-void
-llm_cdb_next(LlmTile *t)
+static LlmCore *
+cdb_core_from_button(GtkButton *btn)
 {
-    if (t->core->cmd_queue == NULL || g_queue_is_empty(t->core->cmd_queue)) {
-        llm_cdb_results_flush(t);
+    for (GtkWidget *w = GTK_WIDGET(btn); w != NULL;
+         w = gtk_widget_get_parent(w)) {
+        LlmCore *c = g_object_get_data(G_OBJECT(w), "cdb-llm-core");
+
+        if (c != NULL)
+            return c;
+    }
+    return NULL;
+}
+
+void
+on_cdb_refuse_clicked(GtkButton *btn, gpointer data)
+{
+    CdbDecision *d = data;
+    LlmCore     *c = cdb_core_from_button(btn);
+    const char  *note =
+        "Éric a REFUSÉ cette commande. Ce n'est pas un bug : "
+        "c'est une décision. Adapte-toi et propose autre chose.";
+
+    if (c == NULL || c->decision != d || d->state != CDB_A_PENDING)
+        return;
+    d->state = CDB_A_REFUSED;
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
+    core_cdb_deliver(c, note);
+    g_free(d->cmd);
+    g_free(d);
+    c->decision = NULL;
+}
+
+void
+on_cdb_approve_clicked(GtkButton *btn, gpointer data)
+{
+    CdbDecision *d = data;
+    LlmCore     *c = cdb_core_from_button(btn);
+    CdbPoll     *pl;
+
+    if (c == NULL || c->decision != d || d->state != CDB_A_PENDING)
+        return;
+    d->state = CDB_A_APPROVED;
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
+
+    pl = g_new0(CdbPoll, 1);
+    pl->core = c;
+    pl->tab = d->tab;
+    pl->tab_label = g_strdup_printf("bash-%d", d->tab);
+
+    bash_panel_ensure_tabs((guint)(d->tab + 1));
+
+    if (!bash_panel_term_ready((guint)d->tab)) {
+        if (!bash_panel_exec_tab_possible()) {
+            char *note = g_strdup_printf(
+                "terminal %s indisponible (panneau bash absent ?)",
+                pl->tab_label);
+
+            core_history_push(c, LLMACTOR_CDB, TRUE, note);
+            for (guint vi = 0; vi < c->views->len; vi++)
+                llm_cdb_say_display(g_ptr_array_index(c->views, vi), note);
+            g_free(note);
+            g_free(pl->tab_label);
+            g_free(pl);
+            return;
+        }
+        pl->pending_cmd = g_strdup(d->cmd);
+        cdb_poll_register(pl);
+        g_timeout_add(CDB_POLL_MS, cdb_spawn_wait_tick, pl);
         return;
     }
-    CdbCmdSpec *s = g_queue_pop_head(t->core->cmd_queue);
 
-    llm_cdb_ask(t, s->tab, s->cmd);
+    if (!bash_panel_exec_tab((guint)d->tab, d->cmd)) {
+        char *note = g_strdup_printf(
+            "terminal %s indisponible (panneau bash absent ?)",
+            pl->tab_label);
+
+        core_history_push(c, LLMACTOR_CDB, TRUE, note);
+        for (guint vi = 0; vi < c->views->len; vi++)
+            llm_cdb_say_display(g_ptr_array_index(c->views, vi), note);
+        g_free(note);
+        g_free(pl->tab_label);
+        g_free(pl);
+        return;
+    }
+    bash_panel_set_busy((guint)d->tab, TRUE);
+
+    cdb_poll_register(pl);
+    g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
+}
+
+void
+llm_cdb_next(LlmCore *c)
+{
+    CdbCmdSpec *s;
+
+    if (c->cmd_queue == NULL || g_queue_is_empty(c->cmd_queue)) {
+        llm_cdb_results_flush(c);
+        return;
+    }
+    s = g_queue_pop_head(c->cmd_queue);
+
+    c->decision = g_new0(CdbDecision, 1);
+    c->decision->tab = s->tab;
+    c->decision->cmd = g_strdup(s->cmd);
+    c->decision->state = CDB_A_PENDING;
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_tile_decision_render(g_ptr_array_index(c->views, vi));
     g_free(s->cmd);
     g_free(s);
 }
@@ -1986,7 +2091,7 @@ llm_cdb_malformed(const char *reply)
  * (voir llm_scan_text), et on saute tout doublon exact déjà présent
  * dans la file (même bash + même commande). */
 gboolean
-llm_agent_detect(LlmTile *t, const char *reply)
+llm_agent_detect(LlmCore *c, const char *reply)
 {
     static GRegex *re = NULL;
     GMatchInfo    *mi = NULL;
@@ -2009,8 +2114,8 @@ llm_agent_detect(LlmTile *t, const char *reply)
             g_free(tabstr);
 
             /* Doublon exact déjà en file (ou en cours) : on ignore. */
-            if (t->core->cmd_queue != NULL)
-                for (GList *l = t->core->cmd_queue->head; l != NULL; l = l->next) {
+            if (c->cmd_queue != NULL)
+                for (GList *l = c->cmd_queue->head; l != NULL; l = l->next) {
                     CdbCmdSpec *q = l->data;
 
                     if (q->tab == tab && g_strcmp0(q->cmd, cmd) == 0) {
@@ -2023,9 +2128,9 @@ llm_agent_detect(LlmTile *t, const char *reply)
 
                 s->tab = tab;
                 s->cmd = cmd;
-                if (t->core->cmd_queue == NULL)
-                    t->core->cmd_queue = g_queue_new();
-                g_queue_push_tail(t->core->cmd_queue, s);
+                if (c->cmd_queue == NULL)
+                    c->cmd_queue = g_queue_new();
+                g_queue_push_tail(c->cmd_queue, s);
             } else
                 g_free(cmd);
         } while (g_match_info_next(mi, NULL));
@@ -2034,7 +2139,7 @@ llm_agent_detect(LlmTile *t, const char *reply)
     g_free(scan);
 
     if (found)
-        llm_cdb_next(t);
+        llm_cdb_next(c);
 
     return found;
 }
@@ -2224,14 +2329,19 @@ llm_queues_purge(LlmTile *t)
 /* ===== Core conversationnel (Phase 1) ===== */
 
 LlmCore *
-llm_core_new(void)
+llm_core_new(LlmConfig *cfg, GListStore *roots,
+             GHashTable *multi_paths)
 {
     LlmCore *c = g_new0(LlmCore, 1);
 
+    c->cfg = cfg;
+    c->roots = roots;
+    c->multi_paths = multi_paths;
     c->soup = soup_session_new();
     c->cancel = g_cancellable_new();
     c->reply = g_string_new(NULL);
     c->history = g_array_new(FALSE, FALSE, sizeof(LlmMsg));
+    c->views = g_ptr_array_new();
     return c;
 }
 
@@ -2279,5 +2389,7 @@ llm_core_free(LlmCore *c)
         }
         g_queue_free(c->cdb_results);
     }
+    if (c->views != NULL)
+        g_ptr_array_unref(c->views);
     g_free(c);
 }

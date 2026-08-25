@@ -41,12 +41,10 @@ llm_tile_free(gpointer data)
      * toucher à la tuile morte. Sans ce garde-fou, fermer une pièce
      * ou la fenêtre pendant un streaming = use-after-free sur
      * req->tile (crash « malloc(): unaligned tcache » constaté). */
-    /* La vue se détache du core : les callbacks réseau continuent
-     * sans UI (l'état vit dans le core, Phase 1). */
-    if (t->core != NULL && t->core->view == t)
-        t->core->view = NULL;
+    /* Détachement : la vue se retire de la liste de diffusion. */
+    if (t->core != NULL)
+        g_ptr_array_remove_fast(t->core->views, t);
 
-    llm_cdb_polls_purge(t); /* polls actifs rattachés à cette tuile */
     if (t->status_timeout_id != 0) {
         g_source_remove(t->status_timeout_id);
         t->status_timeout_id = 0;
@@ -642,93 +640,7 @@ cdb_tile_from_button(GtkButton *btn)
     return NULL;
 }
 
-void
-on_cdb_refuse_clicked(GtkButton *btn, gpointer data)
-{
-    CdbApproval *a = data;
-    LlmTile     *t = cdb_tile_from_button(btn);
-    char        *note;
 
-    if (t == NULL || a->t != t)
-        return; /* bouton fantôme : tuile détruite depuis */
-
-    /* Une demande = une décision : verrouille immédiatement. */
-    gtk_widget_set_sensitive(a->b_ok, FALSE);
-    gtk_widget_set_sensitive(a->b_no, FALSE);
-
-    note = g_strdup_printf(
-        "Éric a REFUSÉ cette commande. Ce n'est pas un bug : "
-        "c'est une décision. Adapte-toi et propose autre chose.");
-
-    llm_cdb_deliver(t, note);
-    g_free(note);
-    /* `a` reste propriété de la rangée : libéré à son destroy. */
-}
-
-void
-on_cdb_approve_clicked(GtkButton *btn, gpointer data)
-{
-    CdbApproval *a = data;
-    LlmTile     *t = cdb_tile_from_button(btn);
-    CdbPoll     *pl;
-
-    if (t == NULL || a->t != t)
-        return; /* bouton fantôme : tuile détruite depuis */
-
-    /* Une demande = une décision : verrouille immédiatement. */
-    gtk_widget_set_sensitive(a->b_ok, FALSE);
-    gtk_widget_set_sensitive(a->b_no, FALSE);
-
-    pl = g_new0(CdbPoll, 1);
-
-    pl->t = t;
-    pl->tab = a->tab;
-    pl->tab_label = g_strdup_printf("bash-%d", a->tab);
-
-    bash_panel_ensure_tabs((guint)(a->tab + 1));
-
-    /* Spawn ASYNCHRONE : un onglet fraîchement créé n'a pas encore de PTY.
-     * Injecter tout de suite = commande perdue (le shell ne lit pas encore
-     * son entrée) et le poll verrait le prompt initial comme « terminé ».
-     * On attend donc que le shell soit prêt avant d'injecter. */
-    if (!bash_panel_term_ready((guint)a->tab)) {
-        if (!bash_panel_exec_tab_possible()) {
-            char *note = g_strdup_printf(
-                "terminal %s indisponible (panneau bash absent ?)",
-                pl->tab_label);
-
-            hist_cdb_announce(t, note);
-            g_free(note);
-            g_free(pl->tab_label);
-            g_free(pl);
-            return;
-        }
-        pl->pending_cmd = g_strdup(a->cmd);
-        cdb_poll_register(pl);
-        g_timeout_add(CDB_POLL_MS, cdb_spawn_wait_tick, pl);
-        return;
-    }
-
-    if (!bash_panel_exec_tab((guint)a->tab, a->cmd)) {
-        char *note = g_strdup_printf(
-            "terminal %s indisponible (panneau bash absent ?)",
-            pl->tab_label);
-
-        hist_cdb_announce(t, note);
-        g_free(note);
-        g_free(pl->tab_label);
-        g_free(pl);
-        return;
-    }
-    bash_panel_set_busy((guint)a->tab, TRUE); /* point orange */
-
-    /* Surveillance du buffer VTE : prompt vu CDB_ROUND_MIN fois de
-     * suite en fin de buffer = terminé (spécification Éric). Pas de
-     * timeout (Ctrl+C humain). Busy reste verrouillé. `a` reste
-     * propriété de la rangée. */
-    cdb_poll_register(pl);
-    g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
-}
 
 void
 hist_cdb_say(LlmTile *t, const char *text)
@@ -743,42 +655,6 @@ hist_cdb_say(LlmTile *t, const char *text)
     history_push(t, LLMACTOR_CDB, FALSE, text);
 }
 
-void
-llm_cdb_ask(LlmTile *t, int tab, const char *cmd)
-{
-    GtkTextIter         end;
-    GtkTextChildAnchor *anch;
-    GtkWidget          *hbar;
-    GtkWidget          *b_ok;
-    GtkWidget          *b_no;
-    CdbApproval        *a = g_new0(CdbApproval, 1);
-
-    a->t = t;
-    a->cmd = g_strdup(cmd);
-    a->tab = tab;
-
-    gtk_text_buffer_get_end_iter(t->hist, &end);
-    anch = gtk_text_buffer_create_child_anchor(t->hist, &end);
-
-    hbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    b_ok = gtk_button_new_with_label("Exécuter");
-    b_no = gtk_button_new_with_label("Refuser");
-    a->b_ok = b_ok;
-    a->b_no = b_no;
-    gtk_widget_add_css_class(b_ok, "flat");
-    gtk_widget_add_css_class(b_no, "flat");
-    gtk_widget_set_focusable(b_ok, FALSE);
-    gtk_widget_set_focusable(b_no, FALSE);
-    g_signal_connect(b_ok, "clicked",
-                     G_CALLBACK(on_cdb_approve_clicked), a);
-    g_signal_connect(b_no, "clicked",
-                     G_CALLBACK(on_cdb_refuse_clicked), a);
-    g_signal_connect(hbar, "destroy", G_CALLBACK(cdb_approval_destroy), a);
-    gtk_box_append(GTK_BOX(hbar), b_ok);
-    gtk_box_append(GTK_BOX(hbar), b_no);
-    gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(t->hist_view),
-                                      hbar, anch);
-}
 
 void
 llm_turn_new(LlmTile *t)
@@ -1861,8 +1737,8 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
 
     t = g_new0(LlmTile, 1);
     t->core = core;
-    /* Attachement : le core diffuse vers cette vue tant quelle vit. */
-    core->view = t;
+    /* Attachement : le core diffuse vers toutes les vues listées. */
+    g_ptr_array_add(core->views, t);
     t->cfg = (LlmConfig *)cfg;
     t->actions = actions != NULL ? g_object_ref(actions) : NULL;
     t->modal_count = modal_count; /* emprunté à App */
@@ -2186,6 +2062,74 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     g_object_set(t->core->soup, "timeout", 120, "idle-timeout", 180, NULL);
     t->pending_images = g_ptr_array_new_with_free_func(g_free);
     t->slot_origin = -1;
+    g_object_set_data(G_OBJECT(box), "cdb-llm-core", core);
     g_object_set_data_full(G_OBJECT(box), "cdb-llm-tile", t, llm_tile_free);
     return box;
+}
+
+/* ----- Décision /CDB:: : rendu par vue (l'état vit au core) ----- */
+
+void
+llm_tile_decision_render(LlmTile *t)
+{
+    LlmCore     *c = t->core;
+    CdbDecision *d;
+    GtkTextIter  end;
+    GtkTextChildAnchor *anch;
+    GtkWidget   *hbar, *b_ok, *b_no;
+
+    if (c == NULL || c->decision == NULL)
+        return;
+    if (t->shown_decision == c->decision)
+        return; /* déjà rendue dans cette vue */
+
+    d = c->decision;
+    t->shown_decision = d;
+
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    anch = gtk_text_buffer_create_child_anchor(t->hist, &end);
+
+    hbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    b_ok = gtk_button_new_with_label("Exécuter");
+    b_no = gtk_button_new_with_label("Refuser");
+    t->approval_bar = hbar;
+    t->approval_ok = b_ok;
+    t->approval_no = b_no;
+    gtk_widget_add_css_class(b_ok, "flat");
+    gtk_widget_add_css_class(b_no, "flat");
+    gtk_widget_set_focusable(b_ok, FALSE);
+    gtk_widget_set_focusable(b_no, FALSE);
+    g_object_set_data(G_OBJECT(b_ok), "decision", d);
+    g_object_set_data(G_OBJECT(b_no), "decision", d);
+    g_signal_connect(b_ok, "clicked",
+                     G_CALLBACK(on_cdb_approve_clicked), d);
+    g_signal_connect(b_no, "clicked",
+                     G_CALLBACK(on_cdb_refuse_clicked), d);
+    gtk_box_append(GTK_BOX(hbar), b_ok);
+    gtk_box_append(GTK_BOX(hbar), b_no);
+    gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(t->hist_view),
+                                      hbar, anch);
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    gtk_text_buffer_insert(t->hist, &end, "\n", -1);
+}
+
+void
+llm_tile_decision_lock(LlmTile *t)
+{
+    if (t->approval_bar == NULL)
+        return;
+    gtk_widget_set_sensitive(t->approval_ok, FALSE);
+    gtk_widget_set_sensitive(t->approval_no, FALSE);
+}
+
+void
+llm_cdb_say_display(LlmTile *t, const char *text)
+{
+    GtkTextIter end;
+
+    hist_render_actor_header(t, LLMACTOR_CDB);
+    hist_ensure_voice_tags(t);
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, text, -1,
+                                             "voice-cdb", NULL);
 }

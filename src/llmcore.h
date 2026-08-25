@@ -108,7 +108,7 @@ long
 llm_json_int(JsonObject *obj, const char *member, long fallback);
 
 void
-llm_handle_sse_line(LlmCore *c, LlmTile *t, const char *line);
+llm_handle_sse_line(LlmCore *c, const char *line);
 
 void
 llm_request_detach(LlmTile *t);
@@ -134,9 +134,6 @@ void
 cdd_poll_unregister(CdbPoll *pl);
 
 void
-llm_cdb_polls_purge(LlmTile *t);
-
-void
 cdb_poll_finish(CdbPoll *pl, const char *text);
 
 gboolean
@@ -155,16 +152,16 @@ gboolean
 llm_retry_tick(gpointer data);
 
 void
-llm_cdb_deliver(LlmTile *t, const char *text);
+core_cdb_deliver(LlmCore *c, const char *text);
 
 void
 llm_cdb_requery(LlmTile *t);
 
 void
-llm_cdb_results_flush(LlmTile *t);
+llm_cdb_results_flush(LlmCore *c);
 
 void
-llm_cdb_next(LlmTile *t);
+llm_cdb_next(LlmCore *c);
 
 char *
 llm_scan_text(const char *reply);
@@ -173,7 +170,7 @@ gboolean
 llm_cdb_malformed(const char *reply);
 
 gboolean
-llm_agent_detect(LlmTile *t, const char *reply);
+llm_agent_detect(LlmCore *c, const char *reply);
 
 char *
 llm_body_build(LlmTile *t);
@@ -188,9 +185,15 @@ void
 llm_queues_purge(LlmTile *t);
 
 LlmCore *
-llm_core_new(void);
+llm_core_new(LlmConfig *cfg, GListStore *roots,
+             GHashTable *multi_paths);
 
 void
 llm_core_free(LlmCore *c);
+
+void
+on_cdb_approve_clicked(GtkButton *btn, gpointer data);
+void
+on_cdb_refuse_clicked(GtkButton *btn, gpointer data);
 
 #endif

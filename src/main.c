@@ -4772,7 +4772,7 @@ main(int argc, char **argv)
     app->files = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
                                        per_file_free);
     app->llm_cfg = llm_config_load();
-    app->llm_core = llm_core_new();
+    app->llm_core = llm_core_new(app->llm_cfg, app->roots, app->multi_paths);
 
     /* NON_UNIQUE : chaque processus est sa propre application — sinon
      * l'enfant délègue son activation au primaire (même ID D-Bus) et

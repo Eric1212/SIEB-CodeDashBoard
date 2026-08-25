@@ -236,4 +236,8 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
              int *modal_count)
 ;
 
+void llm_tile_decision_render(LlmTile *t);
+void llm_tile_decision_lock(LlmTile *t);
+void llm_cdb_say_display(LlmTile *t, const char *text);
+
 #endif
