@@ -1092,6 +1092,7 @@ typedef struct {
 
 static void on_llm_send_clicked(GtkButton *btn, gpointer data);
 static void llm_stream_read(GObject *source, GAsyncResult *res, gpointer data);
+static void llm_request_detach(LlmTile *t);
 static void llm_scroll_to_end(LlmTile *t);
 static void on_llm_scroll(GtkAdjustment *adj, gpointer data);
 static void llm_model_section_refresh(LlmTile *t, ModelSection *sec);
@@ -1120,6 +1121,18 @@ static void
 llm_tile_free(gpointer data)
 {
     LlmTile *t = data;
+
+    /* REQUÊTE EN VOL : détacher la tuile AVANT toute libération.
+     * Les callbacks async (llm_send_done, llm_stream_read,
+     * llm_retry_tick) testent req->tile == NULL et se retirent sans
+     * toucher à la tuile morte. Sans ce garde-fou, fermer une pièce
+     * ou la fenêtre pendant un streaming = use-after-free sur
+     * req->tile (crash « malloc(): unaligned tcache » constaté). */
+    llm_request_detach(t);
+    /* Tue le transport réseau au plus vite : sans annulation, libsoup
+     * peut continuer à drainer le socket en arrière-plan. */
+    if (t->cancel != NULL)
+        g_cancellable_cancel(t->cancel);
 
     llm_cdb_polls_purge(t); /* polls actifs rattachés à cette tuile */
     if (t->status_timeout_id != 0) {
@@ -1886,6 +1899,20 @@ struct LlmRequest {
     int           attempt;      /* numéro d'essai courant (0 = premier) */
 };
 
+/* Détache la requête en vol d'une tuile sur le point de mourir :
+ * les callbacks async verront req->tile == NULL et se retireront
+ * sans déréférencer la tuile déjà libérée (sinon use-after-free).
+ * Définie ici car le type LlmRequest doit être complet ; appelée
+ * depuis llm_tile_free via la déclaration anticipée plus haut. */
+static void
+llm_request_detach(LlmTile *t)
+{
+    if (t->cur_req != NULL) {
+        t->cur_req->tile = NULL;
+        t->cur_req = NULL;
+    }
+}
+
 static void llm_send_attempt(LlmRequest *req);
 static gboolean llm_agent_detect(LlmTile *t, const char *reply);
 static void     llm_send(LlmTile *t, const char *prompt);
@@ -2140,9 +2167,17 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                 gpointer data)
 {
     LlmRequest *req = data;
-    LlmTile    *t = req->tile;
+    LlmTile    *t;
     gssize      n;
     GError     *error = NULL;
+
+    /* Tuile détruite depuis l'envoi (pièce fermée, fenêtre fermée,
+     * re-rendu du layout) : rien à afficher — libérer et sortir. */
+    if (req->tile == NULL) {
+        llm_request_free(req);
+        return;
+    }
+    t = req->tile;
 
     n = g_input_stream_read_finish(req->stream, res, &error);
 
@@ -2650,6 +2685,17 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
     GInputStream *stream = soup_session_send_finish(SOUP_SESSION(source),
                                                     res, &error);
 
+    /* Tuile détruite pendant l'envoi : jeter flux et erreur, sortir
+     * sans toucher à la tuile libérée. */
+    if (req->tile == NULL) {
+        if (stream != NULL)
+            g_object_unref(stream);
+        if (error != NULL)
+            g_error_free(error);
+        llm_request_free(req);
+        return;
+    }
+
     if (error != NULL) {
         gboolean cancelled = g_error_matches(error, G_IO_ERROR,
                                              G_IO_ERROR_CANCELLED);
@@ -2780,7 +2826,15 @@ llm_send_attempt(LlmRequest *req)
 static gboolean
 llm_retry_tick(gpointer data)
 {
-    llm_send_attempt((LlmRequest *)data);
+    LlmRequest *req = data;
+
+    /* Timer orphelin : la tuile est morte pendant le délai de retry.
+     * Sans ce garde, le timer explosait dans la mémoire libérée. */
+    if (req->tile == NULL) {
+        llm_request_free(req);
+        return G_SOURCE_REMOVE;
+    }
+    llm_send_attempt(req);
     return G_SOURCE_REMOVE;
 }
 
