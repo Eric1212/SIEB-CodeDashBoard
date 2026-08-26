@@ -1227,6 +1227,7 @@ llm_handle_sse_line(LlmCore *c, const char *line)
 static GPtrArray *cdb_polls = NULL;
 
 #define CDB_TOOL_NAME "cdb_bash"
+#define CDB_TOOL_NAME_READ "cdb_read"
 
 void
 llm_tool_call_free(gpointer data)
@@ -1460,6 +1461,204 @@ llm_process_tool_delta(LlmCore *c, JsonObject *obj, guint choice_index)
     }
 }
 
+/* ---- outils fichiers : hash court (CRC32 -> 4 chars base36) ---- */
+
+static guint32 cdb_crc_table[256];
+static gboolean cdb_crc_ready = FALSE;
+
+static void
+cdb_crc32_init(void)
+{
+    for (guint32 i = 0; i < 256; i++) {
+        guint32 c = i;
+        for (int k = 0; k < 8; k++)
+            c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+        cdb_crc_table[i] = c;
+    }
+    cdb_crc_ready = TRUE;
+}
+
+static guint32
+cdb_crc32(const void *buf, gsize len)
+{
+    const guint8 *b = buf;
+    guint32 c = 0xFFFFFFFFu;
+
+    if (!cdb_crc_ready)
+        cdb_crc32_init();
+    for (gsize i = 0; i < len; i++)
+        c = cdb_crc_table[(c ^ b[i]) & 0xFFu] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+/* Hash court d'une plage : 4 caracteres base36 (36^4 = 1 679 616).
+ * Garde-fou de synchronisation, pas une signature. */
+static char *
+cdb_hash4(const void *buf, gsize len)
+{
+    static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    guint32 v = cdb_crc32(buf, len) % 1679616u; /* 36^4 */
+    char *s = g_new0(char, 5);
+
+    s[4] = '\0';
+    for (int i = 3; i >= 0; i--) {
+        s[i] = digits[v % 36];
+        v /= 36;
+    }
+    return s;
+}
+
+/* off[k] = offset du debut de la (k+1)-ieme ligne ; off[line_count] =
+ * fin de la derniere ligne. Une ligne inclut son \n de terminaison,
+ * sauf la derniere si le fichier ne finit pas par \n. vide => 0 ligne. */
+static void
+cdb_line_offsets(const char *content, gsize len, GArray *off,
+                 guint *line_count)
+{
+    gsize z = 0;
+    guint n_nl = 0;
+    gboolean ends_nl;
+
+    g_array_set_size(off, 0);
+    g_array_append_val(off, z);
+    for (gsize i = 0; i < len; i++) {
+        if (content[i] == '\n') {
+            gsize p = i + 1;
+            g_array_append_val(off, p);
+            n_nl++;
+        }
+    }
+    ends_nl = (len > 0 && content[len - 1] == '\n');
+    *line_count = n_nl + ((ends_nl || len == 0) ? 0 : 1);
+    if (!ends_nl && len > 0) {
+        gsize last = len;
+        g_array_append_val(off, last);
+    }
+}
+
+/* cdb_read : plage exacte depuis le DISQUE (jamais le dirty). */
+static void
+cdb_tool_file_read(LlmCore *c, const LlmToolCall *tc)
+{
+    LlmToolMode mode = llm_tools_effective_mode(CDB_TOOL_NAME_READ);
+    JsonParser *parser;
+    JsonObject *root;
+    GError *gerr = NULL;
+    const char *path = NULL;
+    long from, to;
+    guint f, t, line_count = 0;
+    char *content = NULL;
+    gsize len = 0;
+    GArray *off = NULL;
+    gsize rstart, rend;
+    char *hash = NULL;
+    GString *out = NULL;
+    char *result = NULL;
+
+    if (mode == LLM_TOOL_OFF) {
+        cdb_queue_text_result(c, tc->id, "read",
+            "outil \"cdb_read\" désactivé dans le profil courant.",
+            NULL, FALSE);
+        return;
+    }
+
+    parser = json_parser_new();
+    if (!json_parser_load_from_data(parser,
+            tc->arguments_json != NULL ? tc->arguments_json : "",
+            -1, NULL) ||
+        json_parser_get_root(parser) == NULL ||
+        !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        cdb_queue_text_result(c, tc->id, "read",
+            "arguments JSON invalides pour cdb_read.", NULL, FALSE);
+        goto done;
+    }
+    root = json_node_get_object(json_parser_get_root(parser));
+    if (json_object_has_member(root, "path") &&
+        JSON_NODE_HOLDS_VALUE(json_object_get_member(root, "path")) &&
+        json_node_get_value_type(json_object_get_member(root, "path"))
+            == G_TYPE_STRING)
+        path = json_object_get_string_member(root, "path");
+    from = llm_json_int(root, "from_line", -1);
+    to = llm_json_int(root, "to_line", -1);
+
+    if (path == NULL || path[0] == '\0') {
+        cdb_queue_text_result(c, tc->id, "read",
+            "path manquant.", NULL, FALSE);
+        goto done;
+    }
+    if (path[0] != '/') {
+        cdb_queue_text_result(c, tc->id, "read",
+            "chemin absolu requis.", NULL, FALSE);
+        goto done;
+    }
+    if (from < 1 || to < from) {
+        cdb_queue_text_result(c, tc->id, "read",
+            "from_line/to_line invalides (1-based, to >= from >= 1).",
+            NULL, FALSE);
+        goto done;
+    }
+
+    if (!g_file_get_contents(path, &content, &len, &gerr)) {
+        char *m = g_strdup_printf("lecture impossible : %s",
+            gerr != NULL ? gerr->message : "?");
+        if (gerr != NULL)
+            g_error_free(gerr);
+        cdb_queue_text_result(c, tc->id, "read", m, NULL, FALSE);
+        g_free(m);
+        goto done;
+    }
+    if (!g_utf8_validate(content, (gssize)len, NULL)) {
+        cdb_queue_text_result(c, tc->id, "read",
+            "fichier binaire ou non UTF-8 : refusé.", NULL, FALSE);
+        goto done;
+    }
+
+    off = g_array_new(FALSE, FALSE, sizeof(gsize));
+    cdb_line_offsets(content, len, off, &line_count);
+    f = (guint)from;
+    t = (guint)to;
+    if (f > line_count || t > line_count) {
+        char *m = g_strdup_printf(
+            "plage hors fichier : line_count=%u (demandé %u-%u).",
+            line_count, f, t);
+        cdb_queue_text_result(c, tc->id, "read", m, NULL, FALSE);
+        g_free(m);
+        goto done;
+    }
+
+    rstart = g_array_index(off, gsize, f - 1);
+    rend = g_array_index(off, gsize, t);
+    hash = cdb_hash4(content + rstart, rend - rstart);
+
+    out = g_string_new(NULL);
+    g_string_append_printf(out,
+        "file: %s\nline_count: %u\nrange: %u-%u\nhash: %s\n\n",
+        path, line_count, f, t, hash);
+    for (guint ln = f; ln <= t; ln++) {
+        gsize ls = g_array_index(off, gsize, ln - 1);
+        gsize le = g_array_index(off, gsize, ln);
+        gsize d = le - ls;
+        if (d > 0 && content[ls + d - 1] == '\n')
+            d--;
+        g_string_append_printf(out, "%4u|%.*s\n", ln, (int)d,
+            content + ls);
+    }
+
+    result = g_string_free(out, FALSE);
+    out = NULL;
+    cdb_queue_text_result(c, tc->id, "read", result, NULL, FALSE);
+
+done:
+    g_free(result);
+    g_free(hash);
+    if (out != NULL)
+        g_string_free(out, TRUE);
+    if (off != NULL)
+        g_array_free(off, TRUE);
+    g_free(content);
+    g_object_unref(parser);
+}
+
 /* Valide un appel natif et le place soit dans la file bash, soit dans une
  * réponse d'erreur formelle. Aucun appel ne reste sans réponse. */
 static void
@@ -1483,9 +1682,14 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
         return;
     }
 
+    if (g_strcmp0(tc->name, CDB_TOOL_NAME_READ) == 0) {
+        cdb_tool_file_read(c, tc);
+        return;
+    }
     if (g_strcmp0(tc->name, CDB_TOOL_NAME) != 0) {
         error = g_strdup_printf(
-            "outil inconnu \"%s\" : seul cdb_bash est disponible.",
+            "outil inconnu \"%s\" : seuls cdb_bash et cdb_read sont "
+            "disponibles.",
             tc->name != NULL ? tc->name : "(sans nom)");
         goto done;
     }
@@ -2677,6 +2881,64 @@ tools_schema_cdb_bash(JsonBuilder *builder)
     json_builder_end_object(builder);
 }
 
+/* Schéma de l'outil cdb_read. */
+static void
+tools_schema_cdb_read(JsonBuilder *builder)
+{
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "function");
+    json_builder_set_member_name(builder, "function");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "name");
+    json_builder_add_string_value(builder, "cdb_read");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        "Lit une plage exacte de lignes d'un fichier texte depuis le "
+        "disque (chemin absolu). from_line/to_line 1-based inclusifs. "
+        "Retourne les lignes et un hash court (4 caracteres base36) des "
+        "octets exacts de la plage, a rejouer dans cdb_insert/cdb_replace.");
+    json_builder_set_member_name(builder, "parameters");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "object");
+    json_builder_set_member_name(builder, "properties");
+    json_builder_begin_object(builder);
+
+    json_builder_set_member_name(builder, "path");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "from_line");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "integer");
+    json_builder_set_member_name(builder, "minimum");
+    json_builder_add_int_value(builder, 1);
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "to_line");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "integer");
+    json_builder_set_member_name(builder, "minimum");
+    json_builder_add_int_value(builder, 1);
+    json_builder_end_object(builder);
+
+    json_builder_end_object(builder); /* properties */
+    json_builder_set_member_name(builder, "required");
+    json_builder_begin_array(builder);
+    json_builder_add_string_value(builder, "path");
+    json_builder_add_string_value(builder, "from_line");
+    json_builder_add_string_value(builder, "to_line");
+    json_builder_end_array(builder);
+    json_builder_end_object(builder); /* parameters */
+    json_builder_end_object(builder); /* function */
+    json_builder_end_object(builder); /* tool */
+}
+
 char *
 llm_body_build(LlmTile *t)
 {
@@ -2687,12 +2949,21 @@ llm_body_build(LlmTile *t)
     char        *persona;
 
     static const char tools_policy[] =
-        "\n\n# Outil CDB : cdb_bash\n\n"
+        "\n\n# Outils CDB natifs\n\n"
         "Le protocole textuel /CDB:: est supprimé et interdit. "
-        "Utilise exclusivement l'outil natif cdb_bash pour agir sur un "
-        "terminal. Un résultat tool avec content:null signifie qu'il n'y a "
-        "aucun contenu nouveau par rapport aux résultats précédents du même "
-        "terminal.\n";
+        "Utilise exclusivement les outils natifs pour agir.\n"
+        "Un résultat tool avec content:null signifie qu'il n'y a aucun "
+        "contenu nouveau par rapport aux résultats précédents du même "
+        "terminal.\n\n"
+        "## cdb_bash\n"
+        "Exécute une commande shell dans un terminal CDB (0-9).\n\n"
+        "## cdb_read\n"
+        "Lit une plage exacte de lignes (chemin absolu, 1-based inclusif). "
+        "Retourne les lignes + un hash court (4 caractères base36) couvrant "
+        "les octets exacts de la plage lue. Ce hash prouve que tu as lu la "
+        "zone et devra être rejoué par les outils d'écriture. Pour obtenir "
+        "le hash d'UNE ligne, lis exactement cette ligne "
+        "(from_line==to_line).\n";
 
     builder = json_builder_new();
     json_builder_begin_object(builder);
@@ -2718,13 +2989,20 @@ llm_body_build(LlmTile *t)
                                                            "cdb_bash");
         LlmToolMode        bash_mode = llm_tool_pref_mode(bash_pref, prof);
         gboolean           announce_bash = (bash_mode != LLM_TOOL_OFF);
-        guint              n_enabled = announce_bash ? 1 : 0;
+        const LlmToolPref *read_pref = llm_tools_pref_find(prefs,
+                                                           "cdb_read");
+        LlmToolMode        read_mode = llm_tool_pref_mode(read_pref, prof);
+        gboolean           announce_read = (read_mode != LLM_TOOL_OFF);
+        guint              n_enabled = (announce_bash ? 1 : 0) +
+                                       (announce_read ? 1 : 0);
 
         if (n_enabled > 0) {
             json_builder_set_member_name(builder, "tools");
             json_builder_begin_array(builder);
             if (announce_bash)
                 tools_schema_cdb_bash(builder);
+            if (announce_read)
+                tools_schema_cdb_read(builder);
             /* futurs outils : autres schémas + tests de mode ici */
             json_builder_end_array(builder);
 

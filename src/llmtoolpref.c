@@ -22,7 +22,13 @@ static void
 tool_pref_apply_defaults(LlmToolPref *p)
 {
     p->modes[LLM_PROFILE_MINIMAL] = LLM_TOOL_OFF;
-    p->modes[LLM_PROFILE_DEFAULT] = LLM_TOOL_ASK;
+    /* cdb_read est en lecture seule (sans effet destructeur) : il est
+     * annonce en ALLOW des le profil DEFAULT. Les autres outils restent
+     * en ASK (decision d'Eric avant execution). */
+    if (p->name != NULL && g_strcmp0(p->name, "cdb_read") == 0)
+        p->modes[LLM_PROFILE_DEFAULT] = LLM_TOOL_ALLOW;
+    else
+        p->modes[LLM_PROFILE_DEFAULT] = LLM_TOOL_ASK;
     p->modes[LLM_PROFILE_YOLO]    = LLM_TOOL_ALLOW;
 }
 
@@ -83,6 +89,7 @@ llm_tools_prefs_load(void)
     char       *path = llm_config_path();
     JsonParser *parser = json_parser_new();
     gboolean    have_bash = FALSE;
+    gboolean    have_read = FALSE;
 
     if (json_parser_load_from_file(parser, path, NULL) &&
         json_parser_get_root(parser) != NULL &&
@@ -129,6 +136,8 @@ llm_tools_prefs_load(void)
 
                 if (g_strcmp0(p->name, "cdb_bash") == 0)
                     have_bash = TRUE;
+                if (g_strcmp0(p->name, "cdb_read") == 0)
+                    have_read = TRUE;
                 g_ptr_array_add(out, p);
             }
         }
@@ -140,6 +149,13 @@ llm_tools_prefs_load(void)
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
         p->name = g_strdup("cdb_bash");
+        tool_pref_apply_defaults(p);
+        g_ptr_array_add(out, p);
+    }
+    if (!have_read) {
+        LlmToolPref *p = g_new0(LlmToolPref, 1);
+
+        p->name = g_strdup("cdb_read");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }
