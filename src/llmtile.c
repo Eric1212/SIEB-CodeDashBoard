@@ -1,3 +1,9 @@
+/*
+ * llmtile.c : tuile LLM (vue) — historique GtkTextBuffer, selecteur
+ * de modele, slots, approbations /CDB:: rendues depuis le core.
+ * Aucune propriete conversationnelle : tout vient de LlmCore.
+ */
+
 #define _POSIX_C_SOURCE 200809L
 #include "llm.h"
 #include "session.h"
@@ -198,7 +204,8 @@ on_llm_model_row_activated(GtkListBox G_GNUC_UNUSED *lb,
         return; /* déjà actif */
     }
     llm_config_switch_active(t->cfg, prov, id);
-    llm_model_button_refresh(t);
+    for (guint vi = 0; vi < t->core->views->len; vi++)
+        llm_model_button_refresh(g_ptr_array_index(t->core->views, vi));
     for (guint i = 0; i < t->sections->len; i++)
         llm_model_section_refresh(t, g_ptr_array_index(t->sections, i));
     llm_model_menu_apply_filter(t);

@@ -1,10 +1,11 @@
 /*
- * llm.c : tuile LLM — chat avec un provider OpenAI-compatible (SSE).
+ * llmcore.c : etat conversationnel LLM (LlmCore) — reseau SSE,
+ * historique, boucle agentique /CDB::, retries 429/5xx, annonces.
  *
- * Requête : POST {api_url}/chat/completions, stream=true.
- * Réponse : SSE « data: {…} », chaque chunk porte un delta de contenu ;
- * fin par « data: [DONE] ». La lecture incrémentale (libsoup async)
- * met à jour le GtkTextBuffer de l'historique au fil de l'eau.
+ * Requete : POST {api_url}/chat/completions, stream=true.
+ * Reponse : SSE data: {...} ; fin par data: [DONE].
+ * Le core vit sans vue : les tuiles (llmtile.c) miroitent la
+ * meme conversation (buffers par vue + diffusion).
  */
 
 #define _POSIX_C_SOURCE 200809L

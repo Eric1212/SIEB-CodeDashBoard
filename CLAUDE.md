@@ -9,8 +9,8 @@ Nomenclature : **SIEB** = entreprise, **CodeDashBoard** = nom long,
 
 Un environnement de développement qui se présente comme un tableau de bord :
 code, recherche et IA cohabitent dans une seule fenêtre GTK, sans lourdeur.
-L'objectif est plus proche de **gnome-text-editor** (léger, GTK4, GtkSourceView)
-que de gedit (GTK3, fork libgedit).
+Objectif proche de **gnome-text-editor** (léger, GTK4, GtkSourceView),
+pas de gedit (GTK3, fork libgedit).
 
 ## Stack
 
@@ -18,69 +18,62 @@ que de gedit (GTK3, fork libgedit).
 |---|---|---|
 | **C23** | Langage (`-std=c23`, gcc 15) | ✅ |
 | **GTK4** (4.22) | UI | ✅ |
-| **GtkSourceView 5** (5.20) | Édition de code : coloration syntaxique, numéros de ligne, indentation auto | ✅ |
-| **libadwaita** (1.9) | Thème clair/sombre système : `AdwStyleManager` suit `color-scheme` via le portal (comme `RClotGenerator`) | ✅ |
-| **json-glib** (1.10) | Persistance JSON des roots (`~/.config/cdb/roots.json`) | ✅ |
-| **NetSurf** | Rendu HTML intégré (le Dashboard affiche des pages web) | ⏳ jalon futur |
-| **ffsr** | Recherche de code que NetSurf ne couvre pas (projet `~/dev/ffsr`) | ⏳ jalon futur |
-| **alvalllm** | IA en intégration douce — pas d'ACP (projet `~/dev/alvalllm`) | ⏳ jalon futur |
+| **GtkSourceView 5** | Édition de code | ✅ |
+| **libadwaita** | Thème clair/sombre système | ✅ |
+| **json-glib** | Persistance (roots, llm.json, llm_live.json, slots) | ✅ |
+| **libsoup-3** | flux SSE du chat LLM | ✅ |
+| **VTE** | terminaux bash + boucle agentique /CDB:: | ✅ |
+| **NetSurf** | rendu HTML intégré | ⏳ jalon futur |
+| **ffsr** | recherche | ⏳ jalon futur |
+| **alvalllm** | intégration douce de l'IA | ⏳ jalon futur |
 
-Choix de GtkSourceView 5 (et pas libgedit) : série GTK4 officielle GNOME, toujours
-maintenue (5.21+ en 2026), utilisée par gnome-text-editor. Le fork libgedit est
-GTK3, incompatible avec notre stack.
+## Sessions
 
-## Architecture
+Chaque processus CDB = une session 000-999 (`CDB_SESSION`, ou dialogue
+si une autre instance tourne). Config dans `~/.config/cdb/<NNN>/` :
+roots.json, layout.json, window.json, dirty.json, llm.json,
+llm_live.json, llm_slots/.
 
-```
-~/dev/SIEB-CodeDashBoard/
-├── CLAUDE.md       # ce fichier
-├── Makefile        # make / make run / make clean
-└── src/
-    ├── main.c      # UI GTK4 : HeaderBar, panneau Dossiers (arbre), GtkSourceView, barre de statut
-    ├── roots.c     # modèle des roots : add/remove + persistance JSON (json-glib)
-    └── roots.h
-```
+## Architecture LLM
 
-- `main.c` : une seule fenêtre 1280×800, `GtkHeaderBar` (bouton Ouvrir →
-  `GtkFileDialog`), `GtkPaned` horizontal (gauche = panneau Dossiers,
-  droite = éditeur), barre de statut (fichier courant + ligne:colonne).
-- Panneau **Dossiers** : `GtkListView` + `GtkTreeListModel` (2 niveaux).
-  Un **root de structure** (ex: `/home/eric/dev`) contient des **roots de
-  projet** (ex: `/home/eric/dev/alvalllm`) ; un projet peut aussi être orphelin
-  à la racine. Menu « + » → `GtkFileDialog` dossier ; clic droit → suppression.
-  Placement : si une structure est sélectionnée à l'ajout d'un projet, le
-  projet devient son enfant.
-- `roots.c` : `RootEntry` = GObject (kind : structure/projet, children :
-  `GListStore` pour les structures). `roots_load()` au démarrage, `roots_save()`
-  après chaque ajout/suppression. JSON : `{"roots":[{path,kind,children?}]}`,
-  joli format, échappé proprement par json-glib.
-- Détection de langue via `gtk_source_language_manager_guess_language()`.
-- Schéma de couleurs Adwaita.
+- `src/llmcore.c` : **LlmCore** — état conversationnel + réseau +
+  agentique, vit sans vue. `core_history_push`, stream SSE, décision
+  /CDB:: au core, retries 429/5xx, `core_cdb_announce`.
+- `src/llmtile.c` : **LlmTile** — la vue. Buffers GtkTextBuffer par
+  vue, replay de l'historique à l'attach (miroir), sélecteur de modèle,
+  slots, barre d'approbation. Aucune propriété conversationnelle.
+- `src/llmlive.c` : persistance **dirty** `llm_live.json` (historique
+  complet, survie crash/redémarrage). **Loi : live = dirty ; les slots
+  sont la seule sauvegarde réelle.**
+- Miroir : plusieurs tuiles sur un même core ; toute opération de rendu
+  boucle sur `core->views` ; plus aucune vue primaire privilégiée.
+- Load du live APRÈS `session_init()` (le numéro de session fixe le
+  dossier) — appelé dans `on_activate`, pas dans `llm_core_new`.
 
 ## Conventions
 
-- C23, `snake_case`, callbacks GTK de type `on_<signal>_<widget>`.
-- Structure de contexte `App` passée en `user_data` — pas de globales.
-- Compilation stricte : `-Wall -Wextra` (pas de `-Wpedantic` : bruit des headers GTK).
-- Une fonction = une responsabilité ; le code reste lisible sans sur-architecture.
-- json-glib : toujours tester `json_object_has_member()` avant
-  `json_object_get_*_member()` (assertion sinon).
+- C23, `snake_case`, callbacks GTK `on_<signal>_<widget>`.
+- Contexte `App` en `user_data` — pas de globales (sauf `cdb_session`,
+  initialisé une fois avant tout usage).
+- `-Wall -Wextra`.
+- Éditions par numéros de ligne (get #→#, push #→#), pas de replace
+  global par regex ; chk de garde avant écriture.
+- json-glib : `json_object_has_member()` avant tout get.
 
 ## Jalons
 
-- [x] **0 — Premier jet UI** : fenêtre GTK4 + GtkSourceView opérationnelle,
-      ouverture de fichiers, statut curseur, thème système (libadwaita).
-- [x] **0b — Dossiers** : roots de structure / de projet, ajout/suppression,
-      persistance JSON.
-- [ ] **1 — NetSurf** : widget d'affichage HTML (prévisualisation, docs, dashboard).
-- [ ] **2 — ffsr** : intégration de la recherche pour ce que NetSurf ne permet pas.
-- [ ] **3 — alvalllm** : intégration douce de l'IA pour compléter le dashboard.
+- [x] **0/0b** — UI GTK4 + panneaux dossiers.
+- [x] **C0→C6** — refactor LLM : split llmcore/llmtile, LlmCore
+  singleton, agentique au core, miroir multi-vues, replay à l'attach,
+  persistance live, modèle partagé, nettoyage + doc.
+- [ ] **1** — NetSurf ; **2** — ffsr ; **3** — alvalllm.
 
 ## Commandes
 
 ```sh
 make        # compilation (binaire : ./cdb)
 make run    # compile puis lance
+make asan   # build AddressSanitizer + UBSan
 make clean
 ```
 
