@@ -2722,8 +2722,7 @@ static void on_allowed_models_changed(GtkEditable *editable,
 static GtkWidget *build_provider_form(const char *provider_name);
 static GtkWidget *build_harness_form(void);
 static GtkWidget *build_tools_form(void);
-static void on_tool_switch_changed(GtkSwitch *sw,
-                GParamSpec *pspec, gpointer data);
+static void on_tool_mode_clicked(GtkButton *btn, gpointer data);
 static GtkWidget *build_initprompt_editor(void);
 
 static GtkWidget *
@@ -3177,71 +3176,141 @@ on_harness_spin_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
 
 /* Formulaire Harness : politiques de retry sur HTTP 429 (rapide) et
  * 5xx (lent). Défauts : 429 = oui / 200 / 250 ms ; 5xx = oui / 120 / 1 s. */
-/* Formulaire Tools : un outil natif par ligne, switch persisté dans
- * llm.json "tools". Effectif à la prochaine requête (le schéma est
- * reconstruit à chaque llm_body_build). */
+/* Libellés courts des modes (index = LlmToolMode). */
+static const char *const TOOL_MODE_LABELS[4] = {
+    "OFF", "ASK", "ALLOW", "ALLOW+"
+};
+
+/* Les modes proposés par outil, dans l'ordre de cycle. Permet d'outils
+ * sans effet « plus » : leur cycle s'arrête à ALLOW. */
+static const LlmToolMode *
+tool_mode_cycle(const char *name, guint *n_out)
+{
+    static const LlmToolMode bash_cycle[] = {
+        LLM_TOOL_OFF, LLM_TOOL_ASK, LLM_TOOL_ALLOW, LLM_TOOL_ALLOWPLUS
+    };
+    static const LlmToolMode plain_cycle[] = {
+        LLM_TOOL_OFF, LLM_TOOL_ASK, LLM_TOOL_ALLOW
+    };
+
+    if (name != NULL && g_strcmp0(name, "cdb_bash") == 0) {
+        *n_out = G_N_ELEMENTS(bash_cycle);
+        return bash_cycle;
+    }
+    *n_out = G_N_ELEMENTS(plain_cycle);
+    return plain_cycle;
+}
+
+/* Recharge la préférence d'un outil (défauts inclus). */
+static LlmToolMode
+tool_current_mode(const char *name, LlmToolProfile profile)
+{
+    GPtrArray         *prefs = llm_tools_prefs_load();
+    const LlmToolPref *p = llm_tools_pref_find(prefs, name);
+    LlmToolMode        mode = llm_tool_pref_mode(p, profile);
+
+    llm_tools_prefs_free(prefs);
+    return mode;
+}
+
+static void
+tool_button_set_mode(GtkButton *btn, LlmToolMode mode)
+{
+    gtk_button_set_label(GTK_BUTTON(btn),
+                         TOOL_MODE_LABELS[mode <= LLM_TOOL_ALLOWPLUS
+                                              ? mode : LLM_TOOL_OFF]);
+}
+
+/* Clic sur une intersection outil/profil : passe au mode suivant du
+ * cycle, sauvegarde, re-affiche. Le bouton garde (nom, profil). */
+static void
+on_tool_mode_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
+{
+    const char    *name = g_object_get_data(G_OBJECT(btn), "tool-name");
+    LlmToolProfile prof = (LlmToolProfile)
+        GPOINTER_TO_INT(g_object_get_data(G_OBJECT(btn), "tool-profile"));
+    guint          n = 0;
+    const LlmToolMode *cycle = tool_mode_cycle(name, &n);
+    LlmToolMode     cur = tool_current_mode(name, prof);
+    LlmToolMode     next;
+    guint           i;
+
+    if (name == NULL || n == 0)
+        return;
+    /* position courante dans le cycle (ALLOWPLUS hors cycle d'un outil
+     * simple retombe sur OFF). */
+    next = cycle[0];
+    for (i = 0; i < n; i++) {
+        if (cycle[i] == cur) {
+            next = cycle[(i + 1) % n];
+            break;
+        }
+    }
+    llm_config_save_tool_mode(name, prof, next);
+    tool_button_set_mode(btn, next);
+}
+
+/* Grille Tools : outils en lignes, trois profils en colonnes. Chaque
+ * intersection est un bouton cyclable OFF -> ASK -> ALLOW (-> ALLOW+
+ * pour bash). Effectif à la prochaine requête. */
 static GtkWidget *
 build_tools_form(void)
 {
     GtkWidget *grid = gtk_grid_new();
     GPtrArray *prefs = llm_tools_prefs_load();
 
+    gtk_grid_set_row_homogeneous(GTK_GRID(grid), TRUE);
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid), TRUE);
     gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
     gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
     gtk_widget_set_margin_start(grid, 24);
-    gtk_widget_set_margin_top(grid, 6);
-    gtk_widget_set_margin_bottom(grid, 6);
+    gtk_widget_set_margin_top(grid, 12);
+    gtk_widget_set_margin_bottom(grid, 12);
 
+    /* Ligne d'en-tête : coin vide + les trois noms de profil. */
+    {
+        GtkWidget *corner = gtk_label_new("Outil");
+        gtk_widget_set_halign(corner, GTK_ALIGN_START);
+        gtk_widget_add_css_class(corner, "heading");
+        gtk_grid_attach(GTK_GRID(grid), corner, 0, 0, 1, 1);
+
+        for (guint p = 0; p < LLM_PROFILE_COUNT; p++) {
+            GtkWidget *h = gtk_label_new(LLM_PROFILE_NAMES[p]);
+            gtk_widget_set_halign(h, GTK_ALIGN_CENTER);
+            gtk_widget_add_css_class(h, "heading");
+            gtk_grid_attach(GTK_GRID(grid), h, (int)p + 1, 0, 1, 1);
+        }
+    }
+
+    /* Une ligne par outil. */
     for (guint i = 0; i < prefs->len; i++) {
         LlmToolPref *p = g_ptr_array_index(prefs, i);
         GtkWidget   *name_lbl;
-        GtkWidget   *desc_lbl;
-        GtkWidget   *sw;
-        GtkWidget   *status;
 
         name_lbl = gtk_label_new(p->name != NULL ? p->name : "?");
         gtk_widget_set_halign(name_lbl, GTK_ALIGN_START);
+        gtk_grid_attach(GTK_GRID(grid), name_lbl, 0, (int)i + 1, 1, 1);
 
-        desc_lbl = gtk_label_new(
-            "exécution shell dans un terminal CDB, avec approbation");
-        gtk_label_set_xalign(GTK_LABEL(desc_lbl), 0.0);
-        gtk_widget_add_css_class(desc_lbl, "dim-label");
+        for (guint pr = 0; pr < LLM_PROFILE_COUNT; pr++) {
+            GtkWidget *btn = gtk_button_new();
 
-        sw = gtk_switch_new();
-        gtk_switch_set_active(GTK_SWITCH(sw), p->enabled);
-        gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
-        gtk_widget_set_halign(sw, GTK_ALIGN_START);
-        if (p->name != NULL)
-            g_object_set_data_full(G_OBJECT(sw), "tool-name",
-                                   g_strdup(p->name), g_free);
-        g_signal_connect(sw, "notify::active",
-                         G_CALLBACK(on_tool_switch_changed), NULL);
-
-        status = gtk_label_new("effectif à la prochaine requête");
-        gtk_label_set_xalign(GTK_LABEL(status), 0.0);
-        gtk_widget_add_css_class(status, "dim-label");
-
-        gtk_grid_attach(GTK_GRID(grid), name_lbl, 0, i * 2, 1, 1);
-        gtk_grid_attach(GTK_GRID(grid), sw, 1, i * 2, 1, 1);
-        gtk_grid_attach(GTK_GRID(grid), desc_lbl, 0, i * 2 + 1, 2, 1);
-        gtk_grid_attach(GTK_GRID(grid), status, 0, i * 2 + 2, 2, 1);
+            gtk_widget_add_css_class(btn, "flat");
+            gtk_widget_set_hexpand(btn, TRUE);
+            tool_button_set_mode(GTK_BUTTON(btn), p->modes[pr]);
+            if (p->name != NULL)
+                g_object_set_data_full(G_OBJECT(btn), "tool-name",
+                                       g_strdup(p->name), g_free);
+            g_object_set_data(G_OBJECT(btn), "tool-profile",
+                              GINT_TO_POINTER((int)pr));
+            g_signal_connect(btn, "clicked",
+                             G_CALLBACK(on_tool_mode_clicked), NULL);
+            gtk_grid_attach(GTK_GRID(grid), btn, (int)pr + 1,
+                            (int)i + 1, 1, 1);
+        }
     }
 
     llm_tools_prefs_free(prefs);
     return grid;
-}
-
-static void
-on_tool_switch_changed(GtkSwitch *sw, GParamSpec G_GNUC_UNUSED *pspec,
-                       gpointer G_GNUC_UNUSED data)
-{
-    const char *name =
-        (const char *)g_object_get_data(G_OBJECT(sw), "tool-name");
-
-    if (name == NULL)
-        return;
-    llm_config_save_tool_pref(name,
-                              gtk_switch_get_active(sw));
 }
 
 static GtkWidget *

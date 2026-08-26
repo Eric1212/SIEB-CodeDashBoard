@@ -237,6 +237,9 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
 ;
 
 void llm_tile_decision_render(LlmTile *t);
+
+/* Étiquette/infobulle du bouton profil (refresh après changement). */
+void llm_tile_profile_refresh(LlmTile *t);
 void llm_tile_decision_lock(LlmTile *t);
 void llm_cdb_say_display(LlmTile *t, const char *text);
 

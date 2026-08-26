@@ -114,10 +114,31 @@ char *llm_persona_raw(void);
 void  llm_persona_save(const char *text);
 
 /* Charge la config de retry ; applique les défauts si absente/invalide. */
-/* Préférence d'exposition d'un outil natif au modèle. */
+/* Modes d'exposition d'un outil natif. OFF signifie tout simplement que
+ * l'outil n'est PAS dans le tableau « tools » envoyé au modèle : de son
+ * point de vue, l'outil n'existe pas. Aucun message d'erreur à renvoyer. */
+typedef enum {
+    LLM_TOOL_OFF = 0,
+    LLM_TOOL_ASK,       /* annoncé ; approbation d'Éric avant exécution */
+    LLM_TOOL_ALLOW,     /* annoncé ; exécution directe */
+    LLM_TOOL_ALLOWPLUS  /* ALLOW + effet propre à l'outil (bash : reset) */
+} LlmToolMode;
+
+/* Les trois profils, jamais plus. Colonnes de la grille Settings. */
+typedef enum {
+    LLM_PROFILE_MINIMAL = 0,
+    LLM_PROFILE_DEFAULT,
+    LLM_PROFILE_YOLO,
+    LLM_PROFILE_COUNT
+} LlmToolProfile;
+
+extern const char *const LLM_PROFILE_NAMES[LLM_PROFILE_COUNT];
+extern const char *const LLM_TOOL_MODE_NAMES[4];
+
+/* Préférence d'un outil natif : un mode PAR profil. */
 typedef struct {
-    char    *name;      /* ex. "cdb_bash" */
-    gboolean enabled;   /* annoncé dans les requêtes ? */
+    char        *name;
+    LlmToolMode  modes[LLM_PROFILE_COUNT];
 } LlmToolPref;
 
 void llm_retry429_load(LlmRetry429 *out);
@@ -129,11 +150,6 @@ void llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms);
 void llm_retry5xx_load(LlmRetry5xx *out);
 void llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms);
 
-/* Préfs des outils natifs : liste chargée de llm.json "tools"
- * (cdb_bash activé par défaut si la clé est absente). */
-GPtrArray *llm_tools_prefs_load(void);
-void       llm_tools_prefs_free(GPtrArray *prefs);
-void       llm_config_save_tool_pref(const char *name, gboolean enabled);
 
 /* Crée la VUE de la tuile « llm » (historique + saisie).
  * roots/multi_paths : résolution du projet courant pour les
@@ -312,6 +328,8 @@ typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     GPtrArray   *pending_images; /* images collées, envoyées au prochain tour */
     GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
     GtkWidget   *slots_btn; /* bouton menu persistance (slots JSON) */
+    GtkWidget   *profile_btn;   /* bouton menu profil actif (global session) */
+    GtkWidget   *profile_title; /* titre du popover : profil courant */
     int         *modal_count; /* compteur de modales d'App (emprunté) */
     GtkWidget   *model_pop; /* popover : recherche + sections provider */
     GtkWidget   *model_search; /* filtre live des rangées */
@@ -352,9 +370,10 @@ typedef struct {
 
 /* Spécification d'une commande /CDB:: parsée. */
 typedef struct {
-    char *tool_call_id;
-    int   tab;
-    char *cmd;
+    char        *tool_call_id;
+    int          tab;
+    char        *cmd;
+    LlmToolMode  mode;  /* ASK / ALLOW / ALLOWPLUS au moment du dispatch */
 } CdbCmdSpec;
 
 #define CDB_RETRY_MAX 3
@@ -433,6 +452,8 @@ typedef struct {
     int      rounds;     /* rounds consécutifs finissant par un prompt */
     char    *pending_cmd; /* commande en attente du spawn du shell */
     gboolean cancelled;   /* réponse tool déjà envoyée par l'annulation */
+    gboolean allowplus;   /* effet spécial « plus » après capture (bash :
+                           * reset = fermer l'onglet et le rouvrir frais) */
 } CdbPoll;
 
 #define CDB_POLL_MS   250    /* cadence de surveillance (décision Éric) */
@@ -482,5 +503,6 @@ typedef struct {
 /* ===== Globales partagées ===== */
 #include "llmcore.h"
 #include "llmtile.h"
+#include "llmtoolpref.h"
 
 #endif /* CDB_LLM_H */

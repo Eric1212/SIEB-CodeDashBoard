@@ -1470,6 +1470,7 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
     long        terminal = -1;
     const char *command = NULL;
     char       *error = NULL;
+    LlmToolMode mode = LLM_TOOL_ASK;
 
     if (tc->id == NULL || tc->id[0] == '\0') {
         core_cdb_announce(c,
@@ -1486,6 +1487,17 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
         error = g_strdup_printf(
             "outil inconnu \"%s\" : seul cdb_bash est disponible.",
             tc->name != NULL ? tc->name : "(sans nom)");
+        goto done;
+    }
+
+    /* Mode effectif (profil actif). OFF = l'outil n'est pas annoncé au
+     * modèle ; un appel ici est une hallucination : on répond quand même
+     * (tout tool_call_id doit recevoir une réponse) sans exécuter. */
+    mode = llm_tools_effective_mode(CDB_TOOL_NAME);
+    if (mode == LLM_TOOL_OFF) {
+        error = g_strdup_printf(
+            "outil \"%s\" désactivé dans le profil courant.",
+            CDB_TOOL_NAME);
         goto done;
     }
 
@@ -1522,6 +1534,7 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
         spec->tool_call_id = g_strdup(tc->id);
         spec->tab = (int)terminal;
         spec->cmd = g_strdup(command);
+        spec->mode = mode;
         if (c->cmd_queue == NULL)
             c->cmd_queue = g_queue_new();
         g_queue_push_tail(c->cmd_queue, spec);
@@ -1881,6 +1894,12 @@ cdb_poll_finish(CdbPoll *pl, const char *text, gboolean is_output)
     if (pl->core->cdb_results == NULL)
         pl->core->cdb_results = g_queue_new();
     g_queue_push_tail(pl->core->cdb_results, r);
+
+    /* AllowPlus (bash) : la capture est faite, on remplace l'onglet par
+     * un shell FRAIS — la prochaine commande repart d'un environnement
+     * propre, comme si Éric avait cliqué « x » puis r ouvert. */
+    if (pl->allowplus)
+        bash_panel_reset_tab((guint)pl->tab);
 
     llm_cdb_next(pl->core);
 
@@ -2370,27 +2389,25 @@ on_cdb_refuse_clicked(GtkButton *btn, gpointer data)
     llm_cdb_next(c);
 }
 
-void
-on_cdb_approve_clicked(GtkButton *btn, gpointer data)
+/* Lance l'exécution d'une commande déjà validée. Chemin unique pour
+ * ASK (après clic « Exécuter ») et ALLOW/ALLOWPLUS (auto, sans UI).
+ * Ne touche pas à la décision : l'appelant s'en charge. En cas d'échec
+ * synchrone (terminal absent), répond au tool_call_id et rappelle
+ * llm_cdb_next ; sinon le poll actif le fera à la fin. */
+static void
+cdb_execute(LlmCore *c, const char *tool_call_id, int tab,
+            const char *cmd, gboolean allowplus)
 {
-    CdbDecision *d = data;
-    LlmCore     *c = cdb_core_from_button(btn);
-    CdbPoll     *pl;
-    char        *note;
+    CdbPoll *pl = g_new0(CdbPoll, 1);
+    char    *note;
 
-    if (c == NULL || c->decision != d || d->state != CDB_A_PENDING)
-        return;
-    d->state = CDB_A_APPROVED;
-    for (guint vi = 0; vi < c->views->len; vi++)
-        llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
-
-    pl = g_new0(CdbPoll, 1);
     pl->core = c;
-    pl->tool_call_id = g_strdup(d->tool_call_id);
-    pl->tab = d->tab;
-    pl->tab_label = g_strdup_printf("bash-%d", d->tab);
+    pl->tool_call_id = g_strdup(tool_call_id);
+    pl->tab = tab;
+    pl->allowplus = allowplus;
+    pl->tab_label = g_strdup_printf("bash-%d", tab);
 
-    bash_panel_ensure_tabs((guint)(d->tab + 1));
+    bash_panel_ensure_tabs((guint)(tab + 1));
 
     if (!bash_panel_exec_tab_possible()) {
         note = g_strdup_printf(
@@ -2401,20 +2418,16 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data)
         g_free(pl->tool_call_id);
         g_free(pl->tab_label);
         g_free(pl);
-        g_free(d->tool_call_id);
-        g_free(d->cmd);
-        g_free(d);
-        c->decision = NULL;
         llm_cdb_next(c);
         return;
     }
 
-    if (!bash_panel_term_ready((guint)d->tab)) {
-        pl->pending_cmd = g_strdup(d->cmd);
+    if (!bash_panel_term_ready((guint)tab)) {
+        pl->pending_cmd = g_strdup(cmd);
         cdb_poll_register(pl);
         g_timeout_add(CDB_POLL_MS, cdb_spawn_wait_tick, pl);
-    } else if (bash_panel_exec_tab((guint)d->tab, d->cmd)) {
-        bash_panel_set_busy((guint)d->tab, TRUE);
+    } else if (bash_panel_exec_tab((guint)tab, cmd)) {
+        bash_panel_set_busy((guint)tab, TRUE);
         cdb_poll_register(pl);
         g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
     } else {
@@ -2426,13 +2439,31 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data)
         g_free(pl->tool_call_id);
         g_free(pl->tab_label);
         g_free(pl);
+        llm_cdb_next(c);
     }
+}
+
+void
+on_cdb_approve_clicked(GtkButton *btn, gpointer data)
+{
+    CdbDecision *d = data;
+    LlmCore     *c = cdb_core_from_button(btn);
+
+    if (c == NULL || c->decision != d || d->state != CDB_A_PENDING)
+        return;
+    d->state = CDB_A_APPROVED;
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
+
+    /* ASK approuvé = exécution sans effet « plus » (le reset n'a de sens
+     * qu'en mode AllowPlus, décidé au dispatch, pas ici). */
+    cdb_execute(c, d->tool_call_id, d->tab, d->cmd, FALSE);
 
     g_free(d->tool_call_id);
     g_free(d->cmd);
     g_free(d);
     c->decision = NULL;
-    /* Pas de llm_cdb_next ici : le poll actif appellera la suite. */
+    /* Pas de llm_cdb_next ici : cdb_execute (ou son poll) avancera. */
 }
 
 void
@@ -2446,6 +2477,20 @@ llm_cdb_next(LlmCore *c)
     }
     s = g_queue_pop_head(c->cmd_queue);
 
+    /* ALLOW / ALLOWPLUS : exécution directe, sans passer par Éric.
+     * cdb_execute (ou le poll qu'il amorce) rappellera llm_cdb_next ;
+     * on rend la main ici pour ne pas empiler les appels. */
+    if (s->mode != LLM_TOOL_ASK) {
+        gboolean allowplus = (s->mode == LLM_TOOL_ALLOWPLUS);
+
+        cdb_execute(c, s->tool_call_id, s->tab, s->cmd, allowplus);
+        g_free(s->tool_call_id);
+        g_free(s->cmd);
+        g_free(s);
+        return;
+    }
+
+    /* ASK : décision rendue aux vues ; la file attend le clic. */
     c->decision = g_new0(CdbDecision, 1);
     c->decision->tool_call_id = g_strdup(s->tool_call_id);
     c->decision->tab = s->tab;
@@ -2453,6 +2498,7 @@ llm_cdb_next(LlmCore *c)
     c->decision->state = CDB_A_PENDING;
     for (guint vi = 0; vi < c->views->len; vi++)
         llm_tile_decision_render(g_ptr_array_index(c->views, vi));
+    g_free(s->tool_call_id);
     g_free(s->cmd);
     g_free(s);
 }
@@ -2575,136 +2621,6 @@ llm_persona_drop_legacy_shell_protocol(char *persona)
     return g_string_free(out, FALSE);
 }
 
-/* Préfs des outils natifs : lecture llm.json "tools". Défaut :
- * cdb_bash activé si la clé est absente (canal natif par défaut). */
-GPtrArray *
-llm_tools_prefs_load(void)
-{
-    GPtrArray  *out = g_ptr_array_new();
-    char       *path = llm_config_path();
-    JsonParser *parser = json_parser_new();
-    gboolean    found = FALSE;
-
-    if (json_parser_load_from_file(parser, path, NULL) &&
-        json_parser_get_root(parser) != NULL &&
-        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        JsonObject *root =
-            json_node_get_object(json_parser_get_root(parser));
-
-        if (root != NULL && json_object_has_member(root, "tools")) {
-            JsonArray *arr =
-                json_object_get_array_member(root, "tools");
-
-            for (guint i = 0; i < json_array_get_length(arr); i++) {
-                JsonObject *o = json_array_get_object_element(arr, i);
-                LlmToolPref *p;
-
-                if (o == NULL || !json_object_has_member(o, "name"))
-                    continue;
-                p = g_new0(LlmToolPref, 1);
-                p->name = g_strdup(
-                    json_object_get_string_member(o, "name"));
-                p->enabled = json_object_has_member(o, "enabled") &&
-                    json_object_get_boolean_member(o, "enabled");
-                g_ptr_array_add(out, p);
-                found = TRUE;
-            }
-        }
-    }
-    g_object_unref(parser);
-    g_free(path);
-
-    if (!found) {
-        LlmToolPref *p = g_new0(LlmToolPref, 1);
-
-        p->name = g_strdup("cdb_bash");
-        p->enabled = TRUE;
-        g_ptr_array_add(out, p);
-    }
-    return out;
-}
-
-void
-llm_tools_prefs_free(GPtrArray *prefs)
-{
-    if (prefs == NULL)
-        return;
-    for (guint i = 0; i < prefs->len; i++) {
-        LlmToolPref *p = g_ptr_array_index(prefs, i);
-
-        g_free(p->name);
-        g_free(p);
-    }
-    g_ptr_array_unref(prefs);
-}
-
-/* Upsert {name,enabled} dans llm.json "tools" (préservation des
- * autres entrées). Même mécanique que la config retry. */
-void
-llm_config_save_tool_pref(const char *name, gboolean enabled)
-{
-    char       *path = llm_config_path();
-    JsonParser *parser = json_parser_new();
-    JsonObject *root;
-    JsonNode   *work = NULL;
-    JsonArray  *arr;
-    gboolean    replaced = FALSE;
-
-    if (json_parser_load_from_file(parser, path, NULL) &&
-        json_parser_get_root(parser) != NULL &&
-        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        work = json_node_copy(json_parser_get_root(parser));
-        root = json_node_get_object(work);
-    } else {
-        root = json_object_new();
-        work = json_node_new(JSON_NODE_OBJECT);
-        json_node_set_object(work, root);
-    }
-
-    if (!json_object_has_member(root, "tools") ||
-        json_object_get_array_member(root, "tools") == NULL)
-        json_object_set_array_member(root, "tools",
-                                     json_array_new());
-    arr = json_object_get_array_member(root, "tools");
-
-    for (guint i = 0; i < json_array_get_length(arr); i++) {
-        JsonObject *o = json_array_get_object_element(arr, i);
-
-        if (o != NULL && json_object_has_member(o, "name") &&
-            g_strcmp0(json_object_get_string_member(o, "name"),
-                      name) == 0) {
-            json_object_set_boolean_member(o, "enabled", enabled);
-            replaced = TRUE;
-        }
-    }
-    if (!replaced) {
-        JsonObject *o = json_object_new();
-
-        json_object_set_string_member(o, "name", name);
-        json_object_set_boolean_member(o, "enabled", enabled);
-        json_array_add_object_element(arr, o);
-    }
-
-    {
-        JsonGenerator *gen = json_generator_new();
-        gchar         *text;
-        GError        *error = NULL;
-
-        json_generator_set_root(gen, work);
-        text = json_to_string(work, TRUE);
-        if (!g_file_set_contents(path, text, -1, &error)) {
-            g_printerr("CDB: écriture tool pref : %s\n",
-                       error->message);
-            g_error_free(error);
-        }
-        g_free(text);
-        g_object_unref(gen);
-    }
-    json_node_unref(work);
-    g_object_unref(parser);
-    g_free(path);
-}
-
 /* Schéma de l'outil cdb_bash (canal natif). */
 static void
 tools_schema_cdb_bash(JsonBuilder *builder)
@@ -2791,30 +2707,25 @@ llm_body_build(LlmTile *t)
     json_builder_add_boolean_value(builder, TRUE);
     json_builder_end_object(builder);
 
-    /* Canal tools natif : piloté par les préfs persistées. Zéro outil
-     * activé -> aucun membre tools/tool_choice ni policy persona,
+    /* Canal tools natif : piloté par les préfs du PROFIL ACTIF. Un outil
+     * en OFF n'est pas annoncé (inexistant pour le modèle). Si aucun
+     * outil n'est annoncé, on omet tools/tool_choice ET la policy persona,
      * pour rester compatible avec les providers qui refusent tools. */
     {
-        GPtrArray *prefs = llm_tools_prefs_load();
-        guint      n_enabled = 0;
-
-        for (guint i = 0; i < prefs->len; i++)
-            if (g_ptr_array_index(prefs, i) != NULL &&
-                ((LlmToolPref *)g_ptr_array_index(prefs, i))->enabled)
-                n_enabled++;
+        LlmToolProfile     prof = llm_config_active_profile();
+        GPtrArray         *prefs = llm_tools_prefs_load();
+        const LlmToolPref *bash_pref = llm_tools_pref_find(prefs,
+                                                           "cdb_bash");
+        LlmToolMode        bash_mode = llm_tool_pref_mode(bash_pref, prof);
+        gboolean           announce_bash = (bash_mode != LLM_TOOL_OFF);
+        guint              n_enabled = announce_bash ? 1 : 0;
 
         if (n_enabled > 0) {
             json_builder_set_member_name(builder, "tools");
             json_builder_begin_array(builder);
-            for (guint i = 0; i < prefs->len; i++) {
-                LlmToolPref *p =
-                    g_ptr_array_index(prefs, i);
-
-                if (p != NULL && p->enabled &&
-                    g_strcmp0(p->name, "cdb_bash") == 0)
-                    tools_schema_cdb_bash(builder);
-                /* futurs outils : autres schémas ici */
-            }
+            if (announce_bash)
+                tools_schema_cdb_bash(builder);
+            /* futurs outils : autres schémas + tests de mode ici */
             json_builder_end_array(builder);
 
             json_builder_set_member_name(builder, "tool_choice");

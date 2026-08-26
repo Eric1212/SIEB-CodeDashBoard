@@ -49,4 +49,8 @@ gboolean bash_panel_term_ready(guint index);
  * (TUI bloquante, prompt sale…) et va donner la touche attendue. */
 void bash_panel_set_busy(guint index, gboolean busy);
 
+/* Remplace l'onglet N par un terminal FRAIS (même index, même projet) :
+ * équivalent du clic « x » + nouvel onglet. No-op si absent. */
+void bash_panel_reset_tab(guint index);
+
 #endif /* CDB_BASHPANEL_H */

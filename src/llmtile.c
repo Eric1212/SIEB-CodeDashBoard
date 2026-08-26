@@ -1636,6 +1636,61 @@ on_slots_pop_mapped(GtkWidget G_GNUC_UNUSED *w, gpointer data)
     llm_slots_title_update(data);
 }
 
+/* ----- Profil actif (global à la session) ----- */
+
+/* Rafraîchit l'étiquette et l'infobulle du bouton profil d'une vue.
+ * Exportée : le core la diffuse sur toutes les vues quand le profil
+ * change (le choix est partagé, comme le modèle). */
+void
+llm_tile_profile_refresh(LlmTile *t)
+{
+    LlmToolProfile prof;
+    char          *tip;
+
+    if (t == NULL || t->profile_btn == NULL)
+        return;
+    prof = llm_config_active_profile();
+    gtk_menu_button_set_label(GTK_MENU_BUTTON(t->profile_btn),
+                              llm_profile_name(prof));
+    tip = g_strdup_printf("Profil des outils : %s "
+                          "(Settings -> LLM -> Tools)",
+                          llm_profile_name(prof));
+    gtk_widget_set_tooltip_text(t->profile_btn, tip);
+    g_free(tip);
+
+    if (t->profile_title != NULL) {
+        char *head = g_strdup_printf("Profil actif — %s",
+                                     llm_profile_name(prof));
+
+        gtk_label_set_text(GTK_LABEL(t->profile_title), head);
+        g_free(head);
+    }
+}
+
+static void
+on_profile_item_clicked(GtkButton *btn, gpointer data)
+{
+    LlmTile    *t = data;
+    const char *name = g_object_get_data(G_OBJECT(btn), "profile-name");
+    GtkWidget  *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn),
+                                              GTK_TYPE_POPOVER);
+
+    if (name != NULL) {
+        for (guint i = 0; i < LLM_PROFILE_COUNT; i++) {
+            if (g_strcmp0(name, LLM_PROFILE_NAMES[i]) == 0) {
+                llm_config_set_active_profile((LlmToolProfile)i);
+                break;
+            }
+        }
+    }
+    if (pop != NULL)
+        gtk_popover_popdown(GTK_POPOVER(pop));
+
+    /* Choix GLOBAL : toutes les vues miroitent le nouveau profil. */
+    for (guint vi = 0; vi < t->core->views->len; vi++)
+        llm_tile_profile_refresh(g_ptr_array_index(t->core->views, vi));
+}
+
 void
 llm_slots_action_run(LlmTile *t, const char *name)
 {
@@ -2040,6 +2095,51 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
         gtk_widget_set_valign(t->slots_btn, GTK_ALIGN_CENTER);
     }
 
+    /* Bouton profil (à gauche des slots) : les trois profils globaux de
+     * la session. Le profil actif décide des modes par outil, donc de
+     * quels tools sont annoncés et de leur mode d'exécution. */
+    {
+        GtkWidget *prof_pop  = gtk_popover_new();
+        GtkWidget *prof_box  = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+
+        gtk_popover_set_has_arrow(GTK_POPOVER(prof_pop), FALSE);
+        gtk_widget_add_css_class(prof_pop, "cdb-pop");
+
+        t->profile_title = gtk_label_new("Profil actif");
+        gtk_label_set_xalign(GTK_LABEL(t->profile_title), 0.0);
+        gtk_widget_add_css_class(t->profile_title, "cdb-pop-title");
+        gtk_box_append(GTK_BOX(prof_box), t->profile_title);
+
+        for (guint i = 0; i < LLM_PROFILE_COUNT; i++) {
+            GtkWidget *lbl = gtk_label_new(LLM_PROFILE_NAMES[i]);
+            GtkWidget *b   = gtk_button_new();
+
+            gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+            gtk_button_set_child(GTK_BUTTON(b), lbl);
+            gtk_widget_add_css_class(b, "flat");
+            gtk_widget_add_css_class(b, "cdb-pop-item");
+            gtk_widget_set_hexpand(b, TRUE);
+            gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+            g_object_set_data_full(G_OBJECT(b), "profile-name",
+                                   g_strdup(LLM_PROFILE_NAMES[i]),
+                                   g_free);
+            g_signal_connect(b, "clicked",
+                             G_CALLBACK(on_profile_item_clicked), t);
+            gtk_box_append(GTK_BOX(prof_box), b);
+        }
+
+        gtk_popover_set_child(GTK_POPOVER(prof_pop), prof_box);
+        gtk_widget_set_size_request(prof_pop, 240, -1);
+
+        t->profile_btn = gtk_menu_button_new();
+        gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->profile_btn),
+                                    prof_pop);
+        gtk_widget_add_css_class(t->profile_btn, "flat");
+        gtk_widget_add_css_class(t->profile_btn, "cdb-flat");
+        gtk_widget_set_valign(t->profile_btn, GTK_ALIGN_CENTER);
+        llm_tile_profile_refresh(t);
+    }
+
     {
         GtkWidget *model_pop;
         GtkWidget *model_scroll;
@@ -2197,7 +2297,9 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
                 gtk_widget_set_hexpand(spring, TRUE);
                 gtk_box_append(GTK_BOX(tools), spring);
             }
-            /* Persistance juste à gauche du play/pause. */
+            /* Profil à gauche de la persistance, lui-même à gauche
+             * du play/pause. */
+            gtk_box_append(GTK_BOX(tools), t->profile_btn);
             gtk_box_append(GTK_BOX(tools), t->slots_btn);
             gtk_box_append(GTK_BOX(tools), t->send_btn);
             gtk_widget_set_margin_start(tools, 6);

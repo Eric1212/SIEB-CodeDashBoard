@@ -35,6 +35,7 @@ bash_panel_update(BashPanel *p)
     gtk_widget_set_sensitive(p->add_btn, p->count < BASH_TAB_MAX);
 }
 
+
 /* Renumérote les titres « bash N » après fermeture. */
 static void
 bash_panel_renumber(BashPanel *p)
@@ -114,6 +115,7 @@ bash_tab_label(GtkWidget *term, int index)
     return box;
 }
 
+
 /* ------------------------------------------------ */
 /* Terminal                                          */
 /* ------------------------------------------------ */
@@ -186,6 +188,46 @@ bash_panel_exec_tab_possible(void)
 {
     return cdb_first_panel != NULL &&
         g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel") != NULL;
+}
+
+/* Reset d'un onglet : remplace le terminal par un FRAIS au même index —
+ * l'équivalent programmatique du clic « x » suivi d'un nouvel onglet,
+ * résolu dans le projet courant au spawn. Usager : mode AllowPlus, où
+ * chaque commande doit repartir d'un shell propre. */
+void
+bash_panel_reset_tab(guint index)
+{
+    BashPanel   *p;
+    GtkNotebook *nb;
+    GtkWidget   *old_term;
+    GtkWidget   *new_term;
+    int          pos;
+
+    if (cdb_first_panel == NULL)
+        return;
+    p = g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel");
+    if (p == NULL || index >= (guint)p->count)
+        return;
+
+    nb = GTK_NOTEBOOK(p->notebook);
+    pos = (int)index;
+    old_term = gtk_notebook_get_nth_page(nb, pos);
+    if (old_term == NULL)
+        return;
+
+    /* Onglet neuf inséré À LA MÊME PLACE, puis l'ancien retiré : le
+     * PTY de l'ancien meurt avec sa page (SIGHUP), comme sous « x ». */
+    new_term = vte_terminal_new();
+    vte_terminal_set_scrollback_lines(VTE_TERMINAL(new_term), 100000);
+    bash_tab_spawn(p, VTE_TERMINAL(new_term));
+    gtk_notebook_insert_page(nb, new_term,
+                             bash_tab_label(new_term, pos + 1), pos);
+    p->count++;
+    gtk_notebook_remove_page(nb, pos + 1);
+    p->count--;
+
+    bash_panel_renumber(p);
+    bash_panel_update(p);
 }
 
 gboolean
