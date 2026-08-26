@@ -32,6 +32,11 @@
 /* Balises posees par sed depuis llm.c (voir mdview.h). */
 #define THINK_OPEN     "〔thinking〕"
 #define THINK_CLOSE    "〔/thinking〕"
+/* Meme chose, autre vocabulaire : certains modeles mettent leur
+ * raisonnement dans le contenu courant, encadre de marques ASCII.
+ * Elles designent les memes blocs et sont reconnues a la lecture. */
+#define RAW_THINK_OPEN   "<think>"
+#define RAW_THINK_CLOSE  "</think>"
 
 /* ------------------------------------------------------------------ */
 /* Tags                                                                */
@@ -465,6 +470,26 @@ think_close(ThinkCtx *ctx)
 /* Rendu                                                               */
 /* ------------------------------------------------------------------ */
 
+/* Premiere occurrence, a partir de p, de l'une des deux formes d'une
+ * meme balise. Rend aussi la longueur de la forme trouvee : les deux
+ * n'ont pas la meme taille et l'appelant doit avaler exactement la
+ * marque rencontree, pas une longueur supposee. */
+static char *
+find_mark(const char *p, const char *m1, const char *m2, gsize *len)
+{
+    char *a = strstr(p, m1);
+    char *b = strstr(p, m2);
+
+    if (a == NULL && b == NULL)
+        return NULL;
+    if (b == NULL || (a != NULL && a <= b)) {
+        *len = strlen(m1);
+        return a;
+    }
+    *len = strlen(m2);
+    return b;
+}
+
 /* Rendu d'une ligne (hors fence) avec detection des balises thinking.
  * L'etat in_think vit dans ctx (survit d'un appel a l'autre : rendu
  * incrementel). Astuce zero-copy : terminaison temporaire des segments
@@ -476,8 +501,11 @@ md_line(GtkTextBuffer *buf, GtkTextIter *it, ThinkCtx *ctx, char *line)
     char *p = line;
 
     while (*p != '\0') {
-        char *open = strstr(p, THINK_OPEN);
-        char *close = strstr(p, THINK_CLOSE);
+        char  *open, *close;
+        gsize  olen = 0, clen = 0;
+
+        open  = find_mark(p, THINK_OPEN, RAW_THINK_OPEN, &olen);
+        close = find_mark(p, THINK_CLOSE, RAW_THINK_CLOSE, &clen);
 
         /* Pas de vue attachee ou pas de balise : inline ordinaire. */
         if (ctx->view == NULL || (open == NULL && close == NULL)) {
@@ -496,7 +524,7 @@ md_line(GtkTextBuffer *buf, GtkTextIter *it, ThinkCtx *ctx, char *line)
                           ctx->in_think ? THINK_TAG_BODY : NULL);
                 *open = saved;
             }
-            p = open + strlen(THINK_OPEN);
+            p = open + olen;
             if (*p == ' ')
                 p++;
             think_open(buf, it, ctx);
@@ -518,7 +546,7 @@ md_line(GtkTextBuffer *buf, GtkTextIter *it, ThinkCtx *ctx, char *line)
                           ctx->in_think ? THINK_TAG_BODY : NULL);
                 *seg_end = saved;
             }
-            p = close + strlen(THINK_CLOSE);
+            p = close + clen;
             think_close(ctx);
             ctx->in_think = FALSE;
             continue;
