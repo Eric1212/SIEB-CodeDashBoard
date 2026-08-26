@@ -6,6 +6,7 @@
 #include "modal.h"
 #include "llmslots.h"
 #include "roots.h"
+#include "llmlive.h"
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 #include <glib/gstdio.h>
@@ -1247,6 +1248,7 @@ llm_slots_load_dialog(LlmTile *t)
     }
     g_object_unref(parser);
     llm_scroll_to_end(t);
+    llm_live_save(t->core);
 
     t->slot_origin = slot;
     t->turns_since_ref = 0;
@@ -1631,6 +1633,7 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 
         t->pending_images = g_ptr_array_new_with_free_func(g_free);
         history_push_images(t, LLMACTOR_USER, FALSE, prompt, images);
+        llm_live_save(t->core);
     }
     llm_send(t, prompt);
     llm_scroll_to_end(t);

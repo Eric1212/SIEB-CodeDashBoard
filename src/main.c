@@ -29,6 +29,7 @@ extern char **environ;
 #include "bashpanel.h"
 #include "modal.h"
 #include "session.h"
+#include "llmlive.h"
 #include "llm.h"
 #include "layout.h"
 
@@ -4349,6 +4350,10 @@ on_activate(GtkApplication *gtk_app, gpointer data)
      * disponible pour le dialogue). Annulé = quitter sans fenêtre. */
     if (!session_init())
         return;
+
+    /* Live (C5) : APRES session_init — le numéro de session
+     * fixe le dossier de llm_live.json. */
+    llm_live_load(app->llm_core);
 
     app->win = GTK_WINDOW(gtk_application_window_new(gtk_app));
     gtk_window_set_title(app->win, "CodeDashBoard");

@@ -15,6 +15,7 @@
 #include "modal.h"
 #include "llmslots.h"
 #include "roots.h"
+#include "llmlive.h"
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
@@ -1329,6 +1330,7 @@ core_history_push(LlmCore *c, LlmActor actor, gboolean local,
     m.content = g_strdup(content);
     m.images = NULL;
     g_array_append_vals(c->history, &m, 1);
+    llm_live_save(c);
 }
 
 
@@ -2327,6 +2329,7 @@ llm_history_wipe(LlmTile *t)
             g_ptr_array_unref(m->images);
     }
     g_array_set_size(t->core->history, 0);
+    llm_live_wipe();
 }
 
 /* Purge les files /CDB:: (elles référençaient l'ancien fil). */
@@ -2382,6 +2385,7 @@ llm_core_free(LlmCore *c)
 
     if (c == NULL)
         return;
+    llm_live_save(c);
     if (c->cur_req != NULL)
         llm_request_free(c->cur_req);
     if (c->cancel != NULL)
