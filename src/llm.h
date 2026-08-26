@@ -114,6 +114,12 @@ char *llm_persona_raw(void);
 void  llm_persona_save(const char *text);
 
 /* Charge la config de retry ; applique les défauts si absente/invalide. */
+/* Préférence d'exposition d'un outil natif au modèle. */
+typedef struct {
+    char    *name;      /* ex. "cdb_bash" */
+    gboolean enabled;   /* annoncé dans les requêtes ? */
+} LlmToolPref;
+
 void llm_retry429_load(LlmRetry429 *out);
 
 /* Sauvegarde la config de retry (bornes forcées : 0-5000 et 10-100000). */
@@ -122,6 +128,12 @@ void llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms);
 /* Config de retry 5xx : mêmes principes, section harness.retry_5xx. */
 void llm_retry5xx_load(LlmRetry5xx *out);
 void llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms);
+
+/* Préfs des outils natifs : liste chargée de llm.json "tools"
+ * (cdb_bash activé par défaut si la clé est absente). */
+GPtrArray *llm_tools_prefs_load(void);
+void       llm_tools_prefs_free(GPtrArray *prefs);
+void       llm_config_save_tool_pref(const char *name, gboolean enabled);
 
 /* Crée la VUE de la tuile « llm » (historique + saisie).
  * roots/multi_paths : résolution du projet courant pour les
@@ -183,12 +195,44 @@ typedef enum {
 /* Un échange de l'historique de conversation.
  * local = TRUE : affiché dans le fil mais JAMAIS envoyé au modèle
  * (annonces CDB : erreurs HTTP, changements d'état…). */
+typedef enum {
+    LLM_MSG_TEXT,
+    LLM_MSG_ASSISTANT_TOOL_CALLS,
+    LLM_MSG_TOOL_RESULT
+} LlmMsgKind;
+
 typedef struct {
-    LlmActor  actor;
-    gboolean  local;
-    char     *content;
-    GPtrArray *images; /* Data URLs ; éléments gchar* possédés. */
+    char *id;
+    char *name;
+    char *arguments_json;
+} LlmToolCall;
+
+typedef struct {
+    long     index;
+    char    *id;
+    char    *name;
+    GString *arguments;
+} LlmPendingToolCall;
+
+/* Un échange de l'historique de conversation.
+ * local = TRUE : affiché dans le fil mais JAMAIS envoyé au modèle
+ * (annonces CDB : erreurs HTTP, changements d'état…). */
+typedef struct {
+    LlmActor actor;
+    gboolean local;
+    LlmMsgKind kind;
+    char *content;
+    GPtrArray *images;
+
+    /* LLM_MSG_ASSISTANT_TOOL_CALLS */
+    GPtrArray *tool_calls;
+
+    /* LLM_MSG_TOOL_RESULT */
+    char *tool_call_id;
 } LlmMsg;
+
+void llm_msg_clear(LlmMsg *m);
+GPtrArray *llm_tool_calls_new(void);
 
 /* Requête en cours : définie plus bas, référencée par LlmTile. */
 typedef struct LlmRequest LlmRequest;
@@ -204,6 +248,7 @@ typedef enum {
 } CdbApprovalState;
 
 typedef struct {
+    char            *tool_call_id;
     int              tab;
     char            *cmd;
     CdbApprovalState state;
@@ -228,8 +273,13 @@ typedef struct {
     CdbDecision  *decision;
 
     GQueue      *cmd_queue;   /* commandes /CDB:: valides en attente */
-    GQueue      *cdb_results; /* résultats pendants {label,text} */
-    int          cdb_retries; /* malformations consécutives (max 3) */
+    GQueue      *cdb_results; /* résultats pendants */
+    int          cdb_retries; /* conservé pour compatibilité UI/state */
+
+    /* Boucle tools native : fragments SSE en cours et réponses déjà
+     * livrées pour un tool_call_id donné. */
+    GPtrArray  *pending_tool_calls;
+    GHashTable *answered_tools;
 } LlmCore;
 
 typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
@@ -293,12 +343,16 @@ typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
 
 /* Résultat d'exécution en attente de livraison. */
 typedef struct {
-    char *label; /* « bash-N » */
-    char *text;
+    char    *tool_call_id;
+    char    *label;      /* « bash-N » */
+    char    *raw_text;   /* capture originale du terminal, ou NULL */
+    char    *text;       /* contenu réellement envoyé au modèle */
+    gboolean shown;      /* déjà affiché localement (refus/erreur immédiat) */
 } CdbResult;
 
 /* Spécification d'une commande /CDB:: parsée. */
 typedef struct {
+    char *tool_call_id;
     int   tab;
     char *cmd;
 } CdbCmdSpec;
@@ -372,11 +426,13 @@ typedef struct {
 
 typedef struct {
     LlmCore *core;
+    char    *tool_call_id;
     char    *tab_label;
     int      tab;        /* index d'onglet surveillé */
     gchar   *prev_tail;  /* dernière ligne du round précédent */
     int      rounds;     /* rounds consécutifs finissant par un prompt */
     char    *pending_cmd; /* commande en attente du spawn du shell */
+    gboolean cancelled;   /* réponse tool déjà envoyée par l'annulation */
 } CdbPoll;
 
 #define CDB_POLL_MS   250    /* cadence de surveillance (décision Éric) */

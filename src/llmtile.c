@@ -1211,6 +1211,80 @@ llm_slots_load_dialog(LlmTile *t)
             }
         }
 
+        if (g_strcmp0(role, "assistant") == 0 &&
+            json_object_has_member(m, "tool_calls")) {
+            JsonArray   *ta = json_object_get_array_member(m, "tool_calls");
+            GPtrArray   *calls = llm_tool_calls_new();
+            LlmMsg       tm = { 0 };
+
+            for (guint k = 0; k < json_array_get_length(ta); k++) {
+                JsonObject  *to = json_array_get_object_element(ta, k);
+                LlmToolCall *tc = g_new0(LlmToolCall, 1);
+
+                if (json_object_has_member(to, "id"))
+                    tc->id = g_strdup(
+                        json_object_get_string_member(to, "id"));
+                if (json_object_has_member(to, "name"))
+                    tc->name = g_strdup(
+                        json_object_get_string_member(to, "name"));
+                if (json_object_has_member(to, "arguments"))
+                    tc->arguments_json = g_strdup(
+                        json_object_get_string_member(to, "arguments"));
+                g_ptr_array_add(calls, tc);
+            }
+
+            memset(&tm, 0, sizeof(tm));
+            tm.actor = LLMACTOR_LLM;
+            tm.local = FALSE;
+            tm.kind = LLM_MSG_ASSISTANT_TOOL_CALLS;
+            tm.content = content;
+            tm.tool_calls = calls;
+            g_array_append_vals(t->core->history, &tm, 1);
+
+            hist_render_actor_header(t, LLMACTOR_LLM);
+            gtk_text_buffer_get_end_iter(t->hist, &eit);
+            md_insert(t->hist, &eit, content != NULL ? content : "");
+            for (guint k = 0; k < calls->len; k++) {
+                LlmToolCall *tc = g_ptr_array_index(calls, k);
+                char         *line = g_strdup_printf(
+                    "\n〔tool〕 %s %s",
+                    tc->name != NULL ? tc->name : "?",
+                    tc->arguments_json != NULL
+                        ? tc->arguments_json : "{}");
+
+                hist_append(t, line);
+                g_free(line);
+            }
+            hist_append(t, "\n");
+            continue;
+        }
+
+        if (g_strcmp0(role, "tool") == 0) {
+            const char *tool_call_id =
+                json_object_has_member(m, "tool_call_id")
+                    ? json_object_get_string_member(m, "tool_call_id") : NULL;
+            LlmMsg rm = { 0 };
+            const char *shown = content != NULL
+                                    ? content : "(aucun contenu nouveau)";
+
+            memset(&rm, 0, sizeof(rm));
+            rm.actor = LLMACTOR_CDB;
+            rm.local = FALSE;
+            rm.kind = LLM_MSG_TOOL_RESULT;
+            rm.content = content;
+            rm.tool_call_id = g_strdup(tool_call_id);
+            g_array_append_vals(t->core->history, &rm, 1);
+            content = NULL; /* transféré au message */
+
+            hist_render_actor_header(t, LLMACTOR_CDB);
+            hist_ensure_voice_tags(t);
+            gtk_text_buffer_get_end_iter(t->hist, &eit);
+            gtk_text_buffer_insert_with_tags_by_name(
+                t->hist, &eit, shown, -1, "voice-cdb", NULL);
+            hist_append(t, "\n");
+            continue;
+        }
+
         if (content == NULL && images == NULL)
             continue;
 
@@ -1742,15 +1816,39 @@ llm_tile_replay_history(LlmTile *t)
 
         hist_render_actor_header(t, m->actor);
         gtk_text_buffer_get_end_iter(t->hist, &eit);
-        if (m->actor == LLMACTOR_LLM)
+
+        if (m->kind == LLM_MSG_ASSISTANT_TOOL_CALLS) {
             md_insert(t->hist, &eit, m->content != NULL ? m->content : "");
-        else if (m->actor == LLMACTOR_CDB)
+
+            for (guint k = 0; m->tool_calls != NULL &&
+                 k < m->tool_calls->len; k++) {
+                LlmToolCall *tc = g_ptr_array_index(m->tool_calls, k);
+                char         *line = g_strdup_printf(
+                    "\n〔tool〕 %s %s",
+                    tc->name != NULL ? tc->name : "?",
+                    tc->arguments_json != NULL
+                        ? tc->arguments_json : "{}");
+
+                hist_append(t, line);
+                g_free(line);
+            }
+        } else if (m->kind == LLM_MSG_TOOL_RESULT) {
+            const char *shown = m->content != NULL
+                                    ? m->content
+                                    : "(aucun contenu nouveau)";
+
+            gtk_text_buffer_insert_with_tags_by_name(
+                t->hist, &eit, shown, -1, "voice-cdb", NULL);
+        } else if (m->actor == LLMACTOR_LLM) {
+            md_insert(t->hist, &eit, m->content != NULL ? m->content : "");
+        } else if (m->actor == LLMACTOR_CDB) {
             gtk_text_buffer_insert_with_tags_by_name(
                 t->hist, &eit, m->content != NULL ? m->content : "", -1,
                 "voice-cdb", NULL);
-        else
+        } else {
             gtk_text_buffer_insert(t->hist, &eit,
                                    m->content != NULL ? m->content : "", -1);
+        }
         hist_append(t, "\n");
     }
 
@@ -2145,6 +2243,20 @@ llm_tile_decision_render(LlmTile *t)
         return; /* déjà rendue dans cette vue */
 
     d = c->decision;
+    {
+        gchar *cmd_line = g_strdup_printf("bash-%d $ %s\n",
+                                          d->tab, d->cmd != NULL
+                                              ? d->cmd : "(cmd NULL)");
+
+        hist_render_actor_header(t, LLMACTOR_CDB);
+        hist_ensure_voice_tags(t);
+        gtk_text_buffer_get_end_iter(t->hist, &end);
+        gtk_text_buffer_insert_with_tags_by_name(t->hist, &end,
+                                                 cmd_line, -1,
+                                                 "voice-cdb", NULL);
+        g_free(cmd_line);
+    }
+
     t->shown_decision = d;
 
     gtk_text_buffer_get_end_iter(t->hist, &end);

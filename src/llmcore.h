@@ -134,7 +134,7 @@ void
 cdd_poll_unregister(CdbPoll *pl);
 
 void
-cdb_poll_finish(CdbPoll *pl, const char *text);
+cdb_poll_finish(CdbPoll *pl, const char *text, gboolean is_output);
 
 gboolean
 cdb_spawn_wait_tick(gpointer data);
@@ -162,15 +162,6 @@ llm_cdb_results_flush(LlmCore *c);
 
 void
 llm_cdb_next(LlmCore *c);
-
-char *
-llm_scan_text(const char *reply);
-
-gboolean
-llm_cdb_malformed(const char *reply);
-
-gboolean
-llm_agent_detect(LlmCore *c, const char *reply);
 
 char *
 llm_body_build(LlmTile *t);

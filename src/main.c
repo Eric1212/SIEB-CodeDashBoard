@@ -2721,6 +2721,9 @@ static void on_allowed_models_changed(GtkEditable *editable,
                                       gpointer data);
 static GtkWidget *build_provider_form(const char *provider_name);
 static GtkWidget *build_harness_form(void);
+static GtkWidget *build_tools_form(void);
+static void on_tool_switch_changed(GtkSwitch *sw,
+                GParamSpec *pspec, gpointer data);
 static GtkWidget *build_initprompt_editor(void);
 
 static GtkWidget *
@@ -2767,6 +2770,8 @@ build_settings_section(const SettingsSection *sec)
         body = build_harness_form();
     else if (g_strcmp0(sec->title, "Init-Prompt") == 0)
         body = build_initprompt_editor();
+    else if (g_strcmp0(sec->title, "Tools") == 0)
+        body = build_tools_form();
     else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_widget_set_margin_start(body, 16);
@@ -3172,6 +3177,73 @@ on_harness_spin_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
 
 /* Formulaire Harness : politiques de retry sur HTTP 429 (rapide) et
  * 5xx (lent). Défauts : 429 = oui / 200 / 250 ms ; 5xx = oui / 120 / 1 s. */
+/* Formulaire Tools : un outil natif par ligne, switch persisté dans
+ * llm.json "tools". Effectif à la prochaine requête (le schéma est
+ * reconstruit à chaque llm_body_build). */
+static GtkWidget *
+build_tools_form(void)
+{
+    GtkWidget *grid = gtk_grid_new();
+    GPtrArray *prefs = llm_tools_prefs_load();
+
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+    gtk_widget_set_margin_start(grid, 24);
+    gtk_widget_set_margin_top(grid, 6);
+    gtk_widget_set_margin_bottom(grid, 6);
+
+    for (guint i = 0; i < prefs->len; i++) {
+        LlmToolPref *p = g_ptr_array_index(prefs, i);
+        GtkWidget   *name_lbl;
+        GtkWidget   *desc_lbl;
+        GtkWidget   *sw;
+        GtkWidget   *status;
+
+        name_lbl = gtk_label_new(p->name != NULL ? p->name : "?");
+        gtk_widget_set_halign(name_lbl, GTK_ALIGN_START);
+
+        desc_lbl = gtk_label_new(
+            "exécution shell dans un terminal CDB, avec approbation");
+        gtk_label_set_xalign(GTK_LABEL(desc_lbl), 0.0);
+        gtk_widget_add_css_class(desc_lbl, "dim-label");
+
+        sw = gtk_switch_new();
+        gtk_switch_set_active(GTK_SWITCH(sw), p->enabled);
+        gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
+        gtk_widget_set_halign(sw, GTK_ALIGN_START);
+        if (p->name != NULL)
+            g_object_set_data_full(G_OBJECT(sw), "tool-name",
+                                   g_strdup(p->name), g_free);
+        g_signal_connect(sw, "notify::active",
+                         G_CALLBACK(on_tool_switch_changed), NULL);
+
+        status = gtk_label_new("effectif à la prochaine requête");
+        gtk_label_set_xalign(GTK_LABEL(status), 0.0);
+        gtk_widget_add_css_class(status, "dim-label");
+
+        gtk_grid_attach(GTK_GRID(grid), name_lbl, 0, i * 2, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), sw, 1, i * 2, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), desc_lbl, 0, i * 2 + 1, 2, 1);
+        gtk_grid_attach(GTK_GRID(grid), status, 0, i * 2 + 2, 2, 1);
+    }
+
+    llm_tools_prefs_free(prefs);
+    return grid;
+}
+
+static void
+on_tool_switch_changed(GtkSwitch *sw, GParamSpec G_GNUC_UNUSED *pspec,
+                       gpointer G_GNUC_UNUSED data)
+{
+    const char *name =
+        (const char *)g_object_get_data(G_OBJECT(sw), "tool-name");
+
+    if (name == NULL)
+        return;
+    llm_config_save_tool_pref(name,
+                              gtk_switch_get_active(sw));
+}
+
 static GtkWidget *
 build_harness_form(void)
 {
@@ -3327,7 +3399,6 @@ build_initprompt_editor(void)
     static const IpSnippet snippets[] = {
         { "[PROJET]", "[PROJET]" },
         { "[CHEMIN]", "[CHEMIN]" },
-        { "/CDB::",   "/CDB::bash-0::\"//\"CDB-IN\"//COMMANDE//\"CDB-OUT\"//\"" },
     };
     InitPromptCtx *ctx = g_new0(InitPromptCtx, 1);
     GtkWidget     *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
@@ -3538,7 +3609,7 @@ build_settings(App *app G_GNUC_UNUSED)
     };
     static const SettingsSection llm_subs[] = {
         { "Harness",    NULL, harness_subs, G_N_ELEMENTS(harness_subs) },
-        { "Tools",      "(à venir : outils exposés au modèle…)", NULL, 0 },
+        { "Tools",      NULL, NULL, 0 }, /* formulaire outils */
         { "Providers",  NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
     };
     static const SettingsSection sections[] = {

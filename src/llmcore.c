@@ -1014,22 +1014,19 @@ str_replace_all(const char *s, const char *old_s, const char *new_s)
     "qui fonctionne sur le poste de travail qui vous est à tous deux "     \
     "assignés.\n\n"                                                       \
     "Projet : [PROJET] ([CHEMIN]).\n\n"                                   \
-    "## Contrôle à distance des terminaux\n"                              \
-    "En tout temps, tu contrôles les terminaux de CDB en écrivant dans "   \
-    "ta réponse une commande au format exact :\n"                          \
-    "/CDB::bash-N::\"//\"CDB-IN\"//COMMANDE-VOULU//\"CDB-OUT\"//\"\n"      \
-    "- N : numéro du terminal (0 à 9 ; il est créé s'il n'existe pas)\n"   \
-    "- COMMANDE-VOULU : la commande shell, écrite telle quelle entre\n"    \
-    "  les marqueurs //\"CDB-IN\"// et //\"CDB-OUT\"// — guillemets\n"     \
-    "  doubles et sauts de ligne y sont autorisés sans échappement.\n"     \
-    "Le résultat est restitué intégralement (fenêtre de "                  \
-    "100000 lignes). Pour paginer, utilise head/tail/sed DANS la "         \
-    "commande.\n\n"                                                        \
-    "Chaque commande est soumise à l'approbation d'Éric avant exécution. " \
-    "Si Éric refuse, CDB te l'indiquera clairement dans le fil : ce n'est " \
-    "pas un bug, c'est une décision — adapte-toi et propose autre chose. " \
-    "Après exécution, CDB répondra dans le fil avec le résultat demandé : " \
-    "continue ton travail à partir de là.\n"
+    "# Contrôle à distance des terminaux\n"                               \
+    "Tu disposes de l'outil natif cdb_bash. Utilise-le chaque fois que "  \
+    "tu dois inspecter, mesurer, compiler ou exécuter une action locale.\n" \
+    "- terminal : numéro d'un terminal CDB (0 à 9 ; il est créé si besoin).\n" \
+    "- command : commande shell complète, écrite telle quelle.\n"          \
+    "- Le résultat est restitué dans une fenêtre de 100000 lignes. Pour "  \
+    "paginer, utilise head/tail/sed DANS la commande.\n"                   \
+    "- Chaque appel est soumis à l'approbation d'Éric avant exécution.\n"  \
+    "- Si un résultat a content:null, cela signifie qu'il n'y a aucun "    \
+    "contenu nouveau par rapport aux résultats précédents du même "        \
+    "terminal : ce n'est pas un échec.\n"                                  \
+    "- N'invente jamais une sortie de commande et n'utilise jamais le "    \
+    "protocole textuel /CDB::, qui n'existe plus.\n"
 
 /* Texte BRUT du prompt (sans substitutions) : fichier s'il existe,
  * sinon le défaut intégré. Pour l'éditeur Settings → Harness.
@@ -1071,8 +1068,10 @@ history_push_images(LlmTile *t, LlmActor actor, gboolean local,
 {
     LlmMsg m;
 
+    memset(&m, 0, sizeof(m));
     m.actor = actor;
     m.local = local;
+    m.kind = LLM_MSG_TEXT;
     m.content = g_strdup(content);
     m.images = images; /* transfert de propriété */
 
@@ -1108,6 +1107,9 @@ llm_json_int(JsonObject *obj, const char *member, long fallback)
         return fallback;
     }
 }
+
+static void llm_process_tool_delta(LlmCore *c, JsonObject *obj,
+                                   guint choice_index);
 
 /* Traite une ligne SSE « data: … ». */
 void
@@ -1160,6 +1162,8 @@ llm_handle_sse_line(LlmCore *c, const char *line)
         && json_object_has_member(choices0, "delta")
         && (delta = json_object_get_object_member(choices0, "delta")) != NULL) {
         const char *piece = NULL;
+
+        llm_process_tool_delta(c, obj, 0);
 
         /* Contenu final ; en repli, le reasoning (thinking). */
         if (json_object_has_member(delta, "content")) {
@@ -1219,57 +1223,442 @@ llm_handle_sse_line(LlmCore *c, const char *line)
 /* Clic sur le bouton média : play = envoyer, pause = annuler la
  * requête en cours (le flux se termine en erreur G_IO_ERROR_CANCELLED,
  * capturée silencieusement par les chemins de lecture). */
+
+static GPtrArray *cdb_polls = NULL;
+
+#define CDB_TOOL_NAME "cdb_bash"
+
+void
+llm_tool_call_free(gpointer data)
+{
+    LlmToolCall *tc = data;
+
+    if (tc == NULL)
+        return;
+    g_free(tc->id);
+    g_free(tc->name);
+    g_free(tc->arguments_json);
+    g_free(tc);
+}
+
+GPtrArray *
+llm_tool_calls_new(void)
+{
+    return g_ptr_array_new_with_free_func(llm_tool_call_free);
+}
+
+void
+llm_msg_clear(LlmMsg *m)
+{
+    if (m == NULL)
+        return;
+    g_free(m->content);
+    if (m->images != NULL)
+        g_ptr_array_unref(m->images);
+    if (m->tool_calls != NULL)
+        g_ptr_array_unref(m->tool_calls);
+    g_free(m->tool_call_id);
+    memset(m, 0, sizeof(*m));
+}
+
+static void
+core_history_push_full(LlmCore *c, LlmActor actor, gboolean local,
+                       LlmMsgKind kind, const char *content,
+                       GPtrArray *tool_calls, const char *tool_call_id)
+{
+    LlmMsg m;
+
+    memset(&m, 0, sizeof(m));
+    m.actor = actor;
+    m.local = local;
+    m.kind = kind;
+    m.content = g_strdup(content);
+    m.images = NULL;
+    /* Transfert de propriété : l'appelant ne doit plus libérer. */
+    m.tool_calls = tool_calls;
+    m.tool_call_id = g_strdup(tool_call_id);
+    g_array_append_vals(c->history, &m, 1);
+    llm_live_save(c);
+}
+
+static void
+core_tool_result_commit(LlmCore *c, const char *tool_call_id,
+                        const char *content, gboolean display)
+{
+    const char *shown;
+
+    if (c == NULL || tool_call_id == NULL || tool_call_id[0] == '\0')
+        return;
+    if (c->answered_tools != NULL &&
+        g_hash_table_contains(c->answered_tools, tool_call_id))
+        return;
+
+    core_history_push_full(c, LLMACTOR_CDB, FALSE,
+                           LLM_MSG_TOOL_RESULT, content, NULL,
+                           tool_call_id);
+    if (c->answered_tools != NULL)
+        g_hash_table_add(c->answered_tools, g_strdup(tool_call_id));
+
+    if (!display)
+        return;
+    shown = content != NULL ? content : "〔tool〕 aucun contenu nouveau";
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_cdb_say_display(g_ptr_array_index(c->views, vi), shown);
+}
+
+static void
+cdb_queue_text_result(LlmCore *c, const char *tool_call_id,
+                      const char *label, const char *text,
+                      const char *raw_text, gboolean shown)
+{
+    CdbResult *r;
+
+    if (c == NULL || tool_call_id == NULL || tool_call_id[0] == '\0')
+        return;
+    r = g_new0(CdbResult, 1);
+    r->tool_call_id = g_strdup(tool_call_id);
+    r->label = g_strdup(label);
+    r->raw_text = g_strdup(raw_text);
+    r->text = g_strdup(text);
+    r->shown = shown;
+
+    if (c->cdb_results == NULL)
+        c->cdb_results = g_queue_new();
+    g_queue_push_tail(c->cdb_results, r);
+}
+
+/* Accumulateur des fragments tool_calls émis par le flux SSE. */
+static void
+pending_tool_free(gpointer data)
+{
+    LlmPendingToolCall *p = data;
+
+    if (p == NULL)
+        return;
+    g_free(p->id);
+    g_free(p->name);
+    if (p->arguments != NULL)
+        g_string_free(p->arguments, TRUE);
+    g_free(p);
+}
+
+static LlmPendingToolCall *
+pending_tool_get(LlmCore *c, long index, long fallback_index)
+{
+    LlmPendingToolCall *p;
+
+    if (c->pending_tool_calls == NULL)
+        c->pending_tool_calls = g_ptr_array_new_with_free_func(
+            pending_tool_free);
+    for (guint i = 0; i < c->pending_tool_calls->len; i++) {
+        p = g_ptr_array_index(c->pending_tool_calls, i);
+
+        if (p->index == index)
+            return p;
+    }
+    p = g_new0(LlmPendingToolCall, 1);
+    p->index = index >= 0 ? index : fallback_index;
+    p->arguments = g_string_new(NULL);
+    g_ptr_array_add(c->pending_tool_calls, p);
+    return p;
+}
+
+static void
+llm_core_clear_pending_tools(LlmCore *c)
+{
+    if (c->pending_tool_calls != NULL) {
+        g_ptr_array_unref(c->pending_tool_calls);
+        c->pending_tool_calls = NULL;
+    }
+}
+
+static gint
+pending_tool_cmp(gconstpointer a, gconstpointer b)
+{
+    const LlmPendingToolCall *pa = *((LlmPendingToolCall *const *)a);
+    const LlmPendingToolCall *pb = *((LlmPendingToolCall *const *)b);
+
+    return pa->index < pb->index ? -1 : pa->index > pb->index ? 1 : 0;
+}
+
+static void
+llm_process_tool_delta(LlmCore *c, JsonObject *obj, guint choice_index)
+{
+    JsonArray *choices, *calls;
+    JsonObject *choice, *container;
+
+    if (obj == NULL || !json_object_has_member(obj, "choices"))
+        return;
+    choices = json_object_get_array_member(obj, "choices");
+    if (choices == NULL || choice_index >= json_array_get_length(choices))
+        return;
+    choice = json_array_get_object_element(choices, choice_index);
+    container = json_object_has_member(choice, "delta")
+                    ? json_object_get_object_member(choice, "delta")
+                    : json_object_has_member(choice, "message")
+                          ? json_object_get_object_member(choice, "message")
+                          : NULL;
+    if (container == NULL || !json_object_has_member(container, "tool_calls"))
+        return;
+    calls = json_object_get_array_member(container, "tool_calls");
+    if (calls == NULL)
+        return;
+
+    for (guint i = 0; i < json_array_get_length(calls); i++) {
+        JsonNode          *tn = json_array_get_element(calls, i);
+        JsonObject        *tc, *fn;
+        LlmPendingToolCall *p;
+        long               index;
+
+        if (tn == NULL || !JSON_NODE_HOLDS_OBJECT(tn))
+            continue;
+        tc = json_node_get_object(tn);
+        index = llm_json_int(tc, "index", (long)i);
+        p = pending_tool_get(c, index, (long)i);
+
+        if (json_object_has_member(tc, "id")) {
+            JsonNode *n = json_object_get_member(tc, "id");
+
+            if (JSON_NODE_HOLDS_VALUE(n) &&
+                json_node_get_value_type(n) == G_TYPE_STRING) {
+                const char *v = json_node_get_string(n);
+
+                if (v != NULL && v[0] != '\0' && p->id == NULL)
+                    p->id = g_strdup(v);
+            }
+        }
+
+        if (!json_object_has_member(tc, "function") ||
+            !JSON_NODE_HOLDS_OBJECT(json_object_get_member(tc, "function")))
+            continue;
+        fn = json_object_get_object_member(tc, "function");
+
+        if (json_object_has_member(fn, "name")) {
+            JsonNode *n = json_object_get_member(fn, "name");
+
+            if (JSON_NODE_HOLDS_VALUE(n) &&
+                json_node_get_value_type(n) == G_TYPE_STRING) {
+                const char *v = json_node_get_string(n);
+
+                if (v != NULL && v[0] != '\0') {
+                    gchar *old_name = p->name;
+
+                    /* Certains serveurs fragmentent aussi function.name. */
+                    p->name = old_name ? g_strconcat(old_name, v, NULL)
+                                       : g_strdup(v);
+                }
+            }
+        }
+
+        if (json_object_has_member(fn, "arguments")) {
+            JsonNode *n = json_object_get_member(fn, "arguments");
+
+            if (JSON_NODE_HOLDS_VALUE(n) &&
+                json_node_get_value_type(n) == G_TYPE_STRING)
+                g_string_append(p->arguments, json_node_get_string(n));
+        }
+    }
+}
+
+/* Valide un appel natif et le place soit dans la file bash, soit dans une
+ * réponse d'erreur formelle. Aucun appel ne reste sans réponse. */
+static void
+cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
+{
+    JsonParser *parser = NULL;
+    JsonObject *root = NULL;
+    long        terminal = -1;
+    const char *command = NULL;
+    char       *error = NULL;
+
+    if (tc->id == NULL || tc->id[0] == '\0') {
+        core_cdb_announce(c,
+            "tool call ignoré : identifiant API manquant.");
+        return;
+    }
+    if (c->answered_tools != NULL &&
+        g_hash_table_contains(c->answered_tools, tc->id)) {
+        core_cdb_announce(c, "tool call dupliqué ignoré par CDB.");
+        return;
+    }
+
+    if (g_strcmp0(tc->name, CDB_TOOL_NAME) != 0) {
+        error = g_strdup_printf(
+            "outil inconnu \"%s\" : seul cdb_bash est disponible.",
+            tc->name != NULL ? tc->name : "(sans nom)");
+        goto done;
+    }
+
+    parser = json_parser_new();
+    if (!json_parser_load_from_data(parser,
+                                    tc->arguments_json != NULL
+                                        ? tc->arguments_json : "",
+                                    -1, NULL) ||
+        json_parser_get_root(parser) == NULL ||
+        !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        error = g_strdup("arguments JSON invalides pour cdb_bash.");
+        goto done;
+    }
+    root = json_node_get_object(json_parser_get_root(parser));
+    terminal = llm_json_int(root, "terminal", -1);
+    if (json_object_has_member(root, "command") &&
+        JSON_NODE_HOLDS_VALUE(json_object_get_member(root, "command")) &&
+        json_node_get_value_type(json_object_get_member(root, "command"))
+            == G_TYPE_STRING)
+        command = json_object_get_string_member(root, "command");
+
+    if (terminal < 0 || terminal > 9) {
+        error = g_strdup("terminal invalide : attendu entre 0 et 9.");
+        goto done;
+    }
+    if (command == NULL || command[0] == '\0') {
+        error = g_strdup("command manquante ou vide.");
+        goto done;
+    }
+
+    {
+        CdbCmdSpec *spec = g_new0(CdbCmdSpec, 1);
+
+        spec->tool_call_id = g_strdup(tc->id);
+        spec->tab = (int)terminal;
+        spec->cmd = g_strdup(command);
+        if (c->cmd_queue == NULL)
+            c->cmd_queue = g_queue_new();
+        g_queue_push_tail(c->cmd_queue, spec);
+    }
+
+done:
+    if (error != NULL)
+        cdb_queue_text_result(c, tc->id, "bash-?", error, NULL, FALSE);
+    if (parser != NULL)
+        g_object_unref(parser);
+    g_free(error);
+}
+
+static gboolean
+llm_finalize_pending_tools(LlmCore *c)
+{
+    GPtrArray *calls;
+    gboolean   has_valid_id = FALSE;
+
+    if (c->pending_tool_calls == NULL || c->pending_tool_calls->len == 0)
+        return FALSE;
+
+    g_ptr_array_sort(c->pending_tool_calls, pending_tool_cmp);
+    calls = llm_tool_calls_new();
+
+    for (guint i = 0; i < c->pending_tool_calls->len; i++) {
+        LlmPendingToolCall *p =
+            g_ptr_array_index(c->pending_tool_calls, i);
+        LlmToolCall *tc;
+
+        if (p->id == NULL || p->id[0] == '\0' || p->name == NULL) {
+            core_cdb_announce(c,
+                "tool call incomplet ignoré : id ou function.name absent.");
+            continue;
+        }
+        tc = g_new0(LlmToolCall, 1);
+        tc->id = g_steal_pointer(&p->id);
+        tc->name = g_steal_pointer(&p->name);
+        tc->arguments_json = g_string_free(p->arguments, FALSE);
+        p->arguments = NULL;
+        g_ptr_array_add(calls, tc);
+        has_valid_id = TRUE;
+    }
+
+    if (calls->len > 0) {
+        core_history_push_full(c, LLMACTOR_LLM, FALSE,
+                               LLM_MSG_ASSISTANT_TOOL_CALLS,
+                               c->reply->str, calls, NULL);
+        for (guint i = 0; i < calls->len; i++)
+            cdb_dispatch_native_call(c, g_ptr_array_index(calls, i));
+    } else {
+        g_ptr_array_unref(calls);
+    }
+
+    llm_core_clear_pending_tools(c);
+    return has_valid_id;
+}
+
 void
 llm_cancel_current(LlmTile *t)
 {
-    /* 1. Requête réseau en cours : annule le flux ET FERME LA CONNEXION.
-     * Le cancellable seul interrompt notre lecture locale, mais libsoup
-     * peut continuer à drainer le socket en arrière-plan — le serveur
-     * continue alors de générer et la réponse « arrive quand même ».
-     * g_input_stream_close force le close TCP : le serveur voit la
-     * déconnexion et stoppe sa génération (comportement Zed/OpenCode).
-     * Le flag stop_requested complète le dispositif : tout chunk déjà
-     * en vol est JETÉ à réception au lieu d'être affiché. */
-    t->core->stop_requested = TRUE;
-    if (t->core->cancel != NULL)
-        g_cancellable_cancel(t->core->cancel);
-    if (t->core->cur_req != NULL && t->core->cur_req->stream != NULL)
-        g_input_stream_close_async(t->core->cur_req->stream, G_PRIORITY_DEFAULT,
+    LlmCore *c = t->core;
+    guint    vi;
+
+    /* 1. Flux réseau : close TCP + jet de ce qui arrive encore. */
+    c->stop_requested = TRUE;
+    if (c->cancel != NULL)
+        g_cancellable_cancel(c->cancel);
+    if (c->cur_req != NULL && c->cur_req->stream != NULL)
+        g_input_stream_close_async(c->cur_req->stream, G_PRIORITY_DEFAULT,
                                    NULL, NULL, NULL);
 
-    /* 2. Boucle agentique en attente (approbation, exécution bash,
-     * re-requête) : rien n'écoute le cancellable — on vide la file et
-     * on rend la main. Les polls bash en cours se termineront mais leur
-     * résultat ne déclenchera plus de re-requête (file vide → flush →
-     * requery est court-circuité par busy=FALSE ci-dessous). */
-    if (t->core->cmd_queue != NULL && !g_queue_is_empty(t->core->cmd_queue)) {
-        for (GList *l = t->core->cmd_queue->head; l != NULL; l = l->next) {
-            CdbCmdSpec *s = l->data;
-
-            g_free(s->cmd);
-            g_free(s);
-        }
-        g_queue_free(t->core->cmd_queue);
-        t->core->cmd_queue = NULL;
-        core_cdb_announce(t->core, "〔annulé〕 file de commandes vidée.");
-    }
-    /* 3. Résultats pendants non livrés : jetés (le user a dit stop). */
-    if (t->core->cdb_results != NULL) {
-        for (GList *l = t->core->cdb_results->head; l != NULL; l = l->next) {
+    /* 2. Résultats déjà capturés mais pas encore livrés : ils répondent
+     * réellement à leur appel, même si l'utilisateur coupe la boucle. */
+    if (c->cdb_results != NULL) {
+        for (GList *l = c->cdb_results->head; l != NULL; l = l->next) {
             CdbResult *r = l->data;
 
+            core_tool_result_commit(c, r->tool_call_id, r->text, TRUE);
+        }
+        for (GList *l = c->cdb_results->head; l != NULL; l = l->next) {
+            CdbResult *r = l->data;
+
+            g_free(r->tool_call_id);
             g_free(r->label);
+            g_free(r->raw_text);
             g_free(r->text);
             g_free(r);
         }
-        g_queue_free(t->core->cdb_results);
-        t->core->cdb_results = NULL;
+        g_queue_free(c->cdb_results);
+        c->cdb_results = NULL;
     }
-    /* 4. Si aucun flux réseau n'était actif (attente approbation/poll),
-     * personne ne remettra busy à FALSE : on le fait ici. Si un flux
-     * était actif, son callback de fin le fera — double appel inoffensif. */
-    for (guint vi = 0; vi < t->core->views->len; vi++)
-        llm_busy_set(g_ptr_array_index(t->core->views, vi), FALSE);
+
+    /* 3. Décision en attente : réponse formelle puis verrouillage UI. */
+    if (c->decision != NULL) {
+        core_tool_result_commit(c, c->decision->tool_call_id,
+                                "Annulé par l'utilisateur.", TRUE);
+        for (vi = 0; vi < c->views->len; vi++)
+            llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
+        g_free(c->decision->tool_call_id);
+        g_free(c->decision->cmd);
+        g_free(c->decision);
+        c->decision = NULL;
+    }
+
+    /* 4. File d'attente : chaque ID restant est répondu formellement. */
+    if (c->cmd_queue != NULL) {
+        for (GList *l = c->cmd_queue->head; l != NULL; l = l->next) {
+            CdbCmdSpec *sp = l->data;
+
+            core_tool_result_commit(c, sp->tool_call_id,
+                                    "Annulé par l'utilisateur.", TRUE);
+            g_free(sp->tool_call_id);
+            g_free(sp->cmd);
+            g_free(sp);
+        }
+        g_queue_free(c->cmd_queue);
+        c->cmd_queue = NULL;
+    }
+
+    /* 5. Polls actifs : leurs IDs sont déjà répondus ; leur résultat
+     * futur sera ignoré par answered_tools. Les timers se terminent seuls. */
+    if (cdb_polls != NULL) {
+        for (guint i = 0; i < cdb_polls->len; i++) {
+            CdbPoll *pl = g_ptr_array_index(cdb_polls, i);
+
+            if (pl->core == c) {
+                pl->cancelled = TRUE;
+                core_tool_result_commit(c, pl->tool_call_id,
+                                        "Annulé par l'utilisateur.", TRUE);
+            }
+        }
+    }
+
+    llm_core_clear_pending_tools(c);
+    for (vi = 0; vi < c->views->len; vi++)
+        llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
 }
 
 /* Libère la requête une seule fois (les callbacks de complétion
@@ -1326,8 +1715,10 @@ core_history_push(LlmCore *c, LlmActor actor, gboolean local,
 {
     LlmMsg m;
 
+    memset(&m, 0, sizeof(m));
     m.actor = actor;
     m.local = local;
+    m.kind = LLM_MSG_TEXT;
     m.content = g_strdup(content);
     m.images = NULL;
     g_array_append_vals(c->history, &m, 1);
@@ -1390,7 +1781,10 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
     }
 
     if (n <= 0) {
-        core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
+        gboolean has_tools = llm_finalize_pending_tools(c);
+
+        if (!has_tools)
+            core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
         for (vi = 0; vi < c->views->len; vi++) {
             LlmTile *v = g_ptr_array_index(c->views, vi);
 
@@ -1398,44 +1792,11 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
             llm_slots_title_update(v);
             hist_append(v, "\n");
         }
-
-        if (llm_agent_detect(c, c->reply->str)) {
-            c->cdb_retries = 0;
-            llm_request_free(req);
-            return;
-        }
-        if (strstr(c->reply->str, "/CDB::") != NULL &&
-            llm_cdb_malformed(c->reply->str)) {
-            if (c->cdb_retries < CDB_RETRY_MAX) {
-                char *note;
-
-                c->cdb_retries++;
-                note = g_strdup_printf(
-                    "COMMANDE MAL FORMÉE (tentative %d/%d) : "
-                    "le protocole est exactement "
-                    "/CDB::bash-N::\"//\"CDB-IN\"//COMMANDE"
-                    "//\"CDB-OUT\"//\" — N entre 0 et 9, "
-                    "commande complète entre les deux marqueurs "
-                    "(les \" internes sont autorisés tels quels). "
-                    "Réécris-la proprement.",
-                    c->cdb_retries, CDB_RETRY_MAX);
-                core_cdb_deliver(c, note);
-                g_free(note);
-                llm_request_free(req);
-                return;
-            }
-            core_history_push(c, LLMACTOR_CDB, TRUE,
-                "trois commandes mal formées d'affilée : j'abandonne "
-                "cette boucle. Réponds en texte ou reformule entièrement.");
-            for (guint vi = 0; vi < c->views->len; vi++)
-                llm_cdb_say_display(g_ptr_array_index(c->views, vi),
-                    "trois commandes mal formées d'affilée : j'abandonne "
-                    "cette boucle. Réponds en texte ou reformule entièrement.");
-        }
-
+        llm_request_free(req);
+        if (has_tools)
+            llm_cdb_next(c);
         for (vi = 0; vi < c->views->len; vi++)
             llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
-        llm_request_free(req);
         return;
     }
 
@@ -1450,6 +1811,7 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
 #define CDB_TAIL_LINES 100000 /* fenêtre de restitution = scrollback */
 #define CDB_SPAWN_WAIT_MAX 120 /* ticks max d'attente du spawn (30 s) */
 
+
 /* Prompt shell : [user]@[host]:[n'importe quoi]$ suivi UNIQUEMENT
  * d'espaces (le padding VTE remplit la fin de ligne ; une sortie du
  * type « user@host:$ Bonjour » ne matche PAS — il y a du texte après).
@@ -1463,7 +1825,6 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
 /* Registre des polls actifs : chaque tick valide son appartenance avant
  * de toucher pl (la tuile peut être détruite par un re-rendu du layout
  * pendant la surveillance) ; la mort d'une tuile purge ses polls. */
-static GPtrArray *cdb_polls = NULL;
 
 void
 cdb_poll_register(CdbPoll *pl)
@@ -1480,22 +1841,43 @@ cdd_poll_unregister(CdbPoll *pl)
         g_ptr_array_remove_fast(cdb_polls, pl);
 }
 
+static void
+cdb_poll_teardown(CdbPoll *pl)
+{
+    if (pl == NULL)
+        return;
+    cdd_poll_unregister(pl);
+    bash_panel_set_busy((guint)pl->tab, FALSE);
+    g_free(pl->tool_call_id);
+    g_free(pl->tab_label);
+    g_free(pl->prev_tail);
+    g_free(pl->pending_cmd);
+    g_free(pl);
+}
+
 
 
 void
-cdb_poll_finish(CdbPoll *pl, const char *text)
+cdb_poll_finish(CdbPoll *pl, const char *text, gboolean is_output)
 {
     CdbResult *r;
+    gboolean    blank;
 
     cdd_poll_unregister(pl);
-    bash_panel_set_busy((guint)pl->tab, FALSE); /* éteint le point */
+    bash_panel_set_busy((guint)pl->tab, FALSE);
 
-    /* Anti-spam (loi d'Éric) : pas de livraison immédiate — le résultat
-     * attend la fin de la file ; les résultats contenus à 100 % dans un
-     * plus récent du même bash seront éliminés au flush. */
     r = g_new0(CdbResult, 1);
+    r->tool_call_id = g_steal_pointer(&pl->tool_call_id);
     r->label = g_steal_pointer(&pl->tab_label);
-    r->text = g_strdup(text);
+    blank = text == NULL || text[strspn(text, " \t\r\n")] == '\0';
+    if (is_output) {
+        r->raw_text = g_strdup(text);
+        r->text = blank ? NULL : g_strdup(text);
+    } else {
+        r->raw_text = NULL;
+        r->text = g_strdup(text != NULL ? text : "(erreur sans message)");
+    }
+
     if (pl->core->cdb_results == NULL)
         pl->core->cdb_results = g_queue_new();
     g_queue_push_tail(pl->core->cdb_results, r);
@@ -1516,10 +1898,14 @@ cdb_spawn_wait_tick(gpointer data)
     CdbPoll *pl = data;
     int      waits;
 
+    if (pl->cancelled || pl->core->stop_requested) {
+        cdb_poll_teardown(pl);
+        return G_SOURCE_REMOVE;
+    }
+
     /* Poll purgé (tuile détruite) : se retire silencieusement. */
     if (cdb_polls == NULL || !g_ptr_array_find(cdb_polls, pl, NULL)) {
-        g_free(pl->pending_cmd);
-        g_free(pl);
+        cdb_poll_teardown(pl);
         return G_SOURCE_REMOVE;
     }
 
@@ -1542,7 +1928,7 @@ cdb_spawn_wait_tick(gpointer data)
             "le shell %s ne démarre pas (spawn en échec ?).",
             pl->tab_label);
 
-        cdb_poll_finish(pl, note);
+        cdb_poll_finish(pl, note, FALSE);
         g_free(note);
         return G_SOURCE_REMOVE;
     }
@@ -1559,10 +1945,17 @@ cdb_poll_tick(gpointer data)
     char     *note;
     gboolean  matched;
 
+    if (pl->cancelled || pl->core->stop_requested) {
+        cdb_poll_teardown(pl);
+        return G_SOURCE_REMOVE;
+    }
+
     /* Poll purgé (tuile détruite) : se retire silencieusement. */
     if (cdb_polls == NULL ||
-        !g_ptr_array_find(cdb_polls, pl, NULL))
+        !g_ptr_array_find(cdb_polls, pl, NULL)) {
+        cdb_poll_teardown(pl);
         return G_SOURCE_REMOVE;
+    }
 
     if (prompt_re == NULL)
         prompt_re = g_regex_new(CDB_PROMPT_RE, 0, 0, NULL);
@@ -1571,7 +1964,7 @@ cdb_poll_tick(gpointer data)
         note = g_strdup_printf(
             "le terminal %s a été fermé pendant l'exécution.",
             pl->tab_label);
-        cdb_poll_finish(pl, note);
+        cdb_poll_finish(pl, note, FALSE);
         g_free(note);
         return G_SOURCE_REMOVE;
     }
@@ -1657,14 +2050,8 @@ cdb_poll_tick(gpointer data)
         g_free(full);
     }
 
-    note = g_strdup_printf(
-        "résultat de %s :\n%s",
-        pl->tab_label,
-        bounded != NULL && bounded[0] != '\0'
-            ? bounded : "(aucune sortie)");
-    cdb_poll_finish(pl, note);
+    cdb_poll_finish(pl, bounded, TRUE);
 
-    g_free(note);
     g_free(bounded);
     return G_SOURCE_REMOVE;
 }
@@ -1849,24 +2236,23 @@ llm_cdb_requery(LlmTile *t)
 void
 llm_cdb_results_flush(LlmCore *c)
 {
-    GQueue   *q = c->cdb_results;
-    guint     n;
-    gboolean *drop;
-    guint     i = 0;
+    GQueue *q = c->cdb_results;
 
-    /* Boucle annulée par l'utilisateur : plus de re-requête. Les
-     * résultats tardifs d'un poll bash encore actif sont jetés. */
+    /* Boucle annulée : les IDs ouverts ont déjà reçu une réponse formelle.
+     * Les résultats tardifs sont jetés et surtout, pas de re-requête. */
     if (c->stop_requested) {
+        c->cdb_results = NULL;
         if (q != NULL) {
             for (GList *l = q->head; l != NULL; l = l->next) {
                 CdbResult *r = l->data;
 
+                g_free(r->tool_call_id);
                 g_free(r->label);
+                g_free(r->raw_text);
                 g_free(r->text);
                 g_free(r);
             }
             g_queue_free(q);
-        c->cdb_results = NULL;
         }
         return;
     }
@@ -1875,59 +2261,75 @@ llm_cdb_results_flush(LlmCore *c)
     if (q == NULL) {
         if (c->views->len > 0)
             llm_cdb_requery(g_ptr_array_index(c->views, 0));
-        /* C4 : sans vue, différer la re-interrogation */
         return;
     }
     if (g_queue_is_empty(q)) {
         g_queue_free(q);
         if (c->views->len > 0)
             llm_cdb_requery(g_ptr_array_index(c->views, 0));
-        /* C4 : sans vue, différer la re-interrogation */
         return;
     }
 
-    n = g_queue_get_length(q);
-    drop = g_new0(gboolean, n);
-    for (GList *li = q->head; li != NULL; li = li->next, i++) {
+
+    /* Déduplication chronologique, par terminal :
+     * si A est contenu exactement dans B, retire A de B ;
+     * si le reste est blanc, B devient NULL. */
+    for (GList *li = q->head; li != NULL; li = li->next) {
         CdbResult *ri = li->data;
-        GList     *lj = li->next;
+        gchar     *wire;
 
-        while (lj != NULL && !drop[i]) {
+        if (ri->raw_text == NULL)
+            continue;
+        wire = g_strdup(ri->raw_text);
+        for (GList *lj = q->head; lj != li; lj = lj->next) {
             CdbResult *rj = lj->data;
+            gchar     *pos;
+            gsize      old_len;
 
-            if (g_strcmp0(ri->label, rj->label) == 0 &&
-                strstr(rj->text, ri->text) != NULL)
-                drop[i] = TRUE;
-            lj = lj->next;
+            gchar *needle;
+
+            if (rj->raw_text == NULL || rj->raw_text[0] == '\0' ||
+                g_strcmp0(rj->label, ri->label) != 0)
+                continue;
+            /* Needle strippé : les captures d'un même bloc peuvent
+             * différer d'un \n de bordure (début d'écran). Sans ça,
+             * le cas "tout est déjà vu -> NULL" ne déclenche jamais. */
+            needle = g_strstrip(g_strdup(rj->raw_text));
+            old_len = strlen(needle);
+            if (old_len == 0) {
+                g_free(needle);
+                continue;
+            }
+            while ((pos = strstr(wire, needle)) != NULL)
+                memmove(pos, pos + old_len,
+                        strlen(pos + old_len) + 1);
+            g_free(needle);
         }
+
+        g_free(ri->text);
+        ri->text = wire[strspn(wire, " \t\r\n")] == '\0'
+                       ? NULL : g_steal_pointer(&wire);
+        g_free(wire);
     }
 
-    i = 0;
-    for (GList *l = q->head; l != NULL; l = l->next, i++) {
+    for (GList *l = q->head; l != NULL; l = l->next) {
         CdbResult *r = l->data;
 
-        core_history_push(c, LLMACTOR_CDB, FALSE, r->text);
-        for (guint vi = 0; vi < c->views->len; vi++) {
-            LlmTile *v = g_ptr_array_index(c->views, vi);
-
-            if (!drop[i])
-                llm_cdb_say_display(v, r->text);
-        }
+        core_tool_result_commit(c, r->tool_call_id, r->text, !r->shown);
     }
-    i = 0;
-    for (GList *l = q->head; l != NULL; l = l->next, i++) {
+    for (GList *l = q->head; l != NULL; l = l->next) {
         CdbResult *r = l->data;
 
+        g_free(r->tool_call_id);
         g_free(r->label);
+        g_free(r->raw_text);
         g_free(r->text);
         g_free(r);
     }
-    g_free(drop);
     g_queue_free(q);
 
     if (c->views->len > 0)
-            llm_cdb_requery(g_ptr_array_index(c->views, 0));
-        /* C4 : sans vue, différer la re-interrogation */
+        llm_cdb_requery(g_ptr_array_index(c->views, 0));
 }
 
 /* Avance la file : commande suivante → approbation ; vide →
@@ -1960,10 +2362,12 @@ on_cdb_refuse_clicked(GtkButton *btn, gpointer data)
     d->state = CDB_A_REFUSED;
     for (guint vi = 0; vi < c->views->len; vi++)
         llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
-    core_cdb_deliver(c, note);
+    core_tool_result_commit(c, d->tool_call_id, note, TRUE);
+    g_free(d->tool_call_id);
     g_free(d->cmd);
     g_free(d);
     c->decision = NULL;
+    llm_cdb_next(c);
 }
 
 void
@@ -1972,6 +2376,7 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data)
     CdbDecision *d = data;
     LlmCore     *c = cdb_core_from_button(btn);
     CdbPoll     *pl;
+    char        *note;
 
     if (c == NULL || c->decision != d || d->state != CDB_A_PENDING)
         return;
@@ -1981,48 +2386,53 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data)
 
     pl = g_new0(CdbPoll, 1);
     pl->core = c;
+    pl->tool_call_id = g_strdup(d->tool_call_id);
     pl->tab = d->tab;
     pl->tab_label = g_strdup_printf("bash-%d", d->tab);
 
     bash_panel_ensure_tabs((guint)(d->tab + 1));
 
-    if (!bash_panel_term_ready((guint)d->tab)) {
-        if (!bash_panel_exec_tab_possible()) {
-            char *note = g_strdup_printf(
-                "terminal %s indisponible (panneau bash absent ?)",
-                pl->tab_label);
+    if (!bash_panel_exec_tab_possible()) {
+        note = g_strdup_printf(
+            "terminal %s indisponible (panneau bash absent ?)",
+            pl->tab_label);
+        core_tool_result_commit(c, pl->tool_call_id, note, TRUE);
+        g_free(note);
+        g_free(pl->tool_call_id);
+        g_free(pl->tab_label);
+        g_free(pl);
+        g_free(d->tool_call_id);
+        g_free(d->cmd);
+        g_free(d);
+        c->decision = NULL;
+        llm_cdb_next(c);
+        return;
+    }
 
-            core_history_push(c, LLMACTOR_CDB, TRUE, note);
-            for (guint vi = 0; vi < c->views->len; vi++)
-                llm_cdb_say_display(g_ptr_array_index(c->views, vi), note);
-            g_free(note);
-            g_free(pl->tab_label);
-            g_free(pl);
-            return;
-        }
+    if (!bash_panel_term_ready((guint)d->tab)) {
         pl->pending_cmd = g_strdup(d->cmd);
         cdb_poll_register(pl);
         g_timeout_add(CDB_POLL_MS, cdb_spawn_wait_tick, pl);
-        return;
-    }
-
-    if (!bash_panel_exec_tab((guint)d->tab, d->cmd)) {
-        char *note = g_strdup_printf(
+    } else if (bash_panel_exec_tab((guint)d->tab, d->cmd)) {
+        bash_panel_set_busy((guint)d->tab, TRUE);
+        cdb_poll_register(pl);
+        g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
+    } else {
+        note = g_strdup_printf(
             "terminal %s indisponible (panneau bash absent ?)",
             pl->tab_label);
-
-        core_history_push(c, LLMACTOR_CDB, TRUE, note);
-        for (guint vi = 0; vi < c->views->len; vi++)
-            llm_cdb_say_display(g_ptr_array_index(c->views, vi), note);
+        core_tool_result_commit(c, pl->tool_call_id, note, TRUE);
         g_free(note);
+        g_free(pl->tool_call_id);
         g_free(pl->tab_label);
         g_free(pl);
-        return;
     }
-    bash_panel_set_busy((guint)d->tab, TRUE);
 
-    cdb_poll_register(pl);
-    g_timeout_add(CDB_POLL_MS, cdb_poll_tick, pl);
+    g_free(d->tool_call_id);
+    g_free(d->cmd);
+    g_free(d);
+    c->decision = NULL;
+    /* Pas de llm_cdb_next ici : le poll actif appellera la suite. */
 }
 
 void
@@ -2037,6 +2447,7 @@ llm_cdb_next(LlmCore *c)
     s = g_queue_pop_head(c->cmd_queue);
 
     c->decision = g_new0(CdbDecision, 1);
+    c->decision->tool_call_id = g_strdup(s->tool_call_id);
     c->decision->tab = s->tab;
     c->decision->cmd = g_strdup(s->cmd);
     c->decision->state = CDB_A_PENDING;
@@ -2046,137 +2457,330 @@ llm_cdb_next(LlmCore *c)
     g_free(s);
 }
 
-/* Texte reply sans les blocs thinking : le modèle y rédige souvent des
- * brouillons de commandes qu'il ne faut ni exécuter ni condamner. Les
- * deux scans du protocole (détection + malformation) partent de là. */
-char *
-llm_scan_text(const char *reply)
+static gboolean
+paragraph_has_legacy_shell_protocol(char **lines, guint begin, guint stop)
 {
-    static GRegex *think_re = NULL;
+    static const char *legacy_tokens[] = {
+        "/CDB::",
+        "CDB-IN",
+        "CDB-OUT",
+        "COMMANDE-VOULU",
+        "bash-N::",
+        NULL,
+    };
 
-    if (think_re == NULL)
-        /* DOTALL indispensable : le thinking s'étale sur des dizaines
-         * de lignes ; sans lui, .*? s'arrête en fin de première ligne,
-         * le tag fermant n'est jamais atteint (bug constaté : 3
-         * exécutions). */
-        think_re = g_regex_new("〔thinking〕.*?〔/thinking〕",
-                               G_REGEX_DOTALL, 0, NULL);
-    return g_regex_replace_literal(think_re, reply, -1, 0, " ", 0, NULL);
-}
+    for (guint i = begin; i < stop; i++) {
+        if (lines[i] == NULL)
+            continue;
 
-/* Y a-t-il une VRAIE malformation /CDB:: dans la réponse ? Une mention
- * du protocole dans la prose (ex. citation littérale « bash-N » avec le
- * N majuscule) n'est PAS une tentative — c'est du texte explicatif.
- * Deux vraies tentatives bâclées :
- * - type A : /CDB::bash-<digit> non immédiatement suivi du marqueur IN
- *   (::"//"CDB-IN"// — guillemets simples, N à deux chiffres…) ;
- * - type B : marqueur IN présent sans OUT après lui (réponse coupée ou
- *   gabarit incomplet) — sinon la commande resterait silencieuse. */
-gboolean
-llm_cdb_malformed(const char *reply)
-{
-    static GRegex *re_a = NULL;
-    static GRegex *re_b = NULL;
-    GMatchInfo    *mi = NULL;
-    gboolean      bad = FALSE;
-    char          *scan;
-
-    scan = llm_scan_text(reply);
-    if (re_a == NULL)
-        re_a = g_regex_new("/CDB::bash-(\\d)(?!::\"//\"CDB-IN\"//)",
-                           0, 0, NULL);
-    if (re_b == NULL)
-        re_b = g_regex_new("/CDB::bash-(\\d)::\"//\"CDB-IN\"//"
-                           "(?!.*?//\"CDB-OUT\"//)",
-                           G_REGEX_DOTALL, 0, NULL);
-    if (g_regex_match(re_a, scan != NULL ? scan : reply, 0, &mi))
-        bad = TRUE;
-    g_match_info_free(mi);
-    if (!bad && g_regex_match(re_b, scan != NULL ? scan : reply, 0, &mi))
-        bad = TRUE;
-    g_match_info_free(mi);
-    g_free(scan);
-    return bad;
-}
-
-/* Détection des commandes /CDB:: d'une réponse. Protocole à 3 champs :
- * /CDB::bash-N::"//"CDB-IN"//commande//"CDB-OUT"//"
- * La commande est prise BRUTE entre marqueurs — guillemets doubles et
- * sauts de ligne y sont autorisés (heredocs, scripts inline) ; la
- * pagination se fait dans la commande (head/tail/sed). TOUTES les
- * commandes valides partient en file.
- *
- * Anti-double-détection : on scanne le texte SANS les blocs thinking
- * (voir llm_scan_text), et on saute tout doublon exact déjà présent
- * dans la file (même bash + même commande). */
-gboolean
-llm_agent_detect(LlmCore *c, const char *reply)
-{
-    static GRegex *re = NULL;
-    GMatchInfo    *mi = NULL;
-    gboolean      found = FALSE;
-    char          *scan;
-
-    if (re == NULL)
-        re = g_regex_new("/CDB::bash-(\\d)::\"//\"CDB-IN\"//(.*?)"
-                         "//\"CDB-OUT\"//\"", G_REGEX_DOTALL, 0, NULL);
-    scan = llm_scan_text(reply);
-    if (g_regex_match(re, scan != NULL ? scan : reply, 0, &mi)) {
-        found = TRUE;
-        do {
-            CdbCmdSpec *s;
-            char       *cmd = g_match_info_fetch(mi, 2);
-            char       *tabstr = g_match_info_fetch(mi, 1);
-            int         tab = atoi(tabstr);
-            gboolean    dup = FALSE;
-
-            g_free(tabstr);
-
-            /* Doublon exact déjà en file (ou en cours) : on ignore. */
-            if (c->cmd_queue != NULL)
-                for (GList *l = c->cmd_queue->head; l != NULL; l = l->next) {
-                    CdbCmdSpec *q = l->data;
-
-                    if (q->tab == tab && g_strcmp0(q->cmd, cmd) == 0) {
-                        dup = TRUE;
-                        break;
-                    }
-                }
-            if (!dup) {
-                s = g_new0(CdbCmdSpec, 1);
-
-                s->tab = tab;
-                s->cmd = cmd;
-                if (c->cmd_queue == NULL)
-                    c->cmd_queue = g_queue_new();
-                g_queue_push_tail(c->cmd_queue, s);
-            } else
-                g_free(cmd);
-        } while (g_match_info_next(mi, NULL));
+        for (guint t = 0; legacy_tokens[t] != NULL; t++) {
+            if (strstr(lines[i], legacy_tokens[t]) != NULL)
+                return TRUE;
+        }
     }
-    g_match_info_free(mi);
-    g_free(scan);
 
-    if (found)
-        llm_cdb_next(c);
-
-    return found;
+    return FALSE;
 }
 
-/* Construit le body chat/completions TEL qu'il serait envoyé à
- * l'instant T : persona re-résolu avec le projet courant + tout le
- * fil non-local. String g_strdup (à g_free). Utilisé par llm_send()
- * ET par le menu slots (voir / sauvegarder) — garantie d'identité
- * octet pour octet avec la requête réseau. */
+static char *
+llm_persona_drop_legacy_shell_protocol(char *persona)
+{
+    static const char *heading =
+        "## Contrôle à distance des terminaux";
+    static const char *native_section[] = {
+        "Tu disposes de l'outil natif cdb_bash. Utilise-le pour inspecter,",
+        "mesurer, compiler ou exécuter une action locale. Chaque appel est",
+        "soumis à l'approbation d'Éric. N'utilise jamais le protocole",
+        "textuel /CDB::, qui n'existe plus.",
+        NULL,
+    };
+    gchar    **lines;
+    GString   *out;
+    gsize      length;
+    guint      count;
+    guint      heading_index;
+    guint      i;
+    gboolean   found_heading;
+    gboolean   trailing_newline;
+    gboolean   first_kept_paragraph;
+
+    if (persona == NULL || persona[0] == '\0')
+        return persona;
+
+    length = strlen(persona);
+    trailing_newline = persona[length - 1] == '\n';
+
+    lines = g_strsplit(persona, "\n", -1);
+    count = g_strv_length(lines);
+
+    heading_index = count;
+    found_heading = FALSE;
+    for (i = 0; i < count; i++) {
+        if (g_strcmp0(lines[i], heading) == 0) {
+            heading_index = i;
+            found_heading = TRUE;
+            break;
+        }
+    }
+
+    /* Pas d'ancien protocole detecte : persona conserve tel quel. */
+    if (!found_heading) {
+        g_strfreev(lines);
+        return persona;
+    }
+
+    out = g_string_new(NULL);
+
+    for (i = 0; i < heading_index; i++)
+        g_string_append_printf(out, "%s\n", lines[i]);
+
+    for (i = 0; native_section[i] != NULL; i++)
+        g_string_append_printf(out, "%s\n", native_section[i]);
+    g_string_append(out, "\n");
+
+    i = heading_index + 1;
+    first_kept_paragraph = TRUE;
+
+    while (i < count) {
+        guint begin = i;
+        guint stop;
+        gboolean legacy;
+
+        while (i < count && lines[i] != NULL && lines[i][0] != '\0')
+            i++;
+
+        stop = i;
+        legacy = paragraph_has_legacy_shell_protocol(lines, begin, stop);
+
+        if (!legacy) {
+            if (!first_kept_paragraph)
+                g_string_append(out, "\n");
+
+            for (guint k = begin; k < stop; k++)
+                g_string_append_printf(out, "%s\n", lines[k]);
+
+            first_kept_paragraph = FALSE;
+        }
+
+        while (i < count && lines[i] != NULL && lines[i][0] == '\0')
+            i++;
+    }
+
+    g_strfreev(lines);
+
+    if (!trailing_newline && out->len > 0 &&
+        out->str[out->len - 1] == '\n')
+        g_string_truncate(out, out->len - 1);
+
+    return g_string_free(out, FALSE);
+}
+
+/* Préfs des outils natifs : lecture llm.json "tools". Défaut :
+ * cdb_bash activé si la clé est absente (canal natif par défaut). */
+GPtrArray *
+llm_tools_prefs_load(void)
+{
+    GPtrArray  *out = g_ptr_array_new();
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    gboolean    found = FALSE;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        JsonObject *root =
+            json_node_get_object(json_parser_get_root(parser));
+
+        if (root != NULL && json_object_has_member(root, "tools")) {
+            JsonArray *arr =
+                json_object_get_array_member(root, "tools");
+
+            for (guint i = 0; i < json_array_get_length(arr); i++) {
+                JsonObject *o = json_array_get_object_element(arr, i);
+                LlmToolPref *p;
+
+                if (o == NULL || !json_object_has_member(o, "name"))
+                    continue;
+                p = g_new0(LlmToolPref, 1);
+                p->name = g_strdup(
+                    json_object_get_string_member(o, "name"));
+                p->enabled = json_object_has_member(o, "enabled") &&
+                    json_object_get_boolean_member(o, "enabled");
+                g_ptr_array_add(out, p);
+                found = TRUE;
+            }
+        }
+    }
+    g_object_unref(parser);
+    g_free(path);
+
+    if (!found) {
+        LlmToolPref *p = g_new0(LlmToolPref, 1);
+
+        p->name = g_strdup("cdb_bash");
+        p->enabled = TRUE;
+        g_ptr_array_add(out, p);
+    }
+    return out;
+}
+
+void
+llm_tools_prefs_free(GPtrArray *prefs)
+{
+    if (prefs == NULL)
+        return;
+    for (guint i = 0; i < prefs->len; i++) {
+        LlmToolPref *p = g_ptr_array_index(prefs, i);
+
+        g_free(p->name);
+        g_free(p);
+    }
+    g_ptr_array_unref(prefs);
+}
+
+/* Upsert {name,enabled} dans llm.json "tools" (préservation des
+ * autres entrées). Même mécanique que la config retry. */
+void
+llm_config_save_tool_pref(const char *name, gboolean enabled)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonObject *root;
+    JsonNode   *work = NULL;
+    JsonArray  *arr;
+    gboolean    replaced = FALSE;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        work = json_node_copy(json_parser_get_root(parser));
+        root = json_node_get_object(work);
+    } else {
+        root = json_object_new();
+        work = json_node_new(JSON_NODE_OBJECT);
+        json_node_set_object(work, root);
+    }
+
+    if (!json_object_has_member(root, "tools") ||
+        json_object_get_array_member(root, "tools") == NULL)
+        json_object_set_array_member(root, "tools",
+                                     json_array_new());
+    arr = json_object_get_array_member(root, "tools");
+
+    for (guint i = 0; i < json_array_get_length(arr); i++) {
+        JsonObject *o = json_array_get_object_element(arr, i);
+
+        if (o != NULL && json_object_has_member(o, "name") &&
+            g_strcmp0(json_object_get_string_member(o, "name"),
+                      name) == 0) {
+            json_object_set_boolean_member(o, "enabled", enabled);
+            replaced = TRUE;
+        }
+    }
+    if (!replaced) {
+        JsonObject *o = json_object_new();
+
+        json_object_set_string_member(o, "name", name);
+        json_object_set_boolean_member(o, "enabled", enabled);
+        json_array_add_object_element(arr, o);
+    }
+
+    {
+        JsonGenerator *gen = json_generator_new();
+        gchar         *text;
+        GError        *error = NULL;
+
+        json_generator_set_root(gen, work);
+        text = json_to_string(work, TRUE);
+        if (!g_file_set_contents(path, text, -1, &error)) {
+            g_printerr("CDB: écriture tool pref : %s\n",
+                       error->message);
+            g_error_free(error);
+        }
+        g_free(text);
+        g_object_unref(gen);
+    }
+    json_node_unref(work);
+    g_object_unref(parser);
+    g_free(path);
+}
+
+/* Schéma de l'outil cdb_bash (canal natif). */
+static void
+tools_schema_cdb_bash(JsonBuilder *builder)
+{
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "function");
+    json_builder_set_member_name(builder, "function");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "name");
+    json_builder_add_string_value(builder, "cdb_bash");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(
+        builder,
+        "Exécute une commande shell dans un terminal CDB. La commande est "
+        "soumise à l'approbation d'Éric avant exécution.");
+    json_builder_set_member_name(builder, "parameters");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "object");
+    json_builder_set_member_name(builder, "properties");
+    json_builder_begin_object(builder);
+
+    json_builder_set_member_name(builder, "terminal");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "integer");
+    json_builder_set_member_name(builder, "minimum");
+    json_builder_add_int_value(builder, 0);
+    json_builder_set_member_name(builder, "maximum");
+    json_builder_add_int_value(builder, 9);
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(
+        builder, "Numéro du terminal CDB (0 à 9).");
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "command");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(
+        builder, "Commande shell complète à exécuter.");
+    json_builder_end_object(builder);
+
+    json_builder_end_object(builder);
+    json_builder_set_member_name(builder, "required");
+    json_builder_begin_array(builder);
+    json_builder_add_string_value(builder, "terminal");
+    json_builder_add_string_value(builder, "command");
+    json_builder_end_array(builder);
+    json_builder_end_object(builder);
+    json_builder_end_object(builder);
+    json_builder_end_object(builder);
+}
+
 char *
 llm_body_build(LlmTile *t)
 {
     JsonBuilder *builder;
     JsonNode    *root_node;
     char        *out;
+    char        *base_persona;
+    char        *persona;
+
+    static const char tools_policy[] =
+        "\n\n# Outil CDB : cdb_bash\n\n"
+        "Le protocole textuel /CDB:: est supprimé et interdit. "
+        "Utilise exclusivement l'outil natif cdb_bash pour agir sur un "
+        "terminal. Un résultat tool avec content:null signifie qu'il n'y a "
+        "aucun contenu nouveau par rapport aux résultats précédents du même "
+        "terminal.\n";
 
     builder = json_builder_new();
     json_builder_begin_object(builder);
+
     json_builder_set_member_name(builder, "model");
     json_builder_add_string_value(builder, t->cfg->model);
     json_builder_set_member_name(builder, "stream");
@@ -2186,73 +2790,169 @@ llm_body_build(LlmTile *t)
     json_builder_set_member_name(builder, "include_usage");
     json_builder_add_boolean_value(builder, TRUE);
     json_builder_end_object(builder);
-    json_builder_set_member_name(builder, "messages");
-    json_builder_begin_array(builder);
 
-    /* [0] Persona CDB (projet courant résolu à CHAQUE envoi). */
+    /* Canal tools natif : piloté par les préfs persistées. Zéro outil
+     * activé -> aucun membre tools/tool_choice ni policy persona,
+     * pour rester compatible avec les providers qui refusent tools. */
     {
-        char *persona = llm_persona_load(t);
+        GPtrArray *prefs = llm_tools_prefs_load();
+        guint      n_enabled = 0;
 
-        json_builder_begin_object(builder);
-        json_builder_set_member_name(builder, "role");
-        json_builder_add_string_value(builder, "system");
-        json_builder_set_member_name(builder, "content");
-        json_builder_add_string_value(builder, persona);
-        json_builder_end_object(builder);
-        g_free(persona);
+        for (guint i = 0; i < prefs->len; i++)
+            if (g_ptr_array_index(prefs, i) != NULL &&
+                ((LlmToolPref *)g_ptr_array_index(prefs, i))->enabled)
+                n_enabled++;
+
+        if (n_enabled > 0) {
+            json_builder_set_member_name(builder, "tools");
+            json_builder_begin_array(builder);
+            for (guint i = 0; i < prefs->len; i++) {
+                LlmToolPref *p =
+                    g_ptr_array_index(prefs, i);
+
+                if (p != NULL && p->enabled &&
+                    g_strcmp0(p->name, "cdb_bash") == 0)
+                    tools_schema_cdb_bash(builder);
+                /* futurs outils : autres schémas ici */
+            }
+            json_builder_end_array(builder);
+
+            json_builder_set_member_name(builder, "tool_choice");
+            json_builder_add_string_value(builder, "auto");
+
+            json_builder_set_member_name(builder, "messages");
+            json_builder_begin_array(builder);
+
+            /* Persona utilisateur + politique du canal tools. */
+            base_persona = llm_persona_drop_legacy_shell_protocol(
+                llm_persona_load(t));
+            persona = g_strconcat(base_persona != NULL
+                                      ? base_persona : "",
+                                  tools_policy, NULL);
+            g_free(base_persona);
+
+            json_builder_begin_object(builder);
+            json_builder_set_member_name(builder, "role");
+            json_builder_add_string_value(builder, "system");
+            json_builder_set_member_name(builder, "content");
+            json_builder_add_string_value(builder, persona);
+            json_builder_end_object(builder);
+            g_free(persona);
+        } else {
+            json_builder_set_member_name(builder, "messages");
+            json_builder_begin_array(builder);
+
+            base_persona = llm_persona_drop_legacy_shell_protocol(
+                llm_persona_load(t));
+
+            json_builder_begin_object(builder);
+            json_builder_set_member_name(builder, "role");
+            json_builder_add_string_value(builder, "system");
+            json_builder_set_member_name(builder, "content");
+            json_builder_add_string_value(builder, base_persona);
+            json_builder_end_object(builder);
+            g_free(base_persona);
+        }
+        llm_tools_prefs_free(prefs);
     }
 
-    /* Le fil des trois acteurs. */
     for (guint i = 0; i < t->core->history->len; i++) {
-        LlmMsg     *m = &g_array_index(t->core->history, LlmMsg, i);
-        const char *wire = llm_msg_wire_role(m->actor);
+        LlmMsg *m = &g_array_index(t->core->history, LlmMsg, i);
 
         if (m->local)
             continue;
+
         json_builder_begin_object(builder);
-        json_builder_set_member_name(builder, "role");
-        json_builder_add_string_value(builder, wire);
-        if (m->actor == LLMACTOR_CDB) {
-            char *framed = g_strdup_printf("[CDB] %s", m->content);
 
+        if (m->kind == LLM_MSG_TOOL_RESULT) {
+            json_builder_set_member_name(builder, "role");
+            json_builder_add_string_value(builder, "tool");
+            json_builder_set_member_name(builder, "tool_call_id");
+            json_builder_add_string_value(builder, m->tool_call_id);
             json_builder_set_member_name(builder, "content");
-            json_builder_add_string_value(builder, framed);
-            g_free(framed);
-        } else if (m->actor == LLMACTOR_USER &&
-                   m->images != NULL && m->images->len > 0) {
-            json_builder_set_member_name(builder, "content");
-            json_builder_begin_array(builder);
-
-            if (m->content != NULL && m->content[0] != '\0') {
-                json_builder_begin_object(builder);
-                json_builder_set_member_name(builder, "type");
-                json_builder_add_string_value(builder, "text");
-                json_builder_set_member_name(builder, "text");
+            if (m->content != NULL)
                 json_builder_add_string_value(builder, m->content);
-                json_builder_end_object(builder);
-            }
+            else
+                json_builder_add_null_value(builder);
+        } else if (m->kind == LLM_MSG_ASSISTANT_TOOL_CALLS) {
+            json_builder_set_member_name(builder, "role");
+            json_builder_add_string_value(builder, "assistant");
+            json_builder_set_member_name(builder, "content");
+            if (m->content != NULL && m->content[0] != '\0')
+                json_builder_add_string_value(builder, m->content);
+            else
+                json_builder_add_null_value(builder);
 
-            for (guint j = 0; j < m->images->len; j++) {
-                const char *url = g_ptr_array_index(m->images, j);
+            json_builder_set_member_name(builder, "tool_calls");
+            json_builder_begin_array(builder);
+            for (guint k = 0; k < m->tool_calls->len; k++) {
+                LlmToolCall *tc = g_ptr_array_index(m->tool_calls, k);
 
                 json_builder_begin_object(builder);
+                json_builder_set_member_name(builder, "id");
+                json_builder_add_string_value(builder, tc->id);
                 json_builder_set_member_name(builder, "type");
-                json_builder_add_string_value(builder, "image_url");
-                json_builder_set_member_name(builder, "image_url");
+                json_builder_add_string_value(builder, "function");
+                json_builder_set_member_name(builder, "function");
                 json_builder_begin_object(builder);
-                json_builder_set_member_name(builder, "url");
-                json_builder_add_string_value(builder, url);
+                json_builder_set_member_name(builder, "name");
+                json_builder_add_string_value(builder, tc->name);
+                json_builder_set_member_name(builder, "arguments");
+                json_builder_add_string_value(builder, tc->arguments_json);
                 json_builder_end_object(builder);
                 json_builder_end_object(builder);
             }
-
             json_builder_end_array(builder);
         } else {
-            json_builder_set_member_name(builder, "content");
-            json_builder_add_string_value(builder, m->content);
+            const char *wire = llm_msg_wire_role(m->actor);
+
+            json_builder_set_member_name(builder, "role");
+            json_builder_add_string_value(builder, wire);
+
+            if (m->actor == LLMACTOR_CDB) {
+                char *framed = g_strdup_printf("[CDB] %s", m->content);
+
+                json_builder_set_member_name(builder, "content");
+                json_builder_add_string_value(builder, framed);
+                g_free(framed);
+            } else if (m->actor == LLMACTOR_USER &&
+                       m->images != NULL && m->images->len > 0) {
+                json_builder_set_member_name(builder, "content");
+                json_builder_begin_array(builder);
+
+                if (m->content != NULL && m->content[0] != '\0') {
+                    json_builder_begin_object(builder);
+                    json_builder_set_member_name(builder, "type");
+                    json_builder_add_string_value(builder, "text");
+                    json_builder_set_member_name(builder, "text");
+                    json_builder_add_string_value(builder, m->content);
+                    json_builder_end_object(builder);
+                }
+
+                for (guint j = 0; j < m->images->len; j++) {
+                    const char *url = g_ptr_array_index(m->images, j);
+
+                    json_builder_begin_object(builder);
+                    json_builder_set_member_name(builder, "type");
+                    json_builder_add_string_value(builder, "image_url");
+                    json_builder_set_member_name(builder, "image_url");
+                    json_builder_begin_object(builder);
+                    json_builder_set_member_name(builder, "url");
+                    json_builder_add_string_value(builder, url);
+                    json_builder_end_object(builder);
+                    json_builder_end_object(builder);
+                }
+
+                json_builder_end_array(builder);
+            } else {
+                json_builder_set_member_name(builder, "content");
+                json_builder_add_string_value(builder, m->content);
+            }
         }
+
         json_builder_end_object(builder);
     }
+
     json_builder_end_array(builder);
     json_builder_end_object(builder);
     root_node = json_builder_get_root(builder);
@@ -2272,6 +2972,7 @@ llm_body_build(LlmTile *t)
 void
 llm_core_turn_new(LlmCore *c)
 {
+    llm_core_clear_pending_tools(c);
     g_string_truncate(c->reply, 0);
     c->in_reasoning = FALSE;
     c->stop_requested = FALSE;
@@ -2325,11 +3026,11 @@ llm_history_wipe(LlmTile *t)
     for (guint i = 0; i < t->core->history->len; i++) {
         LlmMsg *m = &g_array_index(t->core->history, LlmMsg, i);
 
-        g_free(m->content);
-        if (m->images != NULL)
-            g_ptr_array_unref(m->images);
+        llm_msg_clear(m);
     }
     g_array_set_size(t->core->history, 0);
+    if (t->core->answered_tools != NULL)
+        g_hash_table_remove_all(t->core->answered_tools);
     llm_live_wipe();
 }
 
@@ -2341,6 +3042,7 @@ llm_queues_purge(LlmTile *t)
         for (GList *l = t->core->cmd_queue->head; l != NULL; l = l->next) {
             CdbCmdSpec *s = l->data;
 
+            g_free(s->tool_call_id);
             g_free(s->cmd);
             g_free(s);
         }
@@ -2351,7 +3053,9 @@ llm_queues_purge(LlmTile *t)
         for (GList *l = t->core->cdb_results->head; l != NULL; l = l->next) {
             CdbResult *r = l->data;
 
+            g_free(r->tool_call_id);
             g_free(r->label);
+            g_free(r->raw_text);
             g_free(r->text);
             g_free(r);
         }
@@ -2376,6 +3080,8 @@ llm_core_new(LlmConfig *cfg, GListStore *roots,
     c->reply = g_string_new(NULL);
     c->history = g_array_new(FALSE, FALSE, sizeof(LlmMsg));
     c->views = g_ptr_array_new();
+    c->answered_tools = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                              g_free, NULL);
     return c;
 }
 
@@ -2387,6 +3093,7 @@ llm_core_free(LlmCore *c)
     if (c == NULL)
         return;
     llm_live_save(c);
+    llm_core_clear_pending_tools(c);
     if (c->cur_req != NULL)
         llm_request_free(c->cur_req);
     if (c->cancel != NULL)
@@ -2399,9 +3106,7 @@ llm_core_free(LlmCore *c)
         for (i = 0; i < c->history->len; i++) {
             LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
 
-            g_free(m->content);
-            if (m->images != NULL)
-                g_ptr_array_unref(m->images);
+            llm_msg_clear(m);
         }
         g_array_free(c->history, TRUE);
     }
@@ -2409,6 +3114,7 @@ llm_core_free(LlmCore *c)
         for (GList *l = c->cmd_queue->head; l != NULL; l = l->next) {
             CdbCmdSpec *s = l->data;
 
+            g_free(s->tool_call_id);
             g_free(s->cmd);
             g_free(s);
         }
@@ -2418,12 +3124,16 @@ llm_core_free(LlmCore *c)
         for (GList *l = c->cdb_results->head; l != NULL; l = l->next) {
             CdbResult *r = l->data;
 
+            g_free(r->tool_call_id);
             g_free(r->label);
+            g_free(r->raw_text);
             g_free(r->text);
             g_free(r);
         }
         g_queue_free(c->cdb_results);
     }
+    if (c->answered_tools != NULL)
+        g_hash_table_unref(c->answered_tools);
     if (c->views != NULL)
         g_ptr_array_unref(c->views);
     g_free(c);
