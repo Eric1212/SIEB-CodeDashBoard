@@ -1,7 +1,7 @@
 # Plan i18n — CodeDashBoard (CDB)
 
-**Statut** : plan validé, cleanup `/CDB::` confirmé en préalable.
-**Date** : 2025-08-27 (rév. 2 — intègre cleanup préalable et prompts i18n).
+**Statut** : phase 0 (cleanup) terminée ; **prochaine étape : Jalon A**.
+**Date** : 2025-08-27 (rév. 3 — cleanup `/CDB::` livré).
 **Décideur** : Éric Boucher.
 
 ---
@@ -37,36 +37,28 @@ français).
 
 ---
 
-## 3. Phase 0 — Cleanup `/CDB::` (PRÉALABLE au Jalon A)
+## 3. Phase 0 — Cleanup `/CDB::` : ✅ TERMINÉE
 
-**Contexte** : `/CDB::` est un ancien protocole textuel, remplacé par les
-`tool_calls` JSON natifs. Le code conserve une couche de compatibilité qui
-parse encore la syntaxe textuelle, alors que les prompts indiquent déjà au
-modèle que « le protocole /CDB:: est supprimé et interdit ».
+L'ancien protocole textuel `/CDB::` (prédécesseur des `tool_calls` JSON) a
+été **entièrement retiré** — commit `c00d8c5`. Seuls subsistaient des
+résidus ; le parsing texte n'existait déjà plus.
 
-**Décision** : supprimer **complètement** `/CDB::` — le modèle n'utilisera
-plus que les `tool_calls` JSON. **Confirmé par Éric.**
+- Suppression des fonctions de migration de personas (code mort, 118 lignes).
+- Retrait de `cdb_retries` et `CDB_RETRY_MAX` (jamais lus).
+- Nettoyage des prompts (persona + `tools_policy`) : plus aucune mention
+  du protocole fantôme.
+- Réécriture des 16 commentaires obsolètes ; MAJ `CLAUDE.md`.
+- **Conservé** (machinerie `tool_calls` active) : `CdbCmdSpec`, `CdbResult`,
+  `CdbDecision`, `CdbPoll`, `cdb_next_step`, `cmd_queue`, `cdb_results`,
+  `tools_schema_cdb_*`, `cdb_tool_*`.
 
-**Motivation** : simplicité, sécurité (un seul chemin d'appel), clarté.
-Le gain RAM est négligeable (~10–20 Ko) ; ce n'est pas l'objectif.
-
-**Travaux** :
-- Retirer le parsing textuel `/CDB::` (`g_str_has_prefix`, etc.).
-- Retirer les messages d'interdiction devenus inutiles dans les prompts.
-- Retirer les structures dédiées (`cmd_queue`, `cdb_results`, etc.) si
-  elles ne servent plus que pour ça.
-- Nettoyer les commentaires obsolètes.
-- **Mettre à jour `CLAUDE.md`** : la section « Architecture LLM » décrit
-  encore la boucle `/CDB::` comme active.
-
-**Livrable** : commit dédié, application compilante et fonctionnelle avec
-`tool_calls` uniquement. **Validation avant de démarrer le Jalon A.**
+Validé : 0 warning, `make test` 17/17.
 
 ---
 
-## 4. Découpage en jalons i18n (chaque jalon compile, tourne, est validable)
+## 4. Jalons i18n (chaque jalon compile, tourne, est validable)
 
-### Jalon A — Infrastructure gettext
+### Jalon A — Infrastructure gettext ← PROCHAIN
 - `src/i18n.h` : wrapper définissant `GETTEXT_PACKAGE` (`"cdb"`), `LOCALEDIR`,
   inclusion de `<glib/gi18n.h>`, macros `_()`, `N_()`, `ngettext()`.
 - `src/main.c` : `setlocale` + `bindtextdomain` + `textdomain` en tout début
@@ -99,7 +91,7 @@ Marquage, slots inclus. Refactor du hack `"%d tour%s"` en vrai
 `ngettext("turn", "turns", n)`.
 
 ### Jalon F — `llmcore.c` (~36 chaînes UI + prompts système)
-Tri entre chaînes UI/prompts (à marquer) et clés JSON/protocole (à exclure).
+Tri entre chaînes UI/prompts (à marquer) et clés JSON (à exclure).
 **Simplifié par la phase 0** : plus de tri `/CDB::` à faire.
 
 ### Jalon G — Garde-fous et sélecteur
@@ -137,6 +129,6 @@ LANG=en_US.UTF-8 ./cdb   # force l'anglais
 
 ---
 
-*Plan établi conjointement avec Claude (2025-08-27). Rév. 2 : ajout de la
-phase 0 (cleanup `/CDB::`) et intégration des prompts LLM au périmètre i18n.
-Toute modification passe par une révision de ce document.*
+*Plan établi conjointement avec Claude (2025-08-27). Rév. 3 : phase 0
+(cleanup `/CDB::`) livrée. Toute modification passe par une révision de ce
+document.*
