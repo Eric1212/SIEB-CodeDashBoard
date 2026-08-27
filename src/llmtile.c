@@ -2346,9 +2346,13 @@ llm_tile_decision_render(LlmTile *t)
 
     d = c->decision;
     {
-        gchar *cmd_line = g_strdup_printf("bash-%d $ %s\n",
-                                          d->tab, d->cmd != NULL
-                                              ? d->cmd : "(cmd NULL)");
+        /* La tuile ne connait le nom d'aucun outil : le core a deja
+         * redige le resume lisible dans la spec. */
+        gchar *cmd_line = g_strdup_printf("%s\n",
+                                          (d->spec != NULL &&
+                                           d->spec->summary != NULL)
+                                              ? d->spec->summary
+                                              : "(action CDB)");
 
         hist_render_actor_header(t, LLMACTOR_CDB);
         hist_ensure_voice_tags(t);

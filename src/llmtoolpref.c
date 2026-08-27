@@ -90,6 +90,7 @@ llm_tools_prefs_load(void)
     JsonParser *parser = json_parser_new();
     gboolean    have_bash = FALSE;
     gboolean    have_read = FALSE;
+    gboolean    have_insert = FALSE;
 
     if (json_parser_load_from_file(parser, path, NULL) &&
         json_parser_get_root(parser) != NULL &&
@@ -138,6 +139,8 @@ llm_tools_prefs_load(void)
                     have_bash = TRUE;
                 if (g_strcmp0(p->name, "cdb_read") == 0)
                     have_read = TRUE;
+                if (g_strcmp0(p->name, "cdb_insert") == 0)
+                    have_insert = TRUE;
                 g_ptr_array_add(out, p);
             }
         }
@@ -156,6 +159,15 @@ llm_tools_prefs_load(void)
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
         p->name = g_strdup("cdb_read");
+        tool_pref_apply_defaults(p);
+        g_ptr_array_add(out, p);
+    }
+    /* Sans ce bloc, un outil jamais vu retombe dans llm_tool_pref_mode
+     * sur NULL -> OFF : il ne serait jamais annonce au modele. */
+    if (!have_insert) {
+        LlmToolPref *p = g_new0(LlmToolPref, 1);
+
+        p->name = g_strdup("cdb_insert");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }

@@ -255,6 +255,10 @@ typedef struct LlmRequest LlmRequest;
 
 typedef struct LlmTile LlmTile;
 
+/* Entrée de la file agentique. Définie plus bas (avec CdbResult) mais
+ * anticipée ici : une décision en possède une et la libère. */
+struct CdbCmdSpec;
+
 /* Décision d'approbation /CDB:: : état au CORE, rendu par les vues.
  * Une seule instance active à la fois (tête de la file agentique). */
 typedef enum {
@@ -263,11 +267,11 @@ typedef enum {
     CDB_A_REFUSED
 } CdbApprovalState;
 
+/* La décision ne copie plus rien : elle POSSÈDE la spec. Un seul
+ * libérateur (cdb_decision_free) et aucun champ oubliable. */
 typedef struct {
-    char            *tool_call_id;
-    int              tab;
-    char            *cmd;
-    CdbApprovalState state;
+    struct CdbCmdSpec *spec;
+    CdbApprovalState   state;
 } CdbDecision;
 
 /* État conversationnel PARTAGÉ : possède le réseau et la conversation,
@@ -368,11 +372,27 @@ typedef struct {
     gboolean shown;      /* déjà affiché localement (refus/erreur immédiat) */
 } CdbResult;
 
-/* Spécification d'une commande /CDB:: parsée. */
-typedef struct {
+/* Ce que la file agentique sait exécuter. */
+typedef enum {
+    CDB_SPEC_BASH = 0,
+    CDB_SPEC_READ,
+    CDB_SPEC_INSERT
+} CdbSpecKind;
+
+/* Spécification d'un appel d'outil natif en file d'attente.
+ *   bash    : tab + cmd.
+ *   fichiers: args_json, re-parse a l'EXECUTION — c'est ce qui garantit
+ *             que l'etat du disque est verifie au moment d'ecrire, et non
+ *             au moment de demander (l'approbation peut attendre).
+ * summary   : ligne rendue telle quelle par la barre d'approbation. La
+ *             tuile ne connait le nom d'aucun outil : le core decide. */
+typedef struct CdbCmdSpec {
     char        *tool_call_id;
+    CdbSpecKind  kind;
     int          tab;
     char        *cmd;
+    char        *args_json;
+    char        *summary;
     LlmToolMode  mode;  /* ASK / ALLOW / ALLOWPLUS au moment du dispatch */
 } CdbCmdSpec;
 
