@@ -1,0 +1,19 @@
+# Liste des fichiers sources scannés par xgettext (chemins relatifs à po/).
+# Régénérée/manuellement tenue : tout .c contenant des chaînes à traduire.
+../src/bashpanel.c
+../src/css.c
+../src/diffbar.c
+../src/dirty.c
+../src/fslist.c
+../src/ibox.c
+../src/layout.c
+../src/llmcore.c
+../src/llmlive.c
+../src/llmslots.c
+../src/llmtile.c
+../src/llmtoolpref.c
+../src/main.c
+../src/mdview.c
+../src/modal.c
+../src/roots.c
+../src/session.c

@@ -32,6 +32,8 @@ extern char **environ;
 #include "llmlive.h"
 #include "llm.h"
 #include "layout.h"
+#include "layout.h"
+#include "i18n.h"
 
 /* Un fichier ouvert garde son propre buffer (l'historique undo survit à la
  * navigation) et son propre baseline « propre ». */
@@ -5089,6 +5091,10 @@ main(int argc, char **argv)
     App            *app;
     int             status;
 
+
+    /* Traduction gettext avant toute création de widget : les chaînes UI
+     * sont résolues à leur création, jamais re-traduites ensuite. */
+    i18n_init();
     app = g_new0(App, 1);
     app->sel_anchor = GTK_INVALID_LIST_POSITION;
     app->multi_paths = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);

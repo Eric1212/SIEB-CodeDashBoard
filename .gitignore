@@ -13,3 +13,7 @@ tests/agent_state
 .idea/
 *.swp
 *~
+
+# Traductions compilées (générées par make mo)
+*.mo
+po/locale/

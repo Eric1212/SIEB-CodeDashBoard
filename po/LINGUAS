@@ -1,0 +1,4 @@
+# Langues prises en charge (une par ligne, code ISO 639).
+# Le msgid source est l'anglais (pivot) ; fr restitue l'état actuel.
+fr
+en

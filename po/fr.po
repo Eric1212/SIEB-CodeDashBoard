@@ -1,0 +1,16 @@
+# CodeDashBoard translation template.
+# Copyright (C) 2025 SIEB.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: cdb 0.1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-08-27 00:00+0000\n"
+"PO-Revision-Date: 2025-08-27 00:00+0000\n"
+"Last-Translator: Automatically generated\n"
+"Language-Team: none\n"
+"Language: fr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"

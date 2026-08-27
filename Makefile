@@ -8,7 +8,7 @@ PKGS    := gtk4 gtksourceview-5 libadwaita-1 json-glib-1.0 vte-2.91-gtk4 libsoup
 CFLAGS  += $(shell pkg-config --cflags $(PKGS))
 LIBS    := $(shell pkg-config --libs $(PKGS))
 
-SRC     := src/main.c src/css.c src/roots.c src/fslist.c src/dirty.c src/diffbar.c src/bashpanel.c src/modal.c src/session.c src/llmcore.c src/llmtile.c src/mdview.c src/layout.c src/llmslots.c src/llmlive.c src/llmtoolpref.c src/ibox.c
+SRC     := src/main.c src/css.c src/roots.c src/fslist.c src/dirty.c src/diffbar.c src/bashpanel.c src/modal.c src/session.c src/llmcore.c src/llmtile.c src/mdview.c src/layout.c src/llmslots.c src/llmlive.c src/llmtoolpref.c src/ibox.c src/i18n.c
 OBJ     := $(SRC:.c=.o)
 DEP     := $(OBJ:.o=.d)
 TARGET  := cdb
@@ -42,10 +42,86 @@ asan:
 	            LDFLAGS="-fsanitize=address,undefined" \
 	            LIBS="$(LIBS) -fsanitize=address,undefined"
 
+
+# --- Internationalisation (gettext) -------------------------------------
+# Langue source (msgid) = anglais. Catalogues compilés dans po/locale/,
+# chargés au runtime relativement au binaire (voir src/i18n.c) : `make run`
+# fonctionne sans rien installer. Détail : docs/I18N_PLAN.md.
+XGETTEXT := xgettext
+MSGFMT   := msgfmt
+MSGMERGE := msgmerge
+MSGINIT  := msginit
+PODIR    := po
+LOCALEDIR:= $(PODIR)/locale
+POT      := $(PODIR)/cdb.pot
+LANGS    := $(shell grep -v '^\#' $(PODIR)/LINGUAS 2>/dev/null)
+POS      := $(addprefix $(PODIR)/,$(addsuffix .po,$(LANGS)))
+MOS      := $(foreach l,$(LANGS),$(LOCALEDIR)/$(l)/LC_MESSAGES/cdb.mo)
+
+# Extraction : régénère le gabarit cdb.pot depuis les sources de POTFILES.in.
+# xgettext tourne depuis la RACINE : on convertit les chemins « ../src/x »
+# de POTFILES.in en « src/x » (sed), ce qui évite toute ambiguïté de -D.
+# GNU gettext >= 0.21 ne pose AUCUN fichier quand aucune chaîne n'est
+# marquée : on écrit alors un POT d'en-tête valide, pour que `make po` et
+# `make mo` restent démontrables avant le premier marquage.
+pot:
+	sed 's|^\.\./||' $(PODIR)/POTFILES.in | grep -v '^\#' | grep . > $(PODIR)/.potfiles
+	rm -f $(POT)
+	$(XGETTEXT) --from-code=UTF-8 --keyword=_ --keyword=N_:1,2 \
+	    --keyword=ngettext:1,2 --add-comments=TRANSLATORS \
+	    --package-name=cdb --package-version=0.1 \
+	    --copyright-holder="SIEB" \
+	    --files-from=$(PODIR)/.potfiles --output=$(POT)
+	rm -f $(PODIR)/.potfiles
+	@if [ ! -f $(POT) ]; then \
+	    echo "  XGETTEXT  aucune chaîne marquée : POT d'en-tête seul"; \
+	    printf '%s\n' \
+	        '# CodeDashBoard translation template.' \
+	        '# Copyright (C) 2025 SIEB.' \
+	        '#' \
+	        'msgid ""' \
+	        'msgstr ""' \
+	        '"Project-Id-Version: cdb 0.1\n"' \
+	        '"Report-Msgid-Bugs-To: \n"' \
+	        '"POT-Creation-Date: 2025-08-27 00:00+0000\n"' \
+	        '"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"' \
+	        '"Last-Translator: \n"' \
+	        '"Language-Team: \n"' \
+	        '"Language: \n"' \
+	        '"MIME-Version: 1.0\n"' \
+	        '"Content-Type: text/plain; charset=UTF-8\n"' \
+	        '"Content-Transfer-Encoding: 8bit\n"' > $(POT); \
+	fi
+
+
+# Initialisation d'un .po manquant, puis mise à jour depuis le .pot.
+po: pot
+	@for l in $(LANGS); do \
+	    if [ ! -f $(PODIR)/$$l.po ]; then \
+	        $(MSGINIT) --no-translator --locale=$$l \
+	            --input=$(POT) --output=$(PODIR)/$$l.po; \
+	    fi; \
+	    $(MSGMERGE) --update --backup=none $(PODIR)/$$l.po $(POT); \
+	done
+
+# Compilation des catalogues binaires (.mo) dans po/locale/<lang>/LC_MESSAGES/.
+mo: $(MOS)
+$(LOCALEDIR)/%/LC_MESSAGES/cdb.mo: $(PODIR)/%.po
+	@mkdir -p $(dir $@)
+	$(MSGFMT) --check --statistics --output=$@ $<
+
+# Garde-fou : vérifie que chaque .po est syntaxiquement valide.
+i18n-check:
+	@for f in $(POS); do \
+	    [ -f "$$f" ] && $(MSGFMT) --check --output=/dev/null $$f \
+	        && echo "ok  $$f"; \
+	done; true
+
 clean:
 	rm -f $(OBJ) $(DEP) $(TARGET) $(TEST_OBJ) $(TEST_OBJ:.o=.d) tests/agent_state
+	rm -rf $(LOCALEDIR)
 
 # Dépendances de headers générées par -MMD (ignorées si absentes).
 -include $(DEP)
 
-.PHONY: all run test asan clean
+.PHONY: all run test asan clean pot po mo i18n-check
