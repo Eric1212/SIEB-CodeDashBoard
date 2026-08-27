@@ -84,9 +84,25 @@ dirty_store_new(void)
                 else
                     baseline = content;
 
-                if (path != NULL && content != NULL)
-                    g_hash_table_insert(ds->store, g_strdup(path),
-                                        dirty_entry_new(content, baseline));
+                /* Règle : un dirty dont le fichier a disparu n'est
+                 * atteignable par personne — il n'y a plus de ligne à
+                 * cliquer dans l'explorateur — et il allume un ● sans
+                 * chemin sur tous ses ancêtres. Le garder ne protège rien
+                 * de récupérable ; c'est même ce qui permet, si le chemin
+                 * réapparaît un jour (git checkout, fichier recréé sous le
+                 * même nom), à load_file de restaurer ce contenu périmé
+                 * par-dessus le disque, sans un mot. On l'abandonne donc
+                 * ici, et on le dit : c'est du travail jeté, il ne doit
+                 * pas disparaître en silence. */
+                if (path == NULL || content == NULL)
+                    continue;
+                if (!g_file_test(path, G_FILE_TEST_IS_REGULAR)) {
+                    g_printerr("CDB: dirty abandonné, fichier absent : %s\n",
+                               path);
+                    continue;
+                }
+                g_hash_table_insert(ds->store, g_strdup(path),
+                                    dirty_entry_new(content, baseline));
             }
         }
     }
