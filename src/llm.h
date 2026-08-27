@@ -306,9 +306,16 @@ typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     LlmCore      *core;      /* état partagé (possédé par App) */
     GtkWidget   *view;      /* historique (GtkTextView, non éditable) */
     CdbDecision *shown_decision; /* décision actuellement rendue */
-    GtkWidget   *approval_bar;  /* rangée de boutons (ou NULL) */
-    GtkWidget   *approval_ok;
-    GtkWidget   *approval_no;
+    /* BOÎTES INTERACTIVES de CETTE vue : tool_call_id → boîte encore
+     * ouverte. Une TABLE, et non un slot unique, parce qu'un même tour
+     * peut aligner plusieurs demandes — surtout maintenant qu'un outil en
+     * ALLOW produit lui aussi sa boîte (allow = demande acceptée
+     * d'avance, pas absence de demande). Les valeurs sont EMPRUNTÉES au
+     * TextView : la boîte meurt avec le fil et son signal « destroy » la
+     * retire d'ici. Une boîte y reste même après avoir reçu son résultat,
+     * pour pouvoir encore être colorée (le chemin d'annulation livre
+     * avant de résoudre). */
+    GHashTable  *iboxes;
     GtkTextBuffer *hist;    /* buffer de l'historique */
     GtkWidget   *entry;     /* saisie multi-lignes (GtkTextView) */
     GtkTextBuffer *entry_buf; /* buffer de la saisie */

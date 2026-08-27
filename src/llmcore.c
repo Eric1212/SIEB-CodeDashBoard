@@ -1313,8 +1313,17 @@ core_tool_result_commit(LlmCore *c, const char *tool_call_id,
     if (!display)
         return;
     shown = content != NULL ? content : "〔tool〕 aucun contenu nouveau";
-    for (guint vi = 0; vi < c->views->len; vi++)
-        llm_cdb_say_display(g_ptr_array_index(c->views, vi), shown);
+    for (guint vi = 0; vi < c->views->len; vi++) {
+        LlmTile *v = g_ptr_array_index(c->views, vi);
+
+        /* Vue par vue, pas globalement : une boîte qui attend CET
+         * appel-là l'avale (sinon le même texte paraitrait deux fois —
+         * une fois dans la boîte, une fois au fil). Les vues qui n'ont
+         * pas la boîte — attachées après la décision, ou résultat d'un
+         * outil ALLOW qui n'en a jamais eu — reçoivent le texte normal. */
+        if (!llm_tile_box_result(v, tool_call_id, shown))
+            llm_cdb_say_display(v, shown);
+    }
 }
 
 static void
@@ -2852,12 +2861,24 @@ llm_cancel_current(LlmTile *t)
         c->cdb_results = NULL;
     }
 
-    /* 3. Décision en attente : réponse formelle puis verrouillage UI. */
+    /* 3. Décision en attente : réponse formelle, puis boîte verrouillée.
+     * Ordre important : on LIVRE d'abord (la boîte encaisse le texte dans
+     * sa zone output), on colore ensuite — resolve() n'a donc pas encore
+     * perdu sa cible. Une annulation se rend en rouge : elle non plus
+     * n'a pas été exécutée. */
     if (c->decision != NULL) {
         core_tool_result_commit(c, c->decision->spec->tool_call_id,
                                 "Annulé par l'utilisateur.", TRUE);
+        /* Livrer d'abord, colorer ensuite : la boîte a donc déjà reçu son
+         * output quand resolve() la cherche. Elle doit par suite rester au
+         * registre de la vue après sa réponse (voir llm.h) — sinon cette
+         * annulation arriverait sur une boîte restée grise, sans
+         * explication. Une annulation se rend en rouge : elle non plus
+         * n'a été exécutée. */
         for (vi = 0; vi < c->views->len; vi++)
-            llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
+            llm_tile_decision_resolve(g_ptr_array_index(c->views, vi),
+                                      c->decision->spec->tool_call_id,
+                                      CDB_A_REFUSED);
         cdb_decision_free(c->decision);
         c->decision = NULL;
     }
@@ -3571,28 +3592,13 @@ llm_cdb_results_flush(LlmCore *c)
         llm_cdb_requery(g_ptr_array_index(c->views, 0));
 }
 
-/* Avance la file : commande suivante → approbation ; vide →
- * livraison des résultats pendants (dédupliqués), puis
- * re-interrogation du modèle. */
-static LlmCore *
-cdb_core_from_button(GtkButton *btn)
-{
-    for (GtkWidget *w = GTK_WIDGET(btn); w != NULL;
-         w = gtk_widget_get_parent(w)) {
-        LlmCore *c = g_object_get_data(G_OBJECT(w), "cdb-llm-core");
-
-        if (c != NULL)
-            return c;
-    }
-    return NULL;
-}
-
+/* Issue refusée : la boîte devient rouge dans toutes les vues, et la
+ * raison du refus EST la réponse livrée au modèle — elle va donc aussi se
+ * lire dans la zone output de la boîte. Un refus n'est pas un silence. */
 void
-on_cdb_refuse_clicked(GtkButton *btn, gpointer data)
+cdb_decision_refuse(LlmCore *c, CdbDecision *d)
 {
-    CdbDecision *d = data;
-    LlmCore     *c = cdb_core_from_button(btn);
-    const char  *note =
+    const char *note =
         "Éric a REFUSÉ cet appel d'outil. Ce n'est pas un bug : "
         "c'est une décision. Adapte-toi et propose autre chose.";
 
@@ -3600,7 +3606,11 @@ on_cdb_refuse_clicked(GtkButton *btn, gpointer data)
         return;
     d->state = CDB_A_REFUSED;
     for (guint vi = 0; vi < c->views->len; vi++)
-        llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
+        llm_tile_decision_resolve(g_ptr_array_index(c->views, vi),
+                                  d->spec->tool_call_id, CDB_A_REFUSED);
+    /* La note d'Éric entre dans la zone output de la boîte rouge : le
+     * refus aussi est une réponse, et elle doit rester lisible dans le
+     * fil, pas seulement reçue par le modèle. */
     core_tool_result_commit(c, d->spec->tool_call_id, note, TRUE);
     cdb_decision_free(d);
     c->decision = NULL;
@@ -3690,18 +3700,25 @@ cdb_run_spec(LlmCore *c, CdbCmdSpec *sp, gboolean allowplus)
     }
 }
 
+/* Issue d'une décision approuvée. Plus rien ne passe par un GtkButton :
+ * la boîte interactive d'une vue rapporte un choix, le core tranche l'état
+ * de la décision et rediffuse la couleur à TOUTES les vues (loi du
+ * miroir). La tuile, elle, ne connait toujours aucun outil. */
 void
-on_cdb_approve_clicked(GtkButton *btn, gpointer data)
+cdb_decision_approve(LlmCore *c, CdbDecision *d)
 {
-    CdbDecision *d = data;
-    LlmCore     *c = cdb_core_from_button(btn);
-    gboolean     is_bash;
+    gboolean is_bash;
 
     if (c == NULL || c->decision != d || d->state != CDB_A_PENDING)
         return;
     d->state = CDB_A_APPROVED;
+    /* L'ID est passé : une vue peut avoir plusieurs boîtes ouvertes, il
+     * faut dire laquelle verdit. Livrer AVANT de couleur serait possible
+     * (la boîte reste au registre), mais l'ordre lire→exécuter rend le fil
+     * plus honnête : la décision est marquée, puis l'action part. */
     for (guint vi = 0; vi < c->views->len; vi++)
-        llm_tile_decision_lock(g_ptr_array_index(c->views, vi));
+        llm_tile_decision_resolve(g_ptr_array_index(c->views, vi),
+                                  d->spec->tool_call_id, CDB_A_APPROVED);
 
     /* ASK approuvé = exécution sans effet « plus » (le reset n'a de sens
      * qu'en mode AllowPlus, décidé au dispatch, pas ici). */
@@ -3715,6 +3732,9 @@ on_cdb_approve_clicked(GtkButton *btn, gpointer data)
         llm_cdb_next(c);
 }
 
+/* Avance la file : commande suivante → approbation ; vide →
+ * livraison des résultats pendants (dédupliqués), puis
+ * re-interrogation du modèle. */
 void
 llm_cdb_next(LlmCore *c)
 {
@@ -3732,10 +3752,19 @@ llm_cdb_next(LlmCore *c)
         sp = g_queue_pop_head(c->cmd_queue);
         is_bash = (sp->kind == CDB_SPEC_BASH);
 
-        /* ALLOW / ALLOWPLUS : exécution directe, sans passer par Éric. */
+        /* ALLOW / ALLOWPLUS : demande ACCEPTEE D'AVANCE. Elle s'exécute
+         * sans attendre Éric, mais ce n'est pas une absence de demande :
+         * c'est une demande accordée d'avance, et elle reste une demande.
+         * Chaque vue la montre donc dans SA boîte — zone déjà verte,
+         * libellée « autorisé » (personne n'a cliqué : « exécuté » serait
+         * un mensonge) — et l'output y entrera par le même chemin que pour
+         * un ASK, sous le même tool_call_id. */
         if (sp->mode != LLM_TOOL_ASK) {
             gboolean allowplus = (sp->mode == LLM_TOOL_ALLOWPLUS);
 
+            for (guint vi = 0; vi < c->views->len; vi++)
+                llm_tile_box_auto(g_ptr_array_index(c->views, vi),
+                                  sp->summary, sp->tool_call_id, allowplus);
             cdb_run_spec(c, sp, allowplus);
             cdb_cmd_spec_free(sp);
             if (is_bash)

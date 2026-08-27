@@ -92,12 +92,6 @@ LlmTile *
 cdb_tile_from_button(GtkButton *btn);
 
 void
-on_cdb_refuse_clicked(GtkButton *btn, gpointer data);
-
-void
-on_cdb_approve_clicked(GtkButton *btn, gpointer data);
-
-void
 hist_cdb_say(LlmTile *t, const char *text);
 
 void
@@ -240,7 +234,26 @@ void llm_tile_decision_render(LlmTile *t);
 
 /* Étiquette/infobulle du bouton profil (refresh après changement). */
 void llm_tile_profile_refresh(LlmTile *t);
-void llm_tile_decision_lock(LlmTile *t);
+/* Résond la boîte portant CET ID à l'état de la décision (vert/rouge).
+ * Appelé sur TOUTES les vues par le core : la décision vit au core, chaque
+ * vue n'en possède que le rendu. L'ID est indispensable depuis qu'un tour
+ * peut laisser plusieurs boîtes ouvertes. Idempotent. */
+void llm_tile_decision_resolve(LlmTile *t, const char *tool_call_id,
+                               CdbApprovalState state);
+
+/* Ouvre la boîte d'une demande ACCEPTÉE D'AVANCE (outil en ALLOW ou
+ * ALLOW+). Le core l'appelle sur chaque vue avant d'exécuter : la demande
+ * ne passe pas par Éric, mais elle reste une demande et reste visible —
+ * zone verte, libellée « autorisé », jamais « exécuté ». L'output y
+ * arrivera ensuite par llm_tile_box_result, sous le même tool_call_id. */
+void llm_tile_box_auto(LlmTile *t, const char *summary,
+                       const char *tool_call_id, gboolean allowplus);
+
+/* Verse le résultat d'un outil dans la boîte qui l'attend. TRUE si la vue
+ * a absorbé le texte (ne pas l'écrire en clair) ; FALSE sinon (aucune
+ * boîte pour cet ID dans cette vue) → le core rend le texte au fil. */
+gboolean llm_tile_box_result(LlmTile *t, const char *tool_call_id,
+                             const char *text);
 void llm_cdb_say_display(LlmTile *t, const char *text);
 
 void llm_tile_turn_reset(LlmTile *t);

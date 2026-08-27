@@ -182,10 +182,13 @@ llm_core_new(LlmConfig *cfg, GListStore *roots,
 void
 llm_core_free(LlmCore *c);
 
-void
-on_cdb_approve_clicked(GtkButton *btn, gpointer data);
-void
-on_cdb_refuse_clicked(GtkButton *btn, gpointer data);
+/* Les deux issues d'une décision, sans vue ni GtkButton. La boîte
+ * interactive de la tuile ne fait que rapporter un choix ; le core
+ * tranche l'état, rediffuse la couleur à toutes les vues, répond au
+ * modèle et avance la file. C'est le SEUL chemin vers l'exécution d'un
+ * appel ASK approuvé — donc aucun bouton fantôme ne peut l'emprunter. */
+void cdb_decision_approve(LlmCore *c, CdbDecision *d);
+void cdb_decision_refuse(LlmCore *c, CdbDecision *d);
 
 void
 llm_core_turn_new(LlmCore *c);

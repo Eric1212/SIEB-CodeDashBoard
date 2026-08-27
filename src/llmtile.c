@@ -10,6 +10,7 @@
 #include "mdview.h"
 #include "bashpanel.h"
 #include "modal.h"
+#include "ibox.h"
 #include "llmslots.h"
 #include "roots.h"
 #include "llmlive.h"
@@ -51,6 +52,10 @@ llm_tile_free(gpointer data)
     /* Détachement : la vue se retire de la liste de diffusion. */
     if (t->core != NULL)
         g_ptr_array_remove_fast(t->core->views, t);
+    /* Les boîtes encore ouvertes meurent avec le TextView qui les
+     * héberge ; on ne garde que la table qui les recensait. Ses valeurs
+     * sont empruntées : g_hash_table_destroy ne libère pas les widgets. */
+    g_clear_pointer(&t->iboxes, g_hash_table_destroy);
 
     if (t->status_timeout_id != 0) {
         g_source_remove(t->status_timeout_id);
@@ -1926,6 +1931,52 @@ llm_tile_replay_history(LlmTile *t)
 }
 
 
+/* ----- largeur des boîtes interactives -------------------------------- */
+
+#define IBOX_W_NUM 9      /* 90 % de la largeur du fil */
+#define IBOX_W_DEN 10
+
+/* Un GtkTextView alloue l'enfant d'une ancre à sa taille NATURELLE, jamais
+ * à la largeur du viewport. Sans correction la boîte se réduit à la
+ * largeur de son texte et, celui-ci étant rendu sans re-wrap (comme un
+ * terminal), il se trouve coupé — constaté sur la capture d'Éric :
+ * « mer 26 août 20 ». On fixe donc les largeurs à la main :
+ *
+ *   le fourre-tout = 100 % de la vue (c'est lui que le TextView alloue)
+ *   la boîte       = 90 %, centrée dedans par halign = CENTER
+ *
+ * Toutes les boîtes encore vivantes sont dans t->iboxes (une boîte n'en
+ * sort qu'à sa destruction, jamais à son résultat) : un seul balayage les
+ * retaille donc toutes. */
+static void
+ibox_apply_width(LlmTile *t)
+{
+    gint           vw = gtk_widget_get_width(t->hist_view);
+    GHashTableIter it;
+    gpointer       box;
+
+    if (t == NULL || t->iboxes == NULL || vw <= 0)
+        return;     /* pas encore allouée : notify::width réglera tout */
+
+    g_hash_table_iter_init(&it, t->iboxes);
+    while (g_hash_table_iter_next(&it, NULL, &box)) {
+        GtkWidget *b    = GTK_WIDGET(box);
+        GtkWidget *wrap = gtk_widget_get_parent(b);
+
+        if (wrap != NULL)
+            gtk_widget_set_size_request(wrap, vw, -1);
+        gtk_widget_set_size_request(b, vw * IBOX_W_NUM / IBOX_W_DEN, -1);
+    }
+}
+
+/* Fenêtre redimensionnée, pièce réorganisée : les boîtes suivent. */
+static void
+on_tile_width_notify(GObject G_GNUC_UNUSED *obj,
+                     GParamSpec G_GNUC_UNUSED *pspec, gpointer data)
+{
+    ibox_apply_width((LlmTile *) data);
+}
+
 GtkWidget *
 llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
              GListStore *roots, GHashTable *multi_paths,
@@ -2322,6 +2373,15 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     /* Anti-hang : pas de données pendant 120 s = abandon. */
     g_object_set(t->core->soup, "timeout", 120, "idle-timeout", 180, NULL);
     t->pending_images = g_ptr_array_new_with_free_func(g_free);
+    /* tool_call_id → boîte ouverte. Clés copiées (g_free), valeurs
+     * empruntées au TextView (NULL) : voir llm.h. */
+    t->iboxes = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                      g_free, NULL);
+    /* Les boîtes vivent à 90 % de la largeur du fil : il faut donc les
+     * retaille quand la vue change de largeur. Le signal est porté par la
+     * vue elle-même, qui meurt avec la tuile — pas de handler orphelin. */
+    g_signal_connect(t->hist_view, "notify::width",
+                     G_CALLBACK(on_tile_width_notify), t);
     t->slot_origin = -1;
     g_object_set_data(G_OBJECT(box), "cdb-llm-core", core);
     g_object_set_data_full(G_OBJECT(box), "cdb-llm-tile", t, llm_tile_free);
@@ -2330,14 +2390,134 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
 
 /* ----- Décision /CDB:: : rendu par vue (l'état vit au core) ----- */
 
+/* ----- boîtes interactives : une par demande, ouverte ou déjà acceptée -- */
+
+/* La boîte vit dans le TextView. Si elle meurt avant la fin de sa vie
+ * (pièce fermée, re-rendu du layout), elle se retire elle-même du
+ * registre : un pointeur pendu n'y survit jamais. */
+static void
+on_box_destroyed(GtkWidget *w, gpointer data)
+{
+    LlmTile    *t  = data;
+    const char *id = g_object_get_data(G_OBJECT(w), "ibox-id");
+
+    if (t->iboxes != NULL && id != NULL)
+        g_hash_table_remove(t->iboxes, id);
+}
+
+/* Enregistre une boîte ouverte sous l'ID de l'appel qui la concerne.
+ * La VALEUR est empruntée au TextView (destroy = NULL) ; la CLE est une
+ * copie, libérée par la table. La boîte n'en sort qu'à sa destruction :
+ * elle peut donc recevoir sa couleur APRÈS son résultat — c'est l'ordre
+ * du chemin d'annulation. Un seul résultat par boîte est déjà garanti
+ * ailleurs, par `answered_tools` au core. */
+static void
+ibox_register(LlmTile *t, GtkWidget *box, const char *tool_call_id)
+{
+    if (t->iboxes == NULL || box == NULL || tool_call_id == NULL)
+        return;
+    g_object_set_data_full(G_OBJECT(box), "ibox-id",
+                           g_strdup(tool_call_id), g_free);
+    g_hash_table_replace(t->iboxes, g_strdup(tool_call_id), box);
+    g_signal_connect(box, "destroy", G_CALLBACK(on_box_destroyed), t);
+}
+
+/* Clic sur « Exécuter » ou « Refuser » dans la boîte d'UNE vue.
+ * La tuile ne connait aucun outil : elle rapporte un choix au core, qui
+ * tranche la décision et rediffuse l'état à toutes les vues. Le contexte
+ * est la TUILE, jamais la décision : un pointeur sur une décision déjà
+ * libérée ne peut donc pas être déréférencé ici. */
+static void
+on_box_choice(GtkWidget G_GNUC_UNUSED *box, IboxChoice choice,
+              gpointer data)
+{
+    LlmTile     *t = data;
+    LlmCore     *c = t->core;
+    CdbDecision *d;
+
+    if (c == NULL)
+        return;
+    d = c->decision;
+    if (d == NULL || d->state != CDB_A_PENDING)
+        return;
+    if (choice == IB_CHOICE_YES)
+        cdb_decision_approve(c, d);
+    else
+        cdb_decision_refuse(c, d);
+}
+
+/* Pose une boîte au bas du fil. Chemin COMMUN des deux sortes de demande :
+ *   auto = FALSE → demande A TRANCHER : zone grise, deux boutons.
+ *   auto = TRUE  → demande ACCEPTÉE D'AVANCE (outil en ALLOW / ALLOW+) :
+ *                  même boîte, zone déjà verte, libellée « autorisé ».
+ * Personne n'a cliqué ici — dire « exécuté » ferait croire une décision
+ * d'Éric qui n'a pas eu lieu. C'est la correction d'Éric : allow n'est
+ * pas une absence de demande, c'est une demande accordée d'avance, et
+ * elle reste une demande, donc elle reste VISIBLE. */
+static GtkWidget *
+box_open(LlmTile *t, const char *summary, const char *tool_call_id,
+         gboolean auto_allowed, gboolean allowplus)
+{
+    GtkTextIter         end;
+    GtkTextChildAnchor *anch;
+    GtkWidget          *box;
+    GtkWidget          *wrap;
+
+    /* La tuile ne connait le nom d'aucun outil : le core a déjà rédigé le
+     * résumé lisible dans la spec. Ce résumé n'est plus écrit en texte au
+     * fil — il DEVIENT la zone input de la boîte. */
+    hist_render_actor_header(t, LLMACTOR_CDB);
+    hist_ensure_voice_tags(t);
+
+    box = ibox_new();
+    ibox_set_input(box, summary != NULL ? summary : "(action CDB)");
+    if (auto_allowed) {
+        /* Même glyphe que « ✔ exécuté » : le ✚ tranchait avec le reste de
+         * l'échelle de décision (✔ / ✖). Le « + » final reste, lui — il
+         * marque l'effet propre d'ALLOW+ (reset du terminal), pas un état
+         * de la boîte. */
+        ibox_set_choice_label(box, allowplus ? "✔ autorisé +"
+                                             : "✔ autorisé");
+        /* animate = FALSE : rien ne se décide sous les yeux d'Éric, la
+         * barre nait déjà tranchée, verte à 100 %. */
+        ibox_set_choice(box, IB_CHOICE_YES, FALSE);
+        /* La décision est DÉJÀ tombée — c'est tout le sens d'un ALLOW. La
+         * boîte nait donc repliée sur sa zone verte, comme une demande
+         * que Éric aurait tranchée lui-même. Son output, livré après, ne
+         * la rouvrira pas (garde b->decided dans ibox). */
+        ibox_decided(box);
+    } else {
+        /* Demande A TRANCHER : elle reste dépliée, il faut pouvoir lire
+         * ce qu'on approuve. */
+        ibox_on_choice(box, on_box_choice, t);
+    }
+    ibox_register(t, box, tool_call_id);
+
+    /* Le TextView alloue le fourre-tout, pas la boîte : c'est lui qui
+     * reçoit les 100 % de la vue, et la boîte s'y centre à 90 %. Voir
+     * ibox_apply_width(). */
+    wrap = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(wrap), box);
+
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    anch = gtk_text_buffer_create_child_anchor(t->hist, &end);
+    gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(t->hist_view),
+                                      wrap, anch);
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    gtk_text_buffer_insert(t->hist, &end, "\n", -1);
+
+    /* Taille immédiate : une boîte posée ne doit pas attendre le prochain
+     * redimensionnement de la fenêtre pour prendre sa largeur. */
+    ibox_apply_width(t);
+    return box;
+}
+/* ASK : la décision en attente, rendue dans cette vue. */
 void
 llm_tile_decision_render(LlmTile *t)
 {
     LlmCore     *c = t->core;
     CdbDecision *d;
-    GtkTextIter  end;
-    GtkTextChildAnchor *anch;
-    GtkWidget   *hbar, *b_ok, *b_no;
 
     if (c == NULL || c->decision == NULL)
         return;
@@ -2345,60 +2525,72 @@ llm_tile_decision_render(LlmTile *t)
         return; /* déjà rendue dans cette vue */
 
     d = c->decision;
-    {
-        /* La tuile ne connait le nom d'aucun outil : le core a deja
-         * redige le resume lisible dans la spec. */
-        gchar *cmd_line = g_strdup_printf("%s\n",
-                                          (d->spec != NULL &&
-                                           d->spec->summary != NULL)
-                                              ? d->spec->summary
-                                              : "(action CDB)");
-
-        hist_render_actor_header(t, LLMACTOR_CDB);
-        hist_ensure_voice_tags(t);
-        gtk_text_buffer_get_end_iter(t->hist, &end);
-        gtk_text_buffer_insert_with_tags_by_name(t->hist, &end,
-                                                 cmd_line, -1,
-                                                 "voice-cdb", NULL);
-        g_free(cmd_line);
-    }
-
     t->shown_decision = d;
-
-    gtk_text_buffer_get_end_iter(t->hist, &end);
-    anch = gtk_text_buffer_create_child_anchor(t->hist, &end);
-
-    hbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    b_ok = gtk_button_new_with_label("Exécuter");
-    b_no = gtk_button_new_with_label("Refuser");
-    t->approval_bar = hbar;
-    t->approval_ok = b_ok;
-    t->approval_no = b_no;
-    gtk_widget_add_css_class(b_ok, "flat");
-    gtk_widget_add_css_class(b_no, "flat");
-    gtk_widget_set_focusable(b_ok, FALSE);
-    gtk_widget_set_focusable(b_no, FALSE);
-    g_object_set_data(G_OBJECT(b_ok), "decision", d);
-    g_object_set_data(G_OBJECT(b_no), "decision", d);
-    g_signal_connect(b_ok, "clicked",
-                     G_CALLBACK(on_cdb_approve_clicked), d);
-    g_signal_connect(b_no, "clicked",
-                     G_CALLBACK(on_cdb_refuse_clicked), d);
-    gtk_box_append(GTK_BOX(hbar), b_ok);
-    gtk_box_append(GTK_BOX(hbar), b_no);
-    gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(t->hist_view),
-                                      hbar, anch);
-    gtk_text_buffer_get_end_iter(t->hist, &end);
-    gtk_text_buffer_insert(t->hist, &end, "\n", -1);
+    box_open(t, (d->spec != NULL) ? d->spec->summary : NULL,
+             (d->spec != NULL) ? d->spec->tool_call_id : NULL,
+             FALSE, FALSE);
 }
 
+/* ALLOW / ALLOWPLUS : la demande acceptée d'avance. Appelée par le core
+ * sur chaque vue AVANT l'exécution — l'output y arrivera plus tard par
+ * llm_tile_box_result, sous le même tool_call_id, comme pour un ASK. */
 void
-llm_tile_decision_lock(LlmTile *t)
+llm_tile_box_auto(LlmTile *t, const char *summary,
+                  const char *tool_call_id, gboolean allowplus)
 {
-    if (t->approval_bar == NULL)
+    if (t == NULL)
         return;
-    gtk_widget_set_sensitive(t->approval_ok, FALSE);
-    gtk_widget_set_sensitive(t->approval_no, FALSE);
+    box_open(t, summary, tool_call_id, TRUE, allowplus);
+}
+
+/* Décision tranchée : la boîte de CETTE vue qui porte cet ID prend la
+ * couleur du verdict. L'appelant (le core) boucle sur ses vues : la
+ * décision vit au core, chaque vue n'en possède que le rendu. L'ID est
+ * nécessaire depuis qu'un tour peut aligner plusieurs boîtes ouvertes. */
+void
+llm_tile_decision_resolve(LlmTile *t, const char *tool_call_id,
+                          CdbApprovalState state)
+{
+    gpointer box;
+
+    if (t->iboxes == NULL || tool_call_id == NULL)
+        return;
+    if (!g_hash_table_lookup_extended(t->iboxes, tool_call_id,
+                                      NULL, &box))
+        return;
+    /* animate = TRUE : cette décision se prend à l'écran, la barre doit le
+     * montrer. La vue qui a reçu le clic a déjà tranché la sienne, donc
+     * ibox_set_choice y revient tôt et ne rejoue aucune animation. */
+    ibox_set_choice(GTK_WIDGET(box),
+                    state == CDB_A_APPROVED ? IB_CHOICE_YES
+                                            : IB_CHOICE_NO,
+                    TRUE);
+    /* Décision PRISE, vert ou rouge — la règle est la même pour les deux :
+     * la demande n'est plus l'actualité du fil, elle devient de
+     * l'historique. Elle se replie donc sur sa zone colorée, qui reste
+     * seule visible en entier. Éric garde la main : les chevrons du haut
+     * et du bas rouvrent input et output à volonté. */
+    ibox_decided(GTK_WIDGET(box));
+}
+
+/* Le résultat d'un appel d'outil rentre-t-il dans la boîte qui l'attend ?
+ * TRUE = cette vue l'a absorbé (le core ne doit pas l'écrire en clair une
+ * seconde fois) ; FALSE = pas de boîte pour cet ID ici (vue attachée après
+ * coup, ou résultat d'un appel jamais passé par la boîte) → texte au fil.
+ * La boîte RESTE au registre : elle peut encore être colorée. */
+gboolean
+llm_tile_box_result(LlmTile *t, const char *tool_call_id, const char *text)
+{
+    gpointer box;
+
+    if (t->iboxes == NULL || tool_call_id == NULL)
+        return FALSE;
+    if (!g_hash_table_lookup_extended(t->iboxes, tool_call_id,
+                                      NULL, &box))
+        return FALSE;
+
+    ibox_set_output(GTK_WIDGET(box), text != NULL ? text : "");
+    return TRUE;
 }
 
 void
