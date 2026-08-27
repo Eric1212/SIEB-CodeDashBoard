@@ -406,6 +406,261 @@ llm_config_get_api_key(const char *provider)
     return key;
 }
 
+/* ------------------------------------------------ */
+/* Solde du provider (GET {api_url}/credits)         */
+/*                                                    */
+/* Liste VOLONTAIREMENT curated : deux entrées, les   */
+/* seules dont la route ET la forme de réponse ont    */
+/* été vérifiées. Les autres OpenAI-compatible        */
+/* exposent bien un solde pour la plupart, mais       */
+/* chacun chez soi : SiliconFlow sous /user/info avec */
+/* « balance » en CHAÎNE, Kimi sous /users/me/balance */
+/* (pluriel + /me/), DeepSeek sous /user/balance avec */
+/* un TABLEAU multi-devises de valeurs en chaîne,     */
+/* Fireworks sur une base d'admin distincte. Les      */
+/* deviner produirait un « 0.00 » affirmé là où un    */
+/* « — » est la seule réponse honnête. Ajouter un     */
+/* provider = ajouter une ligne à CREDITS_LIST, avec  */
+/* son champ, son unité et son taux.                  */
+/* ------------------------------------------------ */
+
+static const CreditsProvider CREDITS_LIST[] = {
+    /* OpenRouter rend déjà des dollars, nidés sous « data ». */
+    { "OpenRouter", "total_credits", TRUE,  "USD", 1.00 },
+    /* HyperCharm rend des hypercredits, à la racine. Le taux est
+     * confirmé par les totaux du compte : 1 830 hc consommés pour
+     * 91,51 $, soit 0.050004 $/hc. */
+    { "HyperCharm", "balance",       FALSE, "hc",  0.05 },
+};
+
+const CreditsProvider *
+llm_credits_entry(const char *provider)
+{
+    guint i;
+
+    if (provider == NULL)
+        return NULL;
+    for (i = 0; i < G_N_ELEMENTS(CREDITS_LIST); i++)
+        if (g_strcmp0(provider, CREDITS_LIST[i].provider) == 0)
+            return &CREDITS_LIST[i];
+    return NULL;
+}
+
+/* Nombre d'un membre, dans les TROIS types qui se présentent vraiment :
+ *
+ *   G_TYPE_INT64  — json-glib range 173 et 0 en entier, PAS en double.
+ *                   C'est le cas des deux providers de la liste : un
+ *                   extracteur « double seulement » échouerait sur les
+ *                   deux et afficherait « — » partout.
+ *   G_TYPE_DOUBLE — un montant décimal (8.65).
+ *   G_TYPE_STRING — plusieurs fournisseurs voisins rendent leurs dollars
+ *                   entre guillemets (« "110.00" », « "0.88" »).
+ *
+ * json_object_get_double_member(), sur un type inattendu, ne signale pas
+ * une erreur : il crache un CRITICAL json-glib et rend 0,0 — soit un
+ * solde de 110 $ affiché 0 $. Ici on regarde le type et on échoue
+ * proprement, ce qui mène à « — » et non à un faux montant. */
+static gboolean
+credits_number(JsonObject *obj, const char *member, double *out)
+{
+    JsonNode *node;
+    GType     vt;
+
+    if (obj == NULL || member == NULL || !json_object_has_member(obj, member))
+        return FALSE;
+    node = json_object_get_member(obj, member);
+    if (node == NULL || !JSON_NODE_HOLDS_VALUE(node))
+        return FALSE;
+
+    vt = json_node_get_value_type(node);
+    if (vt == G_TYPE_INT64) {
+        *out = (double) json_node_get_int(node);
+        return TRUE;
+    }
+    if (vt == G_TYPE_DOUBLE) {
+        *out = json_node_get_double(node);
+        return TRUE;
+    }
+    if (vt == G_TYPE_STRING) {
+        const char *s   = json_node_get_string(node);
+        char       *end = NULL;
+        double      v;
+
+        if (s == NULL || s[0] == '\0')
+            return FALSE;
+        v = g_ascii_strtod(s, &end);
+        if (end == s)
+            return FALSE;
+        *out = v;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* Où lire le solde : à la racine ou sous « data ». C'est la table qui le
+ * dit, ligne par ligne — pas un reniflage de forme. */
+static gboolean
+credits_value(const CreditsProvider *cp, JsonNode *root, double *raw)
+{
+    JsonObject *obj;
+
+    if (cp == NULL || root == NULL || !JSON_NODE_HOLDS_OBJECT(root))
+        return FALSE;
+    obj = json_node_get_object(root);
+
+    if (cp->under_data) {
+        JsonNode *data;
+
+        if (!json_object_has_member(obj, "data"))
+            return FALSE;
+        data = json_object_get_member(obj, "data");
+        if (data == NULL || !JSON_NODE_HOLDS_OBJECT(data))
+            return FALSE;
+        obj = json_node_get_object(data);
+    }
+    return credits_number(obj, cp->member, raw);
+}
+
+/* Base du provider : celle configurée dans llm.json d'abord — c'est elle
+ * qui porte le vrai trafic du chat (cfg->api_url) —, la table en dur en
+ * repli. Un « / » de trop collerait un « //credits » au bout de l'URL. */
+static char *
+credits_base_url(const char *provider)
+{
+    JsonObject *prov;
+    JsonNode   *root_node = NULL;
+    char       *url = NULL;
+
+    prov = llm_config_provider_object(provider, &root_node);
+    if (prov != NULL && json_object_has_member(prov, "api_url")) {
+        JsonNode *n = json_object_get_member(prov, "api_url");
+
+        if (n != NULL && JSON_NODE_HOLDS_VALUE(n)
+            && json_node_get_value_type(n) == G_TYPE_STRING)
+            url = g_strdup(json_node_get_string(n));
+    }
+    if (root_node != NULL)
+        json_node_unref(root_node);
+
+    if (url == NULL || url[0] == '\0') {
+        g_free(url);
+        url = g_strdup(llm_provider_default_url(provider));
+    }
+    if (url != NULL) {
+        gsize n = strlen(url);
+
+        while (n > 0 && url[n - 1] == '/')
+            url[--n] = '\0';
+    }
+    return url;
+}
+
+static void
+credits_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
+{
+    CreditsFetch *f = data;
+    GBytes       *bytes;
+    GError       *err = NULL;
+    gboolean      ok = FALSE;
+    double        raw = 0.0;
+
+    bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), res,
+                                              &err);
+    if (bytes != NULL) {
+        JsonParser *parser = json_parser_new();
+        gsize       len    = g_bytes_get_size(bytes);
+
+        if (json_parser_load_from_data(parser, g_bytes_get_data(bytes, NULL),
+                                       (gssize)len, NULL))
+            ok = credits_value(f->cp, json_parser_get_root(parser), &raw);
+        g_object_unref(parser);
+        g_bytes_unref(bytes);
+    } else {
+        /* 401, 404, 429 et les timeouts passent tous par ici : libsoup
+         * ne rend pas le corps sur une erreur HTTP. Un échec réseau
+         * n'est DONC jamais un solde à zéro, c'est un solde inconnu —
+         * toute la nuance tient dans ce FALSE. */
+        g_printerr("CDB: /credits %s échoué : %s\n", f->provider,
+                   err->message);
+        g_error_free(err);
+    }
+
+    if (f->cb != NULL)
+        f->cb(ok, ok ? raw * f->cp->usd_per_unit : 0.0, ok ? raw : 0.0,
+              f->user_data);
+
+    g_free(f->provider);
+    g_object_unref(f->soup);
+    g_free(f);
+}
+
+/* Vrai si la requête est partie ; faux = rien sur le réseau, et callback
+ * jamais appelé — c'est à l'appelant de poser « — » et d'en dire la
+ * raison (provider hors liste, base vide ou pas de clé). */
+gboolean
+llm_credits_fetch(const char *provider, LlmCreditsCallback cb,
+                  gpointer user_data)
+{
+    const CreditsProvider *cp = llm_credits_entry(provider);
+    char                  *base;
+    char                  *key;
+    char                  *auth;
+    char                  *url;
+    CreditsFetch          *f;
+    SoupMessage           *msg;
+
+    if (cp == NULL || cb == NULL)
+        return FALSE;              /* hors liste : on ne sonde rien du tout */
+
+    base = credits_base_url(provider);
+    if (base == NULL || base[0] == '\0') {
+        g_free(base);
+        return FALSE;
+    }
+
+    key = llm_config_get_api_key(provider);
+    if (key == NULL || key[0] == '\0') {
+        g_free(key);
+        g_free(base);
+        return FALSE;              /* pas de clé : rien à demander */
+    }
+
+    f = g_new0(CreditsFetch, 1);
+    f->cb        = cb;
+    f->user_data = user_data;
+    f->provider  = g_strdup(provider);
+    f->cp        = cp;             /* table statique : rien à libérer */
+    f->soup      = soup_session_new();
+    /* Un badge n'attend pas : 8 s, et un solde qui traîne n'intéresse
+     * personne. La session du chat, elle, est à 120 s (anti-hang). */
+    g_object_set(f->soup, "timeout", 8, NULL);
+
+    url = g_strdup_printf("%s/credits", base);
+    g_free(base);
+    msg = soup_message_new("GET", url);
+    g_free(url);
+    if (msg == NULL) {
+        g_free(f->provider);
+        g_object_unref(f->soup);
+        g_free(f);
+        g_free(key);
+        return FALSE;
+    }
+
+    /* Bearer pour les deux : HyperCharm refuse x-api-key (401 « missing
+     * authorization ») et Bearer est leur convention partagée. */
+    auth = g_strdup_printf("Bearer %s", key);
+    g_free(key);
+    soup_message_headers_append(soup_message_get_request_headers(msg),
+                                "Authorization", auth);
+    g_free(auth);
+
+    /* La session possède msg après l'appel : NE PAS unref ici. */
+    soup_session_send_and_read_async(f->soup, msg, G_PRIORITY_DEFAULT,
+                                     NULL, credits_fetch_done, f);
+    return TRUE;
+}
+
 char *
 llm_config_get_allowed_models(const char *provider)
 {

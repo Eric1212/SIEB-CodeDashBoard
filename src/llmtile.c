@@ -61,6 +61,13 @@ llm_tile_free(gpointer data)
         g_source_remove(t->status_timeout_id);
         t->status_timeout_id = 0;
     }
+    /* La sonde de solde survit ici comme le chrono : sans ce retrait, un
+     * tick à 60 s réveillerait une tuile libérée (même famille de crash
+     * que le « unaligned tcache » documenté plus haut). */
+    if (t->credits_timer_id != 0) {
+        g_source_remove(t->credits_timer_id);
+        t->credits_timer_id = 0;
+    }
     if (t->pending_images != NULL)
         g_ptr_array_unref(t->pending_images);
     /* cfg EMPRUNTÉE à App (app->llm_cfg) : PAS libérée ici — main()
@@ -81,6 +88,180 @@ model_section_free(gpointer data)
     llm_models_free(sec->models);
     g_free(sec);
 }
+/* ===== Solde du provider (badge droit de la rangée de statut) ===== */
+
+/* Un solde illisible n'est JAMAIS un zéro. « — » est la seule réponse
+ * honnête quand le provider n'est pas de la liste curated, n'a pas de
+ * clé ou répond une erreur. Deux marqueurs vivent sur le label : le
+ * provider qu'on veut voir, et la présence d'un vol. */
+#define LLM_CREDITS_UNKNOWN "—"
+#define CREDITS_WANTED      "cdb-credits-wanted"
+#define CREDITS_FLIGHT      "cdb-credits-flight"
+
+/* Le callback ne tient QUE le label (référence possédée), jamais la
+ * tuile : une tuile fermée en plein vol — pièce, re-rendu du layout —
+ * ne laisse donc aucun pointeur pendu, le label survit le temps que la
+ * réponse s'y écrive. C'est le garde-fou qui manque à SectionFetchCtx,
+ * lui qui dereference ctx->t en tenant l'ancre pour suffisante (voir la
+ * note de llm_tile_free sur req->tile). */
+typedef struct {
+    GtkWidget             *label;
+    char                  *provider;
+    const CreditsProvider *cp;
+} CreditsCtx;
+
+static void
+credits_paint(GtkWidget *label, const char *text, const char *tip)
+{
+    if (!GTK_IS_LABEL(label))
+        return;
+    gtk_label_set_text(GTK_LABEL(label), text);
+    if (tip != NULL)
+        gtk_widget_set_tooltip_text(label, tip);
+}
+
+static void
+on_credits_fetched(gboolean available, double usd, double raw, gpointer data)
+{
+    CreditsCtx *c = data;
+    const char *wanted;
+    gboolean    fresh;
+
+    /* Un clic a pu choisir un autre provider pendant le vol : la réponse
+     * qui arrive n'est plus celle qu'on veut. On la jette — le vol qui a
+     * remplacé celui-ci peindra la sienne. */
+    wanted = g_object_get_data(G_OBJECT(c->label), CREDITS_WANTED);
+    fresh  = wanted != NULL && g_strcmp0(wanted, c->provider) == 0;
+
+    if (fresh) {
+        char *txt;
+        char *tip;
+
+        if (available) {
+            txt = g_strdup_printf("%.2f USD", usd);
+            /* Valeur brute et taux dans la tooltip : c'est le seul
+             * endroit où un provider qui ment sur son unité se voit à
+             * l'œil, sans qu'on impose une conversion à celui qui lit. */
+            if (c->cp->usd_per_unit == 1.0)
+                tip = g_strdup_printf("%s : %g %s",
+                                      c->provider, raw, c->cp->unit);
+            else
+                tip = g_strdup_printf("%s : %g %s × %g = %.2f USD",
+                                      c->provider, raw, c->cp->unit,
+                                      c->cp->usd_per_unit, usd);
+        } else {
+            txt = g_strdup(LLM_CREDITS_UNKNOWN);
+            tip = g_strdup_printf("%s : solde indisponible", c->provider);
+        }
+        credits_paint(c->label, txt, tip);
+        g_free(txt);
+        g_free(tip);
+        g_object_set_data(G_OBJECT(c->label), CREDITS_FLIGHT, NULL);
+    }
+
+    g_object_unref(c->label);
+    g_free(c->provider);
+    g_free(c);
+}
+
+/* Période du keep-alive. Éric : « au minimum une minute ». Sonder ne
+ * consomme PAS de crédit — trois lectures à deux secondes d'intervalle
+ * ont rendu 159 sans bouger —, ce réglage est donc une question de
+ * fraîcheur, pas d'économie. */
+#define LLM_CREDITS_POLL_MS 60000
+
+/* Définition plus bas ; le tick et l'armement la précèdent. */
+static void llm_tile_credits_refresh(LlmTile *t);
+
+static gboolean
+on_credits_tick(gpointer data)
+{
+    llm_tile_credits_refresh((LlmTile *)data);
+    return G_SOURCE_CONTINUE;   /* la sonde se renouvelle elle-même */
+}
+
+/* Rafraîchit le badge. Quatre déclencheurs : création de la tuile, fin de
+ * chaque tour, changement de provider, et le keep-alive juste au-dessus. */
+static void
+llm_tile_credits_refresh(LlmTile *t)
+{
+    CreditsCtx            *c;
+    const CreditsProvider *cp;
+    const char            *prov;
+    char                  *key;
+
+    if (t == NULL || t->credits_label == NULL)
+        return;
+    prov = t->cfg != NULL ? (const char *)t->cfg->provider : NULL;
+    cp   = llm_credits_entry(prov);
+    /* Keep-alive (Éric, 27 août) : la transition busy → not busy ne suffit
+     * pas. Armé tant que le provider a un solde interrogable, désarmé
+     * sinon — une session passée sur OpenCode n'émet donc aucune requête
+     * périodique. Le garde sur id == 0 est ce qui rend l'appel idempotent :
+     * le tick repasse par ici, il doit se trouver déjà armé et non se
+     * remplacer lui-même. */
+    if (cp != NULL && t->credits_timer_id == 0)
+        t->credits_timer_id = g_timeout_add(LLM_CREDITS_POLL_MS,
+                                            on_credits_tick, t);
+    else if (cp == NULL && t->credits_timer_id != 0) {
+        g_source_remove(t->credits_timer_id);
+        t->credits_timer_id = 0;
+    }
+
+    /* Hors liste curated : on n'émet pas même une requête de découverte.
+     * L'ancre est effacée pour qu'un vol ancien se jette de lui-même. */
+    if (cp == NULL) {
+        g_object_set_data(G_OBJECT(t->credits_label), CREDITS_WANTED, NULL);
+        credits_paint(t->credits_label, LLM_CREDITS_UNKNOWN,
+                      prov != NULL ? "Solde non exposé par ce provider"
+                                   : "Aucun provider sélectionné");
+        return;
+    }
+
+    key = llm_config_get_api_key(prov);
+    if (key == NULL || key[0] == '\0') {
+        /* Provider de la liste mais clé absente (le cas d'OpenCode est
+         * plus haut : hors liste, on ne demande même pas). */
+        g_free(key);
+        g_object_set_data(G_OBJECT(t->credits_label), CREDITS_WANTED, NULL);
+        credits_paint(t->credits_label, LLM_CREDITS_UNKNOWN,
+                      "Pas de clé API pour ce provider");
+        return;
+    }
+    g_free(key);
+
+    /* Même provider déjà en vol : inutile de doubler. Un provider changé
+     * EN vol est en revanche autorisé — sa réponse se jette ci-dessus. */
+    if (g_object_get_data(G_OBJECT(t->credits_label), CREDITS_FLIGHT) != NULL
+        && g_strcmp0(g_object_get_data(G_OBJECT(t->credits_label),
+                                       CREDITS_WANTED), prov) == 0)
+        return;
+
+    /* On garde la valeur affichée pendant le vol : pas de pointillés qui
+     * clignotent à chaque fin de tour. */
+    g_object_set_data_full(G_OBJECT(t->credits_label), CREDITS_WANTED,
+                           g_strdup(prov), g_free);
+    g_object_set_data(G_OBJECT(t->credits_label), CREDITS_FLIGHT,
+                      GINT_TO_POINTER(1));
+
+    c           = g_new0(CreditsCtx, 1);
+    c->label    = g_object_ref(t->credits_label);
+    c->provider = g_strdup(prov);
+    c->cp       = cp;
+
+    if (!llm_credits_fetch(prov, on_credits_fetched, c)) {
+        /* Pas parti (base vide) : on rend la main, sinon le badge
+         * garderait le solde de l'ancien provider sous le nouveau nom. */
+        g_object_set_data(G_OBJECT(t->credits_label), CREDITS_FLIGHT, NULL);
+        g_object_set_data(G_OBJECT(t->credits_label), CREDITS_WANTED, NULL);
+        g_object_unref(c->label);
+        g_free(c->provider);
+        g_free(c);
+        credits_paint(t->credits_label, LLM_CREDITS_UNKNOWN,
+                      "Solde indisponible");
+    }
+}
+
 
 gboolean
 llm_model_matches(const char *query, const char *id)
@@ -214,6 +395,12 @@ on_llm_model_row_activated(GtkListBox G_GNUC_UNUSED *lb,
     for (guint i = 0; i < t->sections->len; i++)
         llm_model_section_refresh(t, g_ptr_array_index(t->sections, i));
     llm_model_menu_apply_filter(t);
+    /* Loi du miroir : le provider est actif pour TOUTES les vues, donc
+     * toutes repeignent leur solde. Un badge resté sur l'ancien provider
+     * afficherait un montant vrai sous un faux nom — pire qu'un montant
+     * absent. */
+    for (guint vi = 0; vi < t->core->views->len; vi++)
+        llm_tile_credits_refresh(g_ptr_array_index(t->core->views, vi));
     gtk_popover_popdown(GTK_POPOVER(t->model_pop));
 }
 
@@ -546,6 +733,31 @@ llm_status_tick(gpointer data)
     return G_SOURCE_CONTINUE;
 }
 
+/* L'activité d'un tour — logo, chrono, tokens ↑/↓, contexte — ne vit que
+ * pendant le tour. La rangée, elle, reste visible en permanence : c'est
+ * le badge de solde qui l'occupe au repos (décision A). Sans ce garde,
+ * les trois icônes symboliques s'afficheraient à vide, flèches sans
+ * chiffres, dès la première tuile ouverte. */
+static void
+llm_status_cluster(LlmTile *t, gboolean on)
+{
+    GtkWidget *w[8];
+    guint      n = 0;
+
+    w[n++] = t->status_logo;
+    w[n++] = t->status_label;
+    w[n++] = t->status_up_icon;
+    w[n++] = t->status_sent_label;
+    w[n++] = t->status_down_icon;
+    w[n++] = t->status_received_label;
+    w[n++] = t->status_context_icon;
+    w[n++] = t->status_context_label;
+
+    while (n-- > 0)
+        if (w[n] != NULL)
+            gtk_widget_set_visible(w[n], on);
+}
+
 void
 llm_status_start(LlmTile *t)
 {
@@ -560,6 +772,8 @@ llm_status_start(LlmTile *t)
 
     gtk_widget_set_visible(t->status_rev, TRUE);
     gtk_widget_set_visible(t->status_logo, TRUE);
+    /* Chrono, tokens et contexte ne vivent que pendant le tour. */
+    llm_status_cluster(t, TRUE);
     t->status_logo_frame = 0;
     gtk_label_set_text(GTK_LABEL(t->status_logo), LLM_STATUS_FRAMES[0]);
     llm_status_update(t);
@@ -587,6 +801,12 @@ llm_status_stop(LlmTile *t)
         gtk_widget_set_visible(t->status_rev, TRUE);
 
     llm_status_update(t);
+    /* Coup de pouce : la fin d'un tour est le moment où la valeur vient
+     * de changer, donc on sonde sans attendre. En dessous, la sonde
+     * LLM_CREDITS_POLL_MS couvre seule les cas où aucun tour ne se
+     * termine ici : recharge du solde côté provider, consommation par
+     * une autre session, boucle morte sur un 429 ou une annulation. */
+    llm_tile_credits_refresh(t);
 }
 
 void
@@ -2333,7 +2553,13 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
                                       GTK_ALIGN_CENTER);
                 gtk_label_set_xalign(GTK_LABEL(t->status_context_label),
                                      GTK_ALIGN_START);
-                gtk_widget_set_visible(t->status_rev, FALSE);
+                /* Rangée TOUJOURS visible (décision A, 27 août) : c'est le
+                 * badge de solde qui l'occupe au repos — Éric trouvait
+                 * « bizarre qu'elle ne le soit pas tout le temps ». Ce qui
+                 * ne regarde qu'un tour en cours est masqué à la fin de ce
+                 * bloc par llm_status_cluster(t, FALSE). Les set_visible
+                 * de llm_status_start/stop deviennent des no-ops : gardés,
+                 * ils disent l'intention du bilan qui reste affiché. */
 
                 up_icon = gtk_image_new_from_icon_name("pan-up-symbolic");
                 down_icon = gtk_image_new_from_icon_name("pan-down-symbolic");
@@ -2354,6 +2580,30 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
                 gtk_box_append(GTK_BOX(t->status_rev), t->status_received_label);
                 gtk_box_append(GTK_BOX(t->status_rev), context_icon);
                 gtk_box_append(GTK_BOX(t->status_rev), t->status_context_label);
+                /* Les trois icônes vivent dans la tuile pour pouvoir être
+                 * masquées au repos : la rangée reste visible, mais elle
+                 * ne doit pas montrer trois flèches symboliques sans
+                 * chiffres à côté d'un solde tout seul. */
+                t->status_up_icon      = up_icon;
+                t->status_down_icon    = down_icon;
+                t->status_context_icon = context_icon;
+                llm_status_cluster(t, FALSE);
+
+                /* Miroir du compteur : le solde du provider, collé au bord
+                 * droit de la même rangée. Ressort identique à celui des
+                 * outils (juste en bas) pour que le badge tienne le coin. */
+                {
+                    GtkWidget *spring;
+
+                    spring = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+                    gtk_widget_set_hexpand(spring, TRUE);
+                    gtk_box_append(GTK_BOX(t->status_rev), spring);
+                }
+                t->credits_label = gtk_label_new(LLM_CREDITS_UNKNOWN);
+                gtk_widget_add_css_class(t->credits_label, "llm-credits");
+                gtk_widget_set_valign(t->credits_label, GTK_ALIGN_CENTER);
+                gtk_box_append(GTK_BOX(t->status_rev), t->credits_label);
+                llm_tile_credits_refresh(t);
                 gtk_box_append(GTK_BOX(compose), t->status_rev);
             }
 

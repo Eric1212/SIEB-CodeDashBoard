@@ -66,6 +66,40 @@ void llm_models_free(LlmModelInfo *models);
 /* URL de base d'un provider connu ; NULL si inconnu. */
 const char *llm_provider_default_url(const char *provider);
 
+/* ------------------------------------------------ */
+/* Solde du provider (GET {api_url}/credits)         */
+/*                                                    */
+/* Liste curated : voir la table CREDITS_LIST dans    */
+/* llmcore.c. Ce qui n'y est pas n'est PAS sondé.     */
+/* ------------------------------------------------ */
+
+/* Où lire le solde d'UN provider connu, et dans quelle unité. */
+typedef struct {
+    const char *provider;
+    const char *member;       /* nom du champ du solde          */
+    gboolean    under_data;   /* OpenRouter nid sous « data »,
+                               * HyperCharm est à la racine : il
+                               * n'y a rien de commun à déduire  */
+    const char *unit;         /* unité d'origine du solde rendu */
+    double      usd_per_unit; /* multiplicateur vers USD        */
+} CreditsProvider;
+
+/* Entrée de la liste curated ; NULL si le provider n'y est pas — donc
+ * si aucune requête ne doit être émise. */
+const CreditsProvider *llm_credits_entry(const char *provider);
+
+/* available = FALSE ⇒ aucun solde LISIBLE (hors liste, pas de clé,
+ * erreur HTTP, forme inattendue) : le badge reste à « — », jamais ne
+ * tombe à 0. usd est déjà converti ; raw est la valeur telle que rendue
+ * par le provider (la tooltip s'en sert). Le callback peut toucher l'UI.
+ * Renvoie FALSE si AUCUNE requête n'est partie — callback jamais appelé,
+ * c'est à l'appelant d'afficher « — » et d'en dire la raison. */
+typedef void (*LlmCreditsCallback)(gboolean available, double usd,
+                                   double raw, gpointer user_data);
+
+gboolean llm_credits_fetch(const char *provider, LlmCreditsCallback cb,
+                           gpointer user_data);
+
 /* Clé API sauvegardée d'un provider (indépendant du provider actif).
  * get : chaîne g_strdup à libérer ; NULL si absente. */
 char *llm_config_get_api_key(const char *provider);
@@ -174,6 +208,16 @@ typedef struct {
     SoupSession      *soup;
     char             *provider;
 } ModelsFetch;
+
+/* Solde : même mécanique que ModelsFetch. cp pointe dans une table
+ * statique du core — durée de vie infinie, rien à libérer. */
+typedef struct {
+    LlmCreditsCallback     cb;
+    gpointer               user_data;
+    SoupSession           *soup;
+    char                  *provider;
+    const CreditsProvider *cp;
+} CreditsFetch;
 
 /* ------------------------------------------------ */
 /* models.dev : noms lisibles par provider           */
@@ -361,6 +405,15 @@ typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     GtkWidget   *status_sent_label;
     GtkWidget   *status_received_label;
     GtkWidget   *status_context_label;
+    /* Les trois icônes du compteur sont stockées pour être masquées au
+     * repos : la rangée de statut reste visible en permanence (c'est le
+     * badge de solde qui la justifie) et ne doit pas porter trois flèches
+     * symboliques sans chiffres à côté. */
+    GtkWidget   *status_up_icon;
+    GtkWidget   *status_down_icon;
+    GtkWidget   *status_context_icon;
+    GtkWidget   *credits_label;     /* solde USD, collé à droite */
+    guint        credits_timer_id;  /* keep-alive du solde ; 0 = désarmé */
     guint        status_timeout_id;
     gint64       status_started_us;
     gint64       status_elapsed_us;
