@@ -92,6 +92,8 @@ llm_tools_prefs_load(void)
     gboolean    have_read = FALSE;
     gboolean    have_insert = FALSE;
     gboolean    have_replace = FALSE;
+    gboolean    have_create = FALSE;
+    gboolean    have_delete = FALSE;
 
     if (json_parser_load_from_file(parser, path, NULL) &&
         json_parser_get_root(parser) != NULL &&
@@ -144,6 +146,10 @@ llm_tools_prefs_load(void)
                     have_insert = TRUE;
                 if (g_strcmp0(p->name, "cdb_replace") == 0)
                     have_replace = TRUE;
+                if (g_strcmp0(p->name, "cdb_create") == 0)
+                    have_create = TRUE;
+                if (g_strcmp0(p->name, "cdb_delete") == 0)
+                    have_delete = TRUE;
                 g_ptr_array_add(out, p);
             }
         }
@@ -178,6 +184,22 @@ llm_tools_prefs_load(void)
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
         p->name = g_strdup("cdb_replace");
+        tool_pref_apply_defaults(p);
+        g_ptr_array_add(out, p);
+    }
+    /* Outils neufs : sans seed ici, llm_tools_pref_find renvoie NULL et
+     * llm_tool_pref_mode rend OFF -> l'outil ne serait jamais annonce. */
+    if (!have_create) {
+        LlmToolPref *p = g_new0(LlmToolPref, 1);
+
+        p->name = g_strdup("cdb_create");
+        tool_pref_apply_defaults(p);
+        g_ptr_array_add(out, p);
+    }
+    if (!have_delete) {
+        LlmToolPref *p = g_new0(LlmToolPref, 1);
+
+        p->name = g_strdup("cdb_delete");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }

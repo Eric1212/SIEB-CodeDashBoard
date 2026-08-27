@@ -377,7 +377,9 @@ typedef enum {
     CDB_SPEC_BASH = 0,
     CDB_SPEC_READ,
     CDB_SPEC_INSERT,
-    CDB_SPEC_REPLACE
+    CDB_SPEC_REPLACE,
+    CDB_SPEC_CREATE,
+    CDB_SPEC_DELETE
 } CdbSpecKind;
 
 /* Spécification d'un appel d'outil natif en file d'attente.

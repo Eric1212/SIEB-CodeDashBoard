@@ -10,6 +10,12 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "llm.h"
+/* Systeme : open/write/lstat/unlink (le _POSIX_C_SOURCE du dessus les
+ * rend disponibles en -std=c23). */
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "session.h"
 #include "mdview.h"
 #include "bashpanel.h"
@@ -1230,6 +1236,8 @@ static GPtrArray *cdb_polls = NULL;
 #define CDB_TOOL_NAME_READ "cdb_read"
 #define CDB_TOOL_NAME_INSERT "cdb_insert"
 #define CDB_TOOL_NAME_REPLACE "cdb_replace"
+#define CDB_TOOL_NAME_CREATE "cdb_create"
+#define CDB_TOOL_NAME_DELETE "cdb_delete"
 
 void
 llm_tool_call_free(gpointer data)
@@ -1535,6 +1543,19 @@ cdb_line_offsets(const char *content, gsize len, GArray *off,
     if (!ends_nl && len > 0) {
         gsize last = len;
         g_array_append_val(off, last);
+    }
+}
+
+static const char *
+cdb_kind_label(CdbSpecKind k)
+{
+    switch (k) {
+    case CDB_SPEC_READ:    return "read";
+    case CDB_SPEC_INSERT:  return "insert";
+    case CDB_SPEC_REPLACE: return "replace";
+    case CDB_SPEC_CREATE:  return "create";
+    case CDB_SPEC_DELETE:  return "delete";
+    default:               return "bash";
     }
 }
 
@@ -2166,6 +2187,294 @@ done:
         g_object_unref(parser);
 }
 
+/* cdb_create : cree un fichier texte NEUF.
+ *
+ * O_CREAT|O_EXCL n'est pas un raffinement : g_file_set_contents ferait
+ * "existe-t-il ?" puis "j'ecris", deux gestes entre lesquels un autre
+ * processus peut creer le fichier. Ici le noyau tranche : aucune course
+ * ne peut transformer un "n'existe pas" en ecrasement. */
+static gboolean
+cdb_file_create_exclusive(const char *path, const char *buf, gsize len,
+                          GError **err)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    int e;
+
+    if (fd < 0) {
+        e = errno;
+        g_set_error(err, G_IO_ERROR,
+                    (e == EEXIST) ? G_IO_ERROR_EXISTS : G_IO_ERROR_FAILED,
+                    "%s", g_strerror(e));
+        return FALSE;
+    }
+    while (len > 0) {
+        ssize_t w = write(fd, buf, len);
+
+        if (w < 0) {
+            e = errno;
+            if (e == EINTR)
+                continue;
+            close(fd);
+            g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "%s",
+                        g_strerror(e));
+            return FALSE;
+        }
+        buf += w;
+        len -= (gsize)w;
+    }
+    if (close(fd) != 0) {
+        e = errno;
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED, "%s",
+                    g_strerror(e));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void
+cdb_tool_file_create(LlmCore *c, const char *tool_call_id,
+                     const char *args_json)
+{
+    JsonParser *parser = NULL;
+    JsonObject *root = NULL;
+    GError     *gerr = NULL;
+    const char *path = NULL;
+    const char *content = NULL;
+    gsize       clen = 0;
+    char       *dir = NULL;
+    GArray     *off = NULL;
+    guint       line_count = 0;
+    char       *hblock = NULL, *hfirst = NULL, *hlast = NULL;
+    GString    *out = NULL;
+    char       *result = NULL;
+    char       *m = NULL;
+
+    parser = json_parser_new();
+    if (!json_parser_load_from_data(parser,
+            args_json != NULL ? args_json : "", -1, NULL) ||
+        json_parser_get_root(parser) == NULL ||
+        !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        m = g_strdup("arguments JSON invalides pour cdb_create.");
+        goto done;
+    }
+    root = json_node_get_object(json_parser_get_root(parser));
+    path = cdb_json_str(root, "path");
+    content = cdb_json_str(root, "content");
+    clen = (content != NULL) ? strlen(content) : 0;
+    if (path == NULL || path[0] == '\0') {
+        m = g_strdup("path manquant.");
+        goto done;
+    }
+    if (path[0] != '/') {
+        m = g_strdup("chemin absolu requis.");
+        goto done;
+    }
+    if (content == NULL) {
+        m = g_strdup("content manquant : mets content vide pour creer un "
+                     "fichier vide.");
+        goto done;
+    }
+    if (!g_utf8_validate(content, (gssize)clen, NULL)) {
+        m = g_strdup("contenu non UTF-8 : refuse.");
+        goto done;
+    }
+    dir = g_path_get_dirname(path);
+    if (!g_file_test(dir, G_FILE_TEST_IS_DIR)) {
+        m = g_strdup_printf("dossier parent absent : %s (cdb_create ne cree "
+                            "pas de repertoire).", dir);
+        goto done;
+    }
+    if (!cdb_file_create_exclusive(path, content, clen, &gerr)) {
+        if (gerr != NULL && gerr->domain == G_IO_ERROR &&
+            gerr->code == G_IO_ERROR_EXISTS)
+            m = g_strdup("fichier existe deja : utilise cdb_replace avec son "
+                         "block_hash, ou cdb_delete puis cdb_create.");
+        else
+            m = g_strdup_printf("creation impossible : %s",
+                                gerr != NULL ? gerr->message : "?");
+        if (gerr != NULL) { g_error_free(gerr); gerr = NULL; }
+        goto done;
+    }
+
+    /* Ce qui est sur disque est exactement ce qu'on vient d'ecrire : tout
+     * est fourni par le modele, donc authored_range couvre le fichier. */
+    out = g_string_new(NULL);
+    if (clen == 0) {
+        g_string_append_printf(out,
+            "create: ok\npath: %s\nline_count: 0\n"
+            "note: fichier vide cree; aucun hash frappe.\n", path);
+    } else {
+        off = g_array_new(FALSE, FALSE, sizeof(gsize));
+        cdb_line_offsets(content, clen, off, &line_count);
+        hblock = cdb_hash4(content, clen);
+        hfirst = cdb_hash4(content, g_array_index(off, gsize, 1) -
+                                  g_array_index(off, gsize, 0));
+        hlast  = cdb_hash4(content +
+                           g_array_index(off, gsize, line_count - 1),
+                           g_array_index(off, gsize, line_count) -
+                           g_array_index(off, gsize, line_count - 1));
+        g_string_append_printf(out,
+            "create: ok\npath: %s\nline_count: %u\nauthored_range: 1-%u\n"
+            "hash_block: %s\nhash_first: %s\nhash_last: %s\n",
+            path, line_count, line_count, hblock, hfirst, hlast);
+    }
+    result = g_string_free(out, FALSE);
+    out = NULL;
+    cdb_queue_text_result(c, tool_call_id, "create", result, NULL, FALSE);
+
+done:
+    if (m != NULL) {
+        cdb_queue_text_result(c, tool_call_id, "create", m, NULL, FALSE);
+        g_free(m);
+    }
+    g_free(result);
+    g_free(hblock);
+    g_free(hfirst);
+    g_free(hlast);
+    if (out != NULL)
+        g_string_free(out, TRUE);
+    if (off != NULL)
+        g_array_free(off, TRUE);
+    g_free(dir);
+    if (gerr != NULL)
+        g_error_free(gerr);
+    if (parser != NULL)
+        g_object_unref(parser);
+}
+
+/* cdb_delete : destruction en DEUX PASSES, comme demande par Eric.
+ *
+ * Le file_hash rendu par la premiere passe n'est PAS une divulgation :
+ * ici le modele n'a pas a prouver qu'il a lu le CONTENU, il doit etre sur
+ * du FICHIER. Le hash est une empreinte d'etat anti-TOCTOU entre les deux
+ * appels. Ce qui reste interdit, c'est qu'une SECONDE passe refusee rende
+ * l'empreinte courante : la, on retomberait dans l'oracle. */
+static void
+cdb_tool_file_delete(LlmCore *c, const char *tool_call_id,
+                     const char *args_json)
+{
+    JsonParser *parser = NULL;
+    JsonObject *root = NULL;
+    GError     *gerr = NULL;
+    const char *path = NULL;
+    const char *file_hash = NULL;
+    struct stat st;
+    char       *content = NULL;
+    gsize       len = 0;
+    GArray     *off = NULL;
+    guint       line_count = 0;
+    char       *fh = NULL;
+    GString    *out = NULL;
+    char       *result = NULL;
+    char       *m = NULL;
+    gboolean    binary = FALSE;
+
+    parser = json_parser_new();
+    if (!json_parser_load_from_data(parser,
+            args_json != NULL ? args_json : "", -1, NULL) ||
+        json_parser_get_root(parser) == NULL ||
+        !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        m = g_strdup("arguments JSON invalides pour cdb_delete.");
+        goto done;
+    }
+    root = json_node_get_object(json_parser_get_root(parser));
+    path = cdb_json_str(root, "path");
+    file_hash = cdb_json_str(root, "file_hash");
+
+    if (path == NULL || path[0] == '\0') {
+        m = g_strdup("path manquant.");
+        goto done;
+    }
+    if (path[0] != '/') {
+        m = g_strdup("chemin absolu requis.");
+        goto done;
+    }
+    if (lstat(path, &st) != 0) {
+        m = g_strdup("fichier absent : rien a supprimer.");
+        goto done;
+    }
+    /* lstat, pas stat : un lien se detruit lui-meme alors que son contenu
+     * se lit a travers la cible. Le hash rendu n'aurait rien a voir avec
+     * ce qui serait efface. */
+    if (S_ISLNK(st.st_mode)) {
+        m = g_strdup("lien symbolique refuse : son contenu se lit a travers "
+                     "la cible, mais la suppression detruirait le lien. Agis "
+                     "sur la cible directement.");
+        goto done;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        m = g_strdup("pas un fichier regulier : non supprime (repertoire, "
+                     "pipe, peripherique).");
+        goto done;
+    }
+    if (!g_file_get_contents(path, &content, &len, &gerr)) {
+        m = g_strdup_printf("lecture impossible : %s",
+                            gerr != NULL ? gerr->message : "?");
+        if (gerr != NULL) { g_error_free(gerr); gerr = NULL; }
+        goto done;
+    }
+    /* Un binaire peut se supprimer : le hash prouve l'identite du fichier,
+     * pas sa lisibilite. On le signale seulement. */
+    if (!g_utf8_validate(content, (gssize)len, NULL))
+        binary = TRUE;
+
+    off = g_array_new(FALSE, FALSE, sizeof(gsize));
+    cdb_line_offsets(content, len, off, &line_count);
+    fh = cdb_hash4(content, len);
+    out = g_string_new(NULL);
+    if (file_hash == NULL || file_hash[0] == '\0') {
+        g_string_append_printf(out,
+            "delete: confirmation requise\npath: %s\nline_count: %u\n"
+            "bytes: %lu\nbinary: %s\nfile_hash: %s\n"
+            "note: relance cdb_delete(path, file_hash) pour detruire. Si le "
+            "fichier change entre les deux appels, la seconde passe sera "
+            "refusee.\n",
+            path, line_count, (gulong)len, binary ? "yes" : "no", fh);
+    } else if (g_strcmp0(fh, file_hash) != 0) {
+        g_free(fh);
+        fh = NULL;
+        g_string_free(out, TRUE);
+        out = NULL;
+        m = g_strdup("file_hash obsolete : le fichier n'est plus celui qui a "
+                     "ete confirme. Relance cdb_delete sans hash pour "
+                     "l'empreinte courante.");
+        goto done;
+    } else {
+        if (unlink(path) != 0) {
+            g_free(fh);
+            fh = NULL;
+            g_string_free(out, TRUE);
+            out = NULL;
+            m = g_strdup_printf("suppression impossible : %s",
+                                g_strerror(errno));
+            goto done;
+        }
+        g_string_append_printf(out,
+            "delete: ok\npath: %s\nremoved_lines: %u\nfile_hash: %s\n",
+            path, line_count, fh);
+    }
+    result = g_string_free(out, FALSE);
+    out = NULL;
+    cdb_queue_text_result(c, tool_call_id, "delete", result, NULL, FALSE);
+
+done:
+    if (m != NULL) {
+        cdb_queue_text_result(c, tool_call_id, "delete", m, NULL, FALSE);
+        g_free(m);
+    }
+    g_free(result);
+    g_free(fh);
+    if (out != NULL)
+        g_string_free(out, TRUE);
+    if (off != NULL)
+        g_array_free(off, TRUE);
+    g_free(content);
+    if (gerr != NULL)
+        g_error_free(gerr);
+    if (parser != NULL)
+        g_object_unref(parser);
+}
+
 /* Outils fichiers : on ne valide ici que la FORME, pour ne pas rendre une
  * barre d'approbation inepte. L'etat du disque est verifie a l'execution. */
 static void
@@ -2186,6 +2495,14 @@ cdb_dispatch_file_tool(LlmCore *c, const LlmToolCall *tc,
         !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
         error = g_strdup_printf("arguments JSON invalides pour %s.",
                                 tc->name != NULL ? tc->name : "(sans nom)");
+        goto done;
+    }
+    /* Un nul intercalaire dans text/content serait tronque silencieusement
+     * par strlen : json-glib n'expose pas la longueur reelle de ses chaines.
+     * On le refuse a la porte, en detectant la sequence d'chappement JSON qui la produit. */
+    if (tc->arguments_json != NULL &&
+        strstr(tc->arguments_json, "\\u0000") != NULL) {
+        error = g_strdup("sequence NUL (\\u0000) refusee dans les arguments.");
         goto done;
     }
     root = json_node_get_object(json_parser_get_root(parser));
@@ -2240,6 +2557,44 @@ cdb_dispatch_file_tool(LlmCore *c, const LlmToolCall *tc,
             "cdb_replace  %s  %ld-%ld  -%u lignes / +%u lignes%s",
             path, from, to, removed, added,
             added == 0 ? "   [SUPPRESSION SANS REECRITURE]" : "");
+    } else if (kind == CDB_SPEC_CREATE) {
+        const char *content = cdb_json_str(root, "content");
+        guint       added;
+
+        if (content == NULL) {
+            error = g_strdup(
+                "content manquant : mets content vide pour creer un fichier "
+                "vide.");
+            goto done;
+        }
+        added = cdb_logical_lines(content, strlen(content));
+        summary = g_strdup_printf(
+            "cdb_create  %s  +%u ligne%s  (nouveau fichier)",
+            path, added, added == 1 ? "" : "s");
+    } else if (kind == CDB_SPEC_DELETE) {
+        const char *fh = cdb_json_str(root, "file_hash");
+        char       *cnt = NULL;
+        gsize       cl = 0;
+        guint       removed = 0;
+        gboolean    absent = TRUE;
+
+        /* Compter les lignes detruites ici, pour qu'Eric voie la taille du "
+         * degat dans la barre d'approbation. Lecture seule. */
+        if (g_file_get_contents(path, &cnt, &cl, NULL) && cnt != NULL) {
+            GArray *o = g_array_new(FALSE, FALSE, sizeof(gsize));
+            guint   lc = 0;
+
+            absent = FALSE;
+            cdb_line_offsets(cnt, cl, o, &lc);
+            removed = lc;
+            g_array_free(o, TRUE);
+            g_free(cnt);
+        }
+        summary = g_strdup_printf(
+            "cdb_delete  %s  -%u ligne%s%s%s", path, removed,
+            removed == 1 ? "" : "s",
+            absent ? "   [ABSENT OU ILLISIBLE]" : "",
+            (fh != NULL && fh[0] != '\0') ? "   [DESTRUCTION CONFIRMEE]" : "");
     } else {
         long        before = llm_json_int(root, "before_line", -1);
         long        after  = llm_json_int(root, "after_line", -1);
@@ -2298,10 +2653,7 @@ cdb_dispatch_file_tool(LlmCore *c, const LlmToolCall *tc,
 
 done:
     if (error != NULL) {
-        cdb_queue_text_result(c, tc->id,
-                              kind == CDB_SPEC_READ  ? "read"  :
-                              kind == CDB_SPEC_INSERT ? "insert"
-                                                      : "replace",
+        cdb_queue_text_result(c, tc->id, cdb_kind_label(kind),
                               error, NULL, FALSE);
         g_free(error);
     }
@@ -2341,10 +2693,13 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
         kind = CDB_SPEC_INSERT;
     else if (g_strcmp0(tc->name, CDB_TOOL_NAME_REPLACE) == 0)
         kind = CDB_SPEC_REPLACE;
+    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_CREATE) == 0)
+        kind = CDB_SPEC_CREATE;
+    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_DELETE) == 0)
+        kind = CDB_SPEC_DELETE;
     else {
         error = g_strdup_printf(
-            "outil inconnu \"%s\" : seuls cdb_bash, cdb_read, cdb_insert "
-            "et cdb_replace sont disponibles.",
+            "outil inconnu \"%s\" : cet outil n'existe pas dans CDB.",
             tc->name != NULL ? tc->name : "(sans nom)");
         goto done;
     }
@@ -3326,6 +3681,12 @@ cdb_run_spec(LlmCore *c, CdbCmdSpec *sp, gboolean allowplus)
     case CDB_SPEC_REPLACE:
         cdb_tool_file_replace(c, sp->tool_call_id, sp->args_json);
         break;
+    case CDB_SPEC_CREATE:
+        cdb_tool_file_create(c, sp->tool_call_id, sp->args_json);
+        break;
+    case CDB_SPEC_DELETE:
+        cdb_tool_file_delete(c, sp->tool_call_id, sp->args_json);
+        break;
     }
 }
 
@@ -3807,6 +4168,110 @@ tools_schema_cdb_replace(JsonBuilder *builder)
     json_builder_end_object(builder); /* tool */
 }
 
+/* Schéma de l'outil cdb_create. */
+static void
+tools_schema_cdb_create(JsonBuilder *builder)
+{
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "function");
+    json_builder_set_member_name(builder, "function");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "name");
+    json_builder_add_string_value(builder, "cdb_create");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        "Cree un fichier texte NEUF sur le disque (chemin absolu) avec ce "
+        "content verbatim. Refuse si le fichier existe deja (utilise "
+        "cdb_replace) et si le dossier parent est absent (ne cree jamais de "
+        "repertoire). L'ecriture est exclusive (O_EXCL) : aucune course ne "
+        "peut ecraser un fichier apparu entre-temps. content vide cree un "
+        "fichier vide.");
+    json_builder_set_member_name(builder, "parameters");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "object");
+    json_builder_set_member_name(builder, "properties");
+    json_builder_begin_object(builder);
+
+    json_builder_set_member_name(builder, "path");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "content");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        "Contenu ecrit tel quel, sauts de ligne compris. Chaine vide = "
+        "fichier vide.");
+    json_builder_end_object(builder);
+
+    json_builder_end_object(builder);
+    json_builder_set_member_name(builder, "required");
+    json_builder_begin_array(builder);
+    json_builder_add_string_value(builder, "path");
+    json_builder_add_string_value(builder, "content");
+    json_builder_end_array(builder);
+    json_builder_end_object(builder);
+    json_builder_end_object(builder);
+    json_builder_end_object(builder);
+}
+
+/* Schéma de l'outil cdb_delete. */
+static void
+tools_schema_cdb_delete(JsonBuilder *builder)
+{
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "function");
+    json_builder_set_member_name(builder, "function");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "name");
+    json_builder_add_string_value(builder, "cdb_delete");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        "Detruit un fichier du disque (chemin absolu) en DEUX passes. "
+        "Sans file_hash : ne supprime RIEN et rend l'empreinte courante du "
+        "fichier. Avec un file_hash qui correspond encore : supprime. Avec "
+        "un hash perime : refus. Refuse les repertoires, les liens "
+        "symboliques et tout ce qui n'est pas un fichier regulier.");
+    json_builder_set_member_name(builder, "parameters");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "object");
+    json_builder_set_member_name(builder, "properties");
+    json_builder_begin_object(builder);
+
+    json_builder_set_member_name(builder, "path");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "file_hash");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        "Empreinte rendue par le premier cdb_delete(path). Omettre pour la "
+        "demande de confirmation.");
+    json_builder_end_object(builder);
+
+    json_builder_end_object(builder);
+    json_builder_set_member_name(builder, "required");
+    json_builder_begin_array(builder);
+    json_builder_add_string_value(builder, "path");
+    json_builder_end_array(builder);
+    json_builder_end_object(builder);
+    json_builder_end_object(builder);
+    json_builder_end_object(builder);
+}
+
 char *
 llm_body_build(LlmTile *t)
 {
@@ -3850,7 +4315,18 @@ llm_body_build(LlmTile *t)
         "cdb_read de cette plage exacte : sans lui, ou s'il ne correspond "
         "plus, refus. La plage remplacee inclut le saut de ligne terminal "
         "de to_line. text vide supprime les lignes. Un refus ne te donnera "
-        "jamais le hash courant : relis.\n";
+                "jamais le hash courant : relis.\n\n"
+        "## cdb_create\n"
+        "Cree un fichier NEUF (chemin absolu) avec content verbatim. Refuse "
+        "si le fichier existe ou si le parent manque ; ne cree jamais de "
+        "repertoire. Tout le contenu venant de toi, authored_range couvre le "
+        "fichier entier.\n\n"
+        "## cdb_delete\n"
+        "DEUX PASSES, obligatoires : cdb_delete(path) ne supprime rien et te "
+        "rend file_hash ; cdb_delete(path, file_hash) supprime seulement si "
+        "l'empreinte est encore la bonne. Ce hash-la n'est pas une preuve de "
+        "lecture : il certifie que le fichier n'a pas change entre ta "
+        "decouverte et ta destruction. repertoire et lien symbolique = refus.\n";
 
     builder = json_builder_new();
     json_builder_begin_object(builder);
@@ -3888,10 +4364,20 @@ llm_body_build(LlmTile *t)
                                                           "cdb_replace");
         LlmToolMode        rep_mode = llm_tool_pref_mode(rep_pref, prof);
         gboolean           announce_replace = (rep_mode != LLM_TOOL_OFF);
+        const LlmToolPref *cre_pref = llm_tools_pref_find(prefs,
+                                                          "cdb_create");
+        LlmToolMode        cre_mode = llm_tool_pref_mode(cre_pref, prof);
+        gboolean           announce_create = (cre_mode != LLM_TOOL_OFF);
+        const LlmToolPref *del_pref = llm_tools_pref_find(prefs,
+                                                          "cdb_delete");
+        LlmToolMode        del_mode = llm_tool_pref_mode(del_pref, prof);
+        gboolean           announce_delete = (del_mode != LLM_TOOL_OFF);
         guint              n_enabled = (announce_bash ? 1 : 0) +
                                        (announce_read ? 1 : 0) +
                                        (announce_insert ? 1 : 0) +
-                                       (announce_replace ? 1 : 0);
+                                       (announce_replace ? 1 : 0) +
+                                       (announce_create ? 1 : 0) +
+                                       (announce_delete ? 1 : 0);
 
         if (n_enabled > 0) {
             json_builder_set_member_name(builder, "tools");
@@ -3904,6 +4390,10 @@ llm_body_build(LlmTile *t)
                 tools_schema_cdb_insert(builder);
             if (announce_replace)
                 tools_schema_cdb_replace(builder);
+            if (announce_create)
+                tools_schema_cdb_create(builder);
+            if (announce_delete)
+                tools_schema_cdb_delete(builder);
             /* futurs outils : autres schémas + tests de mode ici */
             json_builder_end_array(builder);
 
