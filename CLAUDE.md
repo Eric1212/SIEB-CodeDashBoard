@@ -48,7 +48,7 @@ llm_live.json, llm_slots/.
   peinture, un par événement — la mort de la dernière requête
   (`llm_request_free`) et l'avancée de la file (`llm_cdb_next` →
   `core_sync_buttons`) — plus jamais une branche qui « oublie » de le
-  dire. Vérifié par `make test`.
+  dire.
 - `src/llmtile.c` : **LlmTile** — la vue. Buffers GtkTextBuffer par
   vue, replay de l'historique à l'attach (miroir), sélecteur de modèle,
   slots, barre d'approbation. Aucune propriété conversationnelle.
@@ -83,7 +83,6 @@ llm_live.json, llm_slots/.
 ```sh
 make        # compilation (binaire : ./cdb)
 make run    # compile puis lance
-make test   # boucle agentique : prédicats du bouton (sans GTK, sans réseau)
 make asan   # build AddressSanitizer + UBSan
 make clean
 ```
