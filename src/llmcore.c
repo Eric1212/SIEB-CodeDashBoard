@@ -1025,11 +1025,18 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
                                                            "api_key"))
                   : g_strdup("");
 
-    /* active.{provider,model} — les providers ne sont pas touchés. */
-    active = json_object_new();
+    /* active.{provider,model} — les providers ne sont pas touchés. On mute
+     * l'objet « active » déjà présent au lieu de le remplacer : le profil
+     * actif ne vit QUE dans ce fichier (LlmConfig ne le porte pas), donc une
+     * reconstruction à zéro effacerait « profile » en silence et rendrait
+     * DEFAULT au prochain redémarrage. Même patron que
+     * llm_config_set_active_profile(), qui préserve le reste du bloc. */
+    if (!json_object_has_member(root, "active") ||
+        json_object_get_object_member(root, "active") == NULL)
+        json_object_set_object_member(root, "active", json_object_new());
+    active = json_object_get_object_member(root, "active");
     json_object_set_string_member(active, "provider", provider);
     json_object_set_string_member(active, "model", model);
-    json_object_set_object_member(root, "active", active);
 
     /* COPIE immédiate : la chaîne vit dans l'arbre JSON qui sera libéré
      * plus bas (json_node_unref) — garder le pointeur serait un UAF. */
