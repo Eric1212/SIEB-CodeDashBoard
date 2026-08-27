@@ -160,7 +160,7 @@ bash_panel_add_tab(BashPanel *p)
         return;
     index = p->count + 1;
     term = vte_terminal_new();
-    /* Réservoir paginable pour la boucle /CDB:: : 100k lignes. */
+    /* Réservoir paginable pour la boucle agentique : 100k lignes. */
     vte_terminal_set_scrollback_lines(VTE_TERMINAL(term), 100000);
     bash_tab_spawn(p, VTE_TERMINAL(term));
     gtk_notebook_append_page(GTK_NOTEBOOK(p->notebook), term,
@@ -182,7 +182,7 @@ on_add_tab_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 
 static GtkWidget *cdb_first_panel = NULL; /* référence FAIBLE */
 
-/* Un panneau bash est-il disponible pour /CDB:: ? */
+/* Un panneau bash est-il disponible pour un appel d'outil ? */
 gboolean
 bash_panel_exec_tab_possible(void)
 {
@@ -256,7 +256,7 @@ bash_panel_exec_tab(guint index, const char *command)
     return TRUE;
 }
 
-/* Point orange sur l'onglet N : une commande /CDB:: y tourne encore.
+/* Point orange sur l'onglet N : une commande d'outil y tourne encore.
  * Inséré APRÈS le label « bash N » (avant le bouton fermer) ; retiré à
  * la fin du poll, ou à la fermeture de l'onglet (le label meurt avec). */
 void
@@ -538,7 +538,7 @@ bash_panel_new(GListStore *roots, GHashTable *multi_paths)
     /* Enregistrement TOUJOURS sur le dernier panneau créé : lors d'un
      * re-rendu du layout, si le nouveau était créé avant la destruction
      * de l'ancien, il ne s'enregistrait pas — et le pointeur faible
-     * repartait à NULL avec l'ancien (bash « absent » pour /CDB::). */
+     * repartait à NULL avec l'ancien (bash « absent » pour les outils). */
     if (cdb_first_panel != NULL)
         g_object_remove_weak_pointer(G_OBJECT(cdb_first_panel),
                                      (gpointer *)&cdb_first_panel);

@@ -303,7 +303,7 @@ typedef struct LlmTile LlmTile;
  * anticipée ici : une décision en possède une et la libère. */
 struct CdbCmdSpec;
 
-/* Décision d'approbation /CDB:: : état au CORE, rendu par les vues.
+/* Décision d'approbation d'outil : état au CORE, rendu par les vues.
  * Une seule instance active à la fois (tête de la file agentique). */
 typedef enum {
     CDB_A_PENDING,
@@ -336,9 +336,8 @@ typedef struct {
     /* Décision en attente (NULL si aucune) */
     CdbDecision  *decision;
 
-    GQueue      *cmd_queue;   /* commandes /CDB:: valides en attente */
+    GQueue      *cmd_queue;   /* appels d'outils valides en attente */
     GQueue      *cdb_results; /* résultats pendants */
-    int          cdb_retries; /* conservé pour compatibilité UI/state */
 
     /* Boucle tools native : fragments SSE en cours et réponses déjà
      * livrées pour un tool_call_id donné. */
@@ -459,8 +458,6 @@ typedef struct CdbCmdSpec {
     LlmToolMode  mode;  /* ASK / ALLOW / ALLOWPLUS au moment du dispatch */
 } CdbCmdSpec;
 
-#define CDB_RETRY_MAX 3
-
 /* Une section de provider dans le sélecteur : en-tête + listbox. */
 typedef struct {
     char          *provider;
@@ -504,8 +501,8 @@ struct LlmRequest {
 /* ------------------------------------------------ */
 /* Acteur CDB : contrôle à distance des terminaux    */
 /*                                                   */
-/* Le modèle écrit /CDB::bash-N::"//"CDB-IN"//cmd//"CDB-OUT"//" dans */
-/* sa réponse ; CDB demande l'approbation d'Éric,    */
+/* Le modèle demande l'exécution via un tool_call    */
+/* (cdb_bash) ; CDB demande l'approbation d'Éric,    */
 /* exécute DANS l'onglet bash N visible (sortie      */
 /* déroutée vers un fichier-sentinelle), livre le    */
 /* résultat au fil puis re-interroge le modèle.      */

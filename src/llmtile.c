@@ -1,6 +1,6 @@
 /*
  * llmtile.c : tuile LLM (vue) — historique GtkTextBuffer, selecteur
- * de modele, slots, approbations /CDB:: rendues depuis le core.
+ * de modele, slots, approbations d'outils rendues depuis le core.
  * Aucune propriete conversationnelle : tout vient de LlmCore.
  */
 
@@ -22,8 +22,6 @@
 
 
 /* ===== Constantes de vue (split C0) ===== */
-
-#define CDB_RETRY_MAX 3
 
 static const char *const LLM_STATUS_FRAMES[] = {
     "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"
@@ -1388,7 +1386,6 @@ llm_slots_load_dialog(LlmTile *t)
         gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
     }
     llm_entry_clear(t);
-    t->core->cdb_retries = 0;
 
     /* --- Repeuplement + rendu du fil importé. --- */
     n = json_array_get_length(msgs);
@@ -1804,7 +1801,6 @@ llm_chat_clear_dialog(LlmTile *t)
         gtk_text_buffer_move_mark(t->hist, t->reply_mark, &end);
     }
     llm_entry_clear(t);
-    t->core->cdb_retries = 0;
     t->slot_origin = -1;
     t->turns_since_ref = 0;
     {
@@ -2007,7 +2003,6 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     /* llm_send ouvre lui-même le tour (llm_turn_new) : pas d'appel ici,
      * sinon l'en-tête « Claude » serait rendu deux fois. */
     llm_entry_clear(t);
-    t->core->cdb_retries = 0; /* nouveau tour : compteur malformations reset */
     {
         GPtrArray *images = t->pending_images;
 
@@ -2666,7 +2661,7 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     return box;
 }
 
-/* ----- Décision /CDB:: : rendu par vue (l'état vit au core) ----- */
+/* ----- Décision d'outil : rendu par vue (l'état vit au core) ----- */
 
 /* ----- boîtes interactives : une par demande, ouverte ou déjà acceptée -- */
 

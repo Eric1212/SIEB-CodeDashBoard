@@ -22,7 +22,7 @@ pas de gedit (GTK3, fork libgedit).
 | **libadwaita** | Thème clair/sombre système | ✅ |
 | **json-glib** | Persistance (roots, llm.json, llm_live.json, slots) | ✅ |
 | **libsoup-3** | flux SSE du chat LLM | ✅ |
-| **VTE** | terminaux bash + boucle agentique /CDB:: | ✅ |
+| **VTE** | terminaux bash + boucle agentique (tool_calls) | ✅ |
 | **NetSurf** | rendu HTML intégré | ⏳ jalon futur |
 | **ffsr** | recherche | ⏳ jalon futur |
 | **alvalllm** | intégration douce de l'IA | ⏳ jalon futur |
@@ -38,7 +38,7 @@ llm_live.json, llm_slots/.
 
 - `src/llmcore.c` : **LlmCore** — état conversationnel + réseau +
   agentique, vit sans vue. `core_history_push`, stream SSE, décision
-  /CDB:: au core, retries 429/5xx, `core_cdb_announce`.
+  d'outil (tool_calls) au core, retries 429/5xx, `core_cdb_announce`.
 - **Bouton média = état de la BOUCLE agentique, pas d'une requête.** Un
   seul prédicat, `core_agent_loop_alive()` : vivant = icône **pause** (un
   clic annule tout par `llm_cancel_current`, décision ASK en attente

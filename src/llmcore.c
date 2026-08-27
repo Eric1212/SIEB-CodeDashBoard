@@ -1,6 +1,6 @@
 /*
  * llmcore.c : etat conversationnel LLM (LlmCore) — reseau SSE,
- * historique, boucle agentique /CDB::, retries 429/5xx, annonces.
+ * historique, boucle agentique (tool_calls), retries 429/5xx, annonces.
  *
  * Requete : POST {api_url}/chat/completions, stream=true.
  * Reponse : SSE data: {...} ; fin par data: [DONE].
@@ -1299,8 +1299,7 @@ str_replace_all(const char *s, const char *old_s, const char *new_s)
     "- Si un résultat a content:null, cela signifie qu'il n'y a aucun "    \
     "contenu nouveau par rapport aux résultats précédents du même "        \
     "terminal : ce n'est pas un échec.\n"                                  \
-    "- N'invente jamais une sortie de commande et n'utilise jamais le "    \
-    "protocole textuel /CDB::, qui n'existe plus.\n"
+    "- N'invente jamais une sortie de commande.\n"
 
 /* Texte BRUT du prompt (sans substitutions) : fichier s'il existe,
  * sinon le défaut intégré. Pour l'éditeur Settings → Harness.
@@ -3247,9 +3246,9 @@ llm_request_free(LlmRequest *req)
 /* Réassemblage des lignes SSE. Le buffer est DYNAMIQUE (GString) : une
  * ligne « data: … » peut faire bien plus de 8 Ko quand le serveur agrège
  * de gros deltas dans un seul événement — l'ancien buffer fixe jetait
- * alors le début de ligne sans log, et un fragment perdu dans la zone
- * d'un marqueur /CDB:: rendait la commande indétectable ET non
- * condamnable (silence total de la boucle agentique, bug constaté). */
+ * alors le début de ligne sans log, et un fragment perdu rendait le
+ * tool_call indétectable ET non condamnable (silence total de la boucle
+ * agentique, bug constaté). */
 void
 llm_process_bytes(LlmRequest *req, const char *bytes, gssize n)
 {
@@ -3808,7 +3807,7 @@ core_cdb_deliver(LlmCore *c, const char *text)
 /* Re-interrogation du modèle après livraison des résultats. L'ouverture
  * du tour neuf est faite par llm_send elle-même : chaque départ de
  * requête réinitialise t->core->reply — c'est LE correctif du re-comptage
- * infini des commandes /CDB::. */
+ * infini des appels d'outils. */
 void
 llm_cdb_requery(LlmTile *t)
 {
@@ -4135,124 +4134,6 @@ llm_cdb_next(LlmCore *c)
 {
     cdb_next_step(c);
     core_sync_buttons(c);
-}
-
-static gboolean
-paragraph_has_legacy_shell_protocol(char **lines, guint begin, guint stop)
-{
-    static const char *legacy_tokens[] = {
-        "/CDB::",
-        "CDB-IN",
-        "CDB-OUT",
-        "COMMANDE-VOULU",
-        "bash-N::",
-        NULL,
-    };
-
-    for (guint i = begin; i < stop; i++) {
-        if (lines[i] == NULL)
-            continue;
-
-        for (guint t = 0; legacy_tokens[t] != NULL; t++) {
-            if (strstr(lines[i], legacy_tokens[t]) != NULL)
-                return TRUE;
-        }
-    }
-
-    return FALSE;
-}
-
-static char *
-llm_persona_drop_legacy_shell_protocol(char *persona)
-{
-    static const char *heading =
-        "## Contrôle à distance des terminaux";
-    static const char *native_section[] = {
-        "Tu disposes de l'outil natif cdb_bash. Utilise-le pour inspecter,",
-        "mesurer, compiler ou exécuter une action locale. Chaque appel est",
-        "soumis à l'approbation d'Éric. N'utilise jamais le protocole",
-        "textuel /CDB::, qui n'existe plus.",
-        NULL,
-    };
-    gchar    **lines;
-    GString   *out;
-    gsize      length;
-    guint      count;
-    guint      heading_index;
-    guint      i;
-    gboolean   found_heading;
-    gboolean   trailing_newline;
-    gboolean   first_kept_paragraph;
-
-    if (persona == NULL || persona[0] == '\0')
-        return persona;
-
-    length = strlen(persona);
-    trailing_newline = persona[length - 1] == '\n';
-
-    lines = g_strsplit(persona, "\n", -1);
-    count = g_strv_length(lines);
-
-    heading_index = count;
-    found_heading = FALSE;
-    for (i = 0; i < count; i++) {
-        if (g_strcmp0(lines[i], heading) == 0) {
-            heading_index = i;
-            found_heading = TRUE;
-            break;
-        }
-    }
-
-    /* Pas d'ancien protocole detecte : persona conserve tel quel. */
-    if (!found_heading) {
-        g_strfreev(lines);
-        return persona;
-    }
-
-    out = g_string_new(NULL);
-
-    for (i = 0; i < heading_index; i++)
-        g_string_append_printf(out, "%s\n", lines[i]);
-
-    for (i = 0; native_section[i] != NULL; i++)
-        g_string_append_printf(out, "%s\n", native_section[i]);
-    g_string_append(out, "\n");
-
-    i = heading_index + 1;
-    first_kept_paragraph = TRUE;
-
-    while (i < count) {
-        guint begin = i;
-        guint stop;
-        gboolean legacy;
-
-        while (i < count && lines[i] != NULL && lines[i][0] != '\0')
-            i++;
-
-        stop = i;
-        legacy = paragraph_has_legacy_shell_protocol(lines, begin, stop);
-
-        if (!legacy) {
-            if (!first_kept_paragraph)
-                g_string_append(out, "\n");
-
-            for (guint k = begin; k < stop; k++)
-                g_string_append_printf(out, "%s\n", lines[k]);
-
-            first_kept_paragraph = FALSE;
-        }
-
-        while (i < count && lines[i] != NULL && lines[i][0] == '\0')
-            i++;
-    }
-
-    g_strfreev(lines);
-
-    if (!trailing_newline && out->len > 0 &&
-        out->str[out->len - 1] == '\n')
-        g_string_truncate(out, out->len - 1);
-
-    return g_string_free(out, FALSE);
 }
 
 /* Schéma de l'outil cdb_bash (canal natif). */
@@ -4667,7 +4548,6 @@ llm_body_build(LlmTile *t)
 
     static const char tools_policy[] =
         "\n\n# Outils CDB natifs\n\n"
-        "Le protocole textuel /CDB:: est supprimé et interdit. "
         "Utilise exclusivement les outils natifs pour agir.\n"
         "Un résultat tool avec content:null signifie qu'il n'y a aucun "
         "contenu nouveau par rapport aux résultats précédents du même "
@@ -4788,9 +4668,7 @@ llm_body_build(LlmTile *t)
             json_builder_begin_array(builder);
 
             /* Persona utilisateur + politique du canal tools. */
-            base_persona = llm_persona_drop_legacy_shell_protocol(
-                llm_persona_load(t));
-            persona = g_strconcat(base_persona != NULL
+            base_persona = llm_persona_load(t);            persona = g_strconcat(base_persona != NULL
                                       ? base_persona : "",
                                   tools_policy, NULL);
             g_free(base_persona);
@@ -4806,9 +4684,7 @@ llm_body_build(LlmTile *t)
             json_builder_set_member_name(builder, "messages");
             json_builder_begin_array(builder);
 
-            base_persona = llm_persona_drop_legacy_shell_protocol(
-                llm_persona_load(t));
-
+            base_persona = llm_persona_load(t);
             json_builder_begin_object(builder);
             json_builder_set_member_name(builder, "role");
             json_builder_add_string_value(builder, "system");
@@ -4930,8 +4806,8 @@ llm_body_build(LlmTile *t)
  * Ouvre un NOUVEAU tour de réponse : en-tête acteur, t->core->reply remis à
  * zéro, marque de streaming déplacée en fin de fil. Sans cette remise
  * à zéro, la boucle agentique ré-accumulait les réponses précédentes
- * dans t->core->reply et llm_agent_detect redétectait indéfiniment les MÊMES
- * commandes /CDB:: (comptage infini, exécutions multiples). */
+ * dans t->core->reply et relançait indéfiniment les MÊMES appels
+ * d'outils (comptage infini, exécutions multiples). */
 /* Ouverture d'un tour : état au core, reset d'affichage par vue. */
 void
 llm_core_turn_new(LlmCore *c)
@@ -4998,7 +4874,7 @@ llm_history_wipe(LlmTile *t)
     llm_live_wipe();
 }
 
-/* Purge les files /CDB:: (elles référençaient l'ancien fil). */
+/* Purge les files d'outils (elles référençaient l'ancien fil). */
 void
 llm_queues_purge(LlmTile *t)
 {

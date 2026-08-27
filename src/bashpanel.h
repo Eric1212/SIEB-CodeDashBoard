@@ -21,7 +21,7 @@ gboolean bash_panel_exec_tab(guint index, const char *command);
 /* Garantit l'existence d'au moins count onglets. */
 void bash_panel_ensure_tabs(guint count);
 
-/* Un panneau bash est-il disponible (pour /CDB::) ? */
+/* Un panneau bash est-il disponible (pour un appel d'outil) ? */
 gboolean bash_panel_exec_tab_possible(void);
 
 /* Nombre de lignes du buffer (scrollback inclus), -1 si indisponible. */
@@ -45,7 +45,7 @@ gboolean bash_panel_term_alive(guint index);
 gboolean bash_panel_term_ready(guint index);
 
 /* Point orange sur l'étiquette de l'onglet N tant qu'une commande
- * /CDB:: y tourne : l'humain voit d'un coup d'œil quel bash attend
+ * d'outil y tourne : l'humain voit d'un coup d'œil quel bash attend
  * (TUI bloquante, prompt sale…) et va donner la touche attendue. */
 void bash_panel_set_busy(guint index, gboolean busy);
 
