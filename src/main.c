@@ -1819,7 +1819,7 @@ build_roots_panel(App *app)
         create_roots_state(app);
 
     /* Titre + bouton d'ajout. */
-    title = gtk_label_new("Explorateur");
+    title = gtk_label_new(_("Explorer"));
     gtk_label_set_xalign(GTK_LABEL(title), 0.0);
     gtk_widget_set_margin_start(title, 8);
 
