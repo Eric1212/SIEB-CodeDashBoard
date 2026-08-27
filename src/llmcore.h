@@ -163,6 +163,16 @@ llm_cdb_results_flush(LlmCore *c);
 void
 llm_cdb_next(LlmCore *c);
 
+/* Etat de la boucle agentique, vu du core : le bouton media n'est pas
+ * l'etat d'une requete. Boucle vivante = icone pause (un clic annule
+ * tout, decision ASK en attente comprise) et chrono du tour qui tourne. */
+gboolean
+core_agent_loop_alive(LlmCore *c);
+
+/* Diffuse l'etat de la boucle (pause + chrono) sur toutes les vues. */
+void
+core_sync_buttons(LlmCore *c);
+
 char *
 llm_body_build(LlmTile *t);
 

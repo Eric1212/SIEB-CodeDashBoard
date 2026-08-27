@@ -1,6 +1,9 @@
 # Binaire compilé
 cdb
 
+# Binaire de test (make test)
+tests/agent_state
+
 # Objets + dépendances générées par -MMD
 *.o
 *.d

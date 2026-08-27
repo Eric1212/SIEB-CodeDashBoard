@@ -39,6 +39,16 @@ llm_live.json, llm_slots/.
 - `src/llmcore.c` : **LlmCore** — état conversationnel + réseau +
   agentique, vit sans vue. `core_history_push`, stream SSE, décision
   /CDB:: au core, retries 429/5xx, `core_cdb_announce`.
+- **Bouton média = état de la BOUCLE agentique, pas d'une requête.** Un
+  seul prédicat, `core_agent_loop_alive()` : vivant = icône **pause** (un
+  clic annule tout par `llm_cancel_current`, décision ASK en attente
+  comprise) **et** chrono du tour qui tourne ; mort = **play** + horloge
+  arrêtée. Loi d'Éric : le compteur couvre l'échange entier, attente de
+  décision comprise, et non la seule requête réseau. Deux points de
+  peinture, un par événement — la mort de la dernière requête
+  (`llm_request_free`) et l'avancée de la file (`llm_cdb_next` →
+  `core_sync_buttons`) — plus jamais une branche qui « oublie » de le
+  dire. Vérifié par `make test`.
 - `src/llmtile.c` : **LlmTile** — la vue. Buffers GtkTextBuffer par
   vue, replay de l'historique à l'attach (miroir), sélecteur de modèle,
   slots, barre d'approbation. Aucune propriété conversationnelle.
@@ -73,6 +83,7 @@ llm_live.json, llm_slots/.
 ```sh
 make        # compilation (binaire : ./cdb)
 make run    # compile puis lance
+make test   # boucle agentique : prédicats du bouton (sans GTK, sans réseau)
 make asan   # build AddressSanitizer + UBSan
 make clean
 ```

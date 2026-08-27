@@ -24,6 +24,17 @@ $(TARGET): $(OBJ)
 run: $(TARGET)
 	./$(TARGET)
 
+# Test unitaire de la boucle agentique : les predicats du bouton (alive /
+# rolling), sans GTK, sans reseau et sans clic. Le test fournit son propre
+# main(), donc on lie tous les objets SAUF main.o.
+TEST_SRC  := tests/agent_state.c
+TEST_OBJ  := $(TEST_SRC:.c=.o)
+APP_OBJ   := $(filter-out src/main.o,$(OBJ))
+
+test: $(TEST_OBJ) $(APP_OBJ)
+	$(CC) $(CFLAGS) -o tests/agent_state $(APP_OBJ) $(TEST_OBJ) $(LIBS) $(LDFLAGS)
+	./tests/agent_state
+
 # Build avec AddressSanitizer + UBSan (debug de corruption mémoire).
 asan:
 	$(MAKE) clean
@@ -32,9 +43,9 @@ asan:
 	            LIBS="$(LIBS) -fsanitize=address,undefined"
 
 clean:
-	rm -f $(OBJ) $(DEP) $(TARGET)
+	rm -f $(OBJ) $(DEP) $(TARGET) $(TEST_OBJ) $(TEST_OBJ:.o=.d) tests/agent_state
 
 # Dépendances de headers générées par -MMD (ignorées si absentes).
 -include $(DEP)
 
-.PHONY: all run asan clean
+.PHONY: all run test asan clean

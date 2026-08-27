@@ -2826,6 +2826,34 @@ llm_finalize_pending_tools(LlmCore *c)
     return has_valid_id;
 }
 
+/* Le bouton média et le chrono du tour ne décrivent pas une requête mais
+ * la BOUCLE agentique. Un seul verdict, deux effets : vivante = icone
+ * pause (un clic annule tout, decision ASK en attente comprise) et
+ * compteur du tour qui tourne ; morte = play et horloge arretee.
+ * stop_requested domine tout : une boucle annulée est morte même si sa
+ * requête n'est pas encore libérée (le callback de lecture la jettera).
+ * Les polls sont globaux et partagés par tous les cores : filtrer sur
+ * pl->core et ignorer ceux que l'annulation a déjà répondus. */
+gboolean
+core_agent_loop_alive(LlmCore *c)
+{
+    if (c == NULL || c->stop_requested)
+        return FALSE;
+    if (c->cur_req != NULL || c->decision != NULL)
+        return TRUE;
+    if (c->cmd_queue != NULL && !g_queue_is_empty(c->cmd_queue))
+        return TRUE;
+    if (cdb_polls != NULL) {
+        for (guint i = 0; i < cdb_polls->len; i++) {
+            CdbPoll *pl = g_ptr_array_index(cdb_polls, i);
+
+            if (pl->core == c && !pl->cancelled)
+                return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 void
 llm_cancel_current(LlmTile *t)
 {
@@ -2921,8 +2949,20 @@ void
 llm_request_free(LlmRequest *req)
 {
     /* La requête courante de la tuile meurt : plus rien à annuler. */
-    if (req->core != NULL && req->core->cur_req == req)
+    if (req->core != NULL && req->core->cur_req == req) {
         req->core->cur_req = NULL;
+        /* Point de passage UNIQUE du bouton : la derniere requete du fil
+         * meurt ici, quel que soit le chemin — annulation, erreur reseau,
+         * erreur HTTP, fin de flux sans tools. Si rien d'autre ne tient la
+         * boucle (decision en attente, file non vide, poll vivant, requete
+         * deja relancee par-dessous), l'icone retombe a play et le chrono
+         * du tour s'arrete. Sans ca, un flux mort laissait pause affiche
+         * pour toujours, avec un compteur qui tourne dans le vide. */
+        if (!core_agent_loop_alive(req->core))
+            for (guint vi = 0; vi < req->core->views->len; vi++)
+                llm_busy_set(g_ptr_array_index(req->core->views, vi),
+                             FALSE);
+    }
     g_free(req->url);
     g_free(req->body);
     g_free(req->auth);
@@ -3049,8 +3089,19 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
         llm_request_free(req);
         if (has_tools)
             llm_cdb_next(c);
-        for (vi = 0; vi < c->views->len; vi++)
-            llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
+        /* Un tour de tools n'est PAS la fin de l'echange : llm_cdb_next()
+         * vient peut-etre de relancer llm_send() par-dessous nous, et la
+         * requete suivante est deja en vol. Poser FALSE ici a l'aveugle
+         * peignait play pendant ce tour-la et coupait le chrono — d'ou un
+         * second envoi possible, donc DEUX requetes concurrentlyes sur le
+         * meme core (cur_req ecrase, deux flux SSE dans reply). Le bouton
+         * suit desormais la boucle, pas la requete qui vient de mourir. */
+        {
+            gboolean alive = core_agent_loop_alive(c);
+
+            for (vi = 0; vi < c->views->len; vi++)
+                llm_busy_set(g_ptr_array_index(c->views, vi), alive);
+        }
         return;
     }
 
@@ -3730,13 +3781,15 @@ cdb_decision_approve(LlmCore *c, CdbDecision *d)
      * Fichier : synchrone, c'est donc ici qu'on la reprend. */
     if (!is_bash)
         llm_cdb_next(c);
+    else
+        core_sync_buttons(c); /* le poll roule : le bouton doit le dire */
 }
 
 /* Avance la file : commande suivante → approbation ; vide →
  * livraison des résultats pendants (dédupliqués), puis
  * re-interrogation du modèle. */
-void
-llm_cdb_next(LlmCore *c)
+static void
+cdb_next_step(LlmCore *c)
 {
     /* Une seule file pour tous les outils : l'ordre demandé -> approuvé
      * -> appliqué est préservé même en mélangeant bash et éditions de
@@ -3782,6 +3835,32 @@ llm_cdb_next(LlmCore *c)
         return;
     }
 }
+
+/* Diffuse l'état de la boucle sur TOUTES les vues : le bouton n'est jamais
+ * écrit localement par une tuile, il est RE-LU du core (loi du miroir).
+ * Seul chemin qui garde les vues d'accord quand la boucle avance hors
+ * requête réseau — outil en cours d'exécution, décision posée. */
+void
+core_sync_buttons(LlmCore *c)
+{
+    gboolean alive = core_agent_loop_alive(c);
+
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_busy_set(g_ptr_array_index(c->views, vi), alive);
+}
+
+/* Avancer la file change l'etat du bouton dans TOUS les cas : bash lance
+ * (poll vivant = pause), decision ASK posee (pause : le clic annulera la
+ * decision et repondra formellement son tool_call_id), file epuisee
+ * (re-requete = pause, boucle finie = play). Le peindre a la sortie de
+ * l'etape, pas dans chaque branche, ferme la fenetre du tour de tools. */
+void
+llm_cdb_next(LlmCore *c)
+{
+    cdb_next_step(c);
+    core_sync_buttons(c);
+}
+
 static gboolean
 paragraph_has_legacy_shell_protocol(char **lines, guint begin, guint stop)
 {

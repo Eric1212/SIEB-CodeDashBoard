@@ -505,6 +505,8 @@ hist_flush_reply(LlmTile *t)
 void
 llm_busy_set(LlmTile *t, gboolean busy)
 {
+    gboolean alive;
+
     t->busy = busy;
     gtk_button_set_icon_name(GTK_BUTTON(t->send_btn), busy
                              ? "media-playback-pause-symbolic"
@@ -514,10 +516,21 @@ llm_busy_set(LlmTile *t, gboolean busy)
                                 : "Envoyer");
     gtk_widget_set_sensitive(t->send_btn, TRUE);
 
-    if (busy)
+    /* Un seul rythme, celui de la boucle agentique (loi d'Éric, 27 août) :
+     * vivante = icône pause, donc un clic annule tout — la décision ASK en
+     * attente comprise — et le compteur du tour continue. L'appelant ne
+     * peut plus éteindre l'horloge par accident : busy=FALSE posé sur une
+     * boucle vivante laisse le chrono courir, et c'est le core qui remet
+     * play quand la boucle meurt vraiment (llm_request_free). */
+    alive = core_agent_loop_alive(t->core);
+    if (busy || alive)
         llm_status_start(t);
     else
         llm_status_stop(t);
+
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: [btn] busy=%d alive=%d views=%u\n", busy, alive,
+                   t->core != NULL ? t->core->views->len : 0u);
 }
 
 gboolean
@@ -555,11 +568,16 @@ llm_status_start(LlmTile *t)
 void
 llm_status_stop(LlmTile *t)
 {
+    /* Idempotence : status_started_us vaut 0 sur une vue neuve (et apres
+     * un jamais-demarre), d'ou un elapsed colossal si on le soustrait a
+     * l'horloge monotonique. L'annulation appelle busy_set(FALSE) deux
+     * fois — llm_cancel_current puis le callback de lecture : le second
+     * arret ne doit pas deplacer la mesure du premier. */
     if (t->status_timeout_id != 0) {
         g_source_remove(t->status_timeout_id);
         t->status_timeout_id = 0;
+        t->status_elapsed_us = g_get_monotonic_time() - t->status_started_us;
     }
-    t->status_elapsed_us = g_get_monotonic_time() - t->status_started_us;
 
     if (t->status_logo != NULL)
         gtk_label_set_text(GTK_LABEL(t->status_logo), " ");
@@ -1738,12 +1756,14 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
         llm_cancel_current(t);
         return;
     }
-    t->busy = TRUE;
+    /* Rien n'est peint ici : llm_send() appelle llm_send_attempt(), qui
+     * pose busy = TRUE sur TOUTES les vues. Écrire le drapeau en local
+     * ferait un troisième peintre, et une tuile désaccordée avec ses
+     * soeurs ; les deux gardes ci-dessous n'ont donc rien à défaire. */
     prompt = llm_entry_text(t);
     if (prompt[0] == '\0' &&
         (t->pending_images == NULL || t->pending_images->len == 0)) {
         g_free(prompt);
-        t->busy = FALSE;
         return;
     }
 
@@ -1755,7 +1775,6 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
             "aucun modèle actif : choisissez-en un dans le menu de "
             "modèle (bouton « ? ») au-dessus de la saisie.");
         g_free(prompt);
-        t->busy = FALSE;
         return;
     }
 
@@ -2385,6 +2404,15 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     t->slot_origin = -1;
     g_object_set_data(G_OBJECT(box), "cdb-llm-core", core);
     g_object_set_data_full(G_OBJECT(box), "cdb-llm-tile", t, llm_tile_free);
+    /* Le bouton et le chrono suivent la boucle du core, pas la vue : une
+     * tuile attachee EN COURS de tour doit se montrer pause et compter —
+     * sinon elle afficherait play pendant que sa soeur stream, et son clic
+     * partirait en seconde requete sur un tour en cours (loi du miroir).
+     * Place ici, apres la creation des widgets de statut : c'est
+     * llm_busy_set qui les peint. Vue neuve sur boucle morte : rien. */
+    if (core_agent_loop_alive(core))
+        llm_busy_set(t, TRUE);
+
     return box;
 }
 
