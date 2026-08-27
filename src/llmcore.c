@@ -30,6 +30,19 @@
 #include <string.h>
 #include <gdk/gdkkeysyms.h>
 
+/* Attribution applicative (convention OpenRouter, doc app-attribution) :
+ * headers HTTP poses sur CHAQUE requete chat/completions, tous providers
+ * confondus — HTTP impose aux destinataires d'ignorer les headers
+ * inconnus (RFC 9110 §6.3), donc HyperCharm/OpenCode les droppent
+ * silencieusement (verifie par curl le 2026-06-25). OpenRouter, lui,
+ * cree la page « App » dans ses rankings/analytics a partir de ca :
+ *   HTTP-Referer             = URL, identifiant unique de l'app ;
+ *   X-OpenRouter-Title       = nom affiche dans les rankings ;
+ *   X-OpenRouter-Categories  = marketplace (comme Zed/Cursor). */
+#define LLM_APP_REFERER    "https://github.com/SIEB/SIEB-CodeDashBoard"
+#define LLM_APP_TITLE      "CodeDashBoard"
+#define LLM_APP_CATEGORIES "programming-app"
+
 /* ------------------------------------------------------------------ */
 /* Config                                                             */
 /* ------------------------------------------------------------------ */
@@ -3739,6 +3752,14 @@ llm_send_attempt(LlmRequest *req)
                                 "Content-Type", "application/json");
     soup_message_headers_append(soup_message_get_request_headers(msg),
                                 "Accept", "text/event-stream");
+    /* Attribution applicative : tous providers (voir #defines en tete). */
+    soup_message_headers_append(soup_message_get_request_headers(msg),
+                                "HTTP-Referer", LLM_APP_REFERER);
+    soup_message_headers_append(soup_message_get_request_headers(msg),
+                                "X-OpenRouter-Title", LLM_APP_TITLE);
+    soup_message_headers_append(soup_message_get_request_headers(msg),
+                                "X-OpenRouter-Categories",
+                                LLM_APP_CATEGORIES);
 
     soup_message_set_request_body_from_bytes(
         msg, "application/json",
