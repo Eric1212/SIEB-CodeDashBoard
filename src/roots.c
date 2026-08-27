@@ -373,6 +373,50 @@ scan_project_dirs(GListStore *roots, RootEntry *structure, const char *path)
     g_ptr_array_free(found, TRUE);
 }
 
+/* Re-scan des structures déjà déclarées, à la demande : chaque
+ * sous-dossier direct non encore connu devient un root projet. C'est
+ * exactement ce que fait le chargement (entry_to_json ne persiste que les
+ * racines), simplement en cours de session — sans lui, un « mkdir
+ * projet_neuf » dans le répertoire d'accueil restait invisible jusqu'au
+ * redémarrage.
+ *
+ * Idempotent par construction : scan_project_dirs écarte déjà un chemin
+ * présent à la racine (il l'absorbe) ou enfant d'une autre structure.
+ *
+ * Les structures sont RAMASSÉES AVANT le scan. scan_project_dirs peut
+ * absorber un projet isolé, donc RETIRER une entrée du store qu'on serait
+ * en train de parcourir : un parcours indexé sauterait silencieusement la
+ * structure suivante — le genre de bug muet qui ne se remarque jamais.
+ *
+ * Ce que ça ne fait pas : retirer un projet dont le dossier a disparu du
+ * disque. Le faire détruirait un RootEntry, et son cache, sous un tree
+ * model encore vivant. Ça se traitera avec la purge des fantômes, pas ici. */
+void
+roots_rescan_structures(GListStore *roots)
+{
+    GPtrArray *structures;
+    guint      n;
+
+    if (roots == NULL)
+        return;
+    structures = g_ptr_array_new_with_free_func(g_object_unref);
+    n = g_list_model_get_n_items(G_LIST_MODEL(roots));
+    for (guint i = 0; i < n; i++) {
+        RootEntry *e = g_list_model_get_item(G_LIST_MODEL(roots), i);
+
+        if (e->kind == ROOT_STRUCTURE && e->children != NULL)
+            g_ptr_array_add(structures, e); /* la ref part au tableau */
+        else
+            g_object_unref(e);
+    }
+    for (guint i = 0; i < structures->len; i++) {
+        RootEntry *s = g_ptr_array_index(structures, i);
+
+        scan_project_dirs(roots, s, s->path);
+    }
+    g_ptr_array_free(structures, TRUE);
+}
+
 RootEntry *
 roots_add(GListStore *roots, RootEntry *parent, RootKind kind, const char *path)
 {

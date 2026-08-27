@@ -183,6 +183,58 @@ static GtkWidget *build_roots_panel(App *app);
 /* Chargement de fichier                                               */
 /* ------------------------------------------------------------------ */
 
+/* Éviction du cache de buffers. Un PerFile ne survit à un changement de
+ * fichier que s'il porte une information qu'on ne retrouve pas sur le
+ * disque. Deux cas seulement :
+ *
+ *   - le fichier est SALE (dirty_contains) : son contenu en attente
+ *     n'existe nulle part ailleurs ;
+ *   - c'est le fichier COURANT : app->buffer et app->saved_content en
+ *     sont des pointeurs directs, et render_layout() remet
+ *     app->source_view à NULL avant que build_editor() ne relise
+ *     app->buffer — libérer ce PerFile-là laisserait un pointeur pendu
+ *     à la prochaine reconstruction du layout.
+ *
+ * Tout le reste n'est qu'une copie locale du disque, potentiellement
+ * périmée. Sans éviction, une session peut ainsi « retenir » un
+ * README.md qui ne ressemble plus à celui du disque, et le
+ * ressélectionner ne le relira jamais : load_file ne touche le disque
+ * que lorsque le PerFile est absent. Le cache devenait alors un veto.
+ *
+ * Coût assumé : le buffer évincé perd sa pile d'annulation, et le
+ * fichier est relu depuis le disque au prochain clic. Ces deux pertes
+ * ne concernent que des fichiers propres.
+ *
+ * Sûreté mémoire : une GtkTextView tient une ref forte sur son buffer,
+ * donc un buffer encore affiché survit de lui-même au g_object_unref de
+ * per_file_free — on ne peut pas faire disparaître un texte sous les
+ * yeux de l'utilisateur.
+ */
+static void
+trim_buffers(App *app)
+{
+    GHashTableIter it;
+    gpointer       key, val;
+    guint          dropped = 0;
+
+    if (app->files == NULL)
+        return;
+    g_hash_table_iter_init(&it, app->files);
+    while (g_hash_table_iter_next(&it, &key, &val)) {
+        const char *path = key;
+
+        if (g_strcmp0(path, app->current_file) == 0)
+            continue;
+        if (dirty_contains(app->dirty, path))
+            continue;
+        g_hash_table_iter_remove(&it); /* per_file_free : buffer + baseline */
+        dropped++;
+    }
+    if (dropped > 0 && g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: trim_buffers %u buffer(s) propre(s) évicté(s)\n",
+                   dropped);
+}
+
 static void
 load_file(App *app, const char *path)
 {
@@ -315,6 +367,13 @@ load_file(App *app, const char *path)
     update_modified_indicator(app);
     recompute_dirty(app);
     update_diff(app);
+
+    /* Le cache de buffers n'est pas une liste de fichiers « ouverts » :
+     * c'est un cache. Un fichier propre n'y garde qu'une copie du disque,
+     * et cette copie peut être périmée sans que personne ne le sache —
+     * CDB n'a jamais consulté l'horodatage d'un fichier. On la jette : le
+     * prochain clic sur ce fichier relira le disque. */
+    trim_buffers(app);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1206,6 +1265,100 @@ mark_parent_dirty(App *app, const char *dir_path)
     }
 }
 
+/* --- Rechargement manuel de l'arborescence ------------------------- */
+
+/* Le cache de fs_scan_dir ne tombe jamais de lui-même : sans marquage,
+ * replier puis déplier un dossier resservait la liste ancienne, et une
+ * création venue d'un terminal (ou d'un autre poste, ou d'un git
+ * checkout) restait invisible jusqu'au redémarrage de la session.
+ *
+ * mark_parent_dirty() suffit pour ce que CDB fait lui-même — il connaît
+ * le dossier touché. Pour ce qui vient du dehors, on ne devine pas :
+ * l'utilisateur qui clique sait mieux que nous ce qui a bougé, et marquer
+ * tout le monde coûte un readdir par dossier ouvert, pas plus. */
+static void
+mark_store_all_dirty(GListStore *store)
+{
+    guint n;
+
+    if (store == NULL)
+        return;
+    n = g_list_model_get_n_items(G_LIST_MODEL(store));
+    for (guint i = 0; i < n; i++) {
+        FileEntry *f = g_list_model_get_item(G_LIST_MODEL(store), i);
+
+        if (f->is_dir) {
+            f->children_dirty = TRUE;
+            /* Vide si le sous-dossier n'a jamais été déplié : rien à
+             * invalider là où il n'y a pas de cache. */
+            mark_store_all_dirty(f->children);
+        }
+        g_object_unref(f);
+    }
+}
+
+static void
+mark_all_dirty(App *app)
+{
+    guint n;
+
+    if (app == NULL || app->roots == NULL)
+        return;
+    n = g_list_model_get_n_items(G_LIST_MODEL(app->roots));
+    for (guint i = 0; i < n; i++) {
+        RootEntry *e = g_list_model_get_item(G_LIST_MODEL(app->roots), i);
+
+        if (e->kind == ROOT_PROJECT) {
+            e->contents_dirty = TRUE;
+            mark_store_all_dirty(e->contents);
+        } else if (e->children != NULL) {
+            /* Structure : ses projets enfants ne sont PAS persistés —
+             * entry_to_json ne sauve que les racines, « les projets d'une
+             * structure sont reconstruits par scan au chargement ». Les
+             * nouveaux sont découverts par roots_rescan_structures(),
+             * appelé avant nous ; ici on marque seulement le contenu des
+             * projets déjà connus. Un projet neuf a contents == NULL, il
+             * sera scanné au premier dépliage sans qu'on y touche. */
+            guint m = g_list_model_get_n_items(G_LIST_MODEL(e->children));
+
+            for (guint j = 0; j < m; j++) {
+                RootEntry *p =
+                    g_list_model_get_item(G_LIST_MODEL(e->children), j);
+
+                p->contents_dirty = TRUE;
+                mark_store_all_dirty(p->contents);
+                g_object_unref(p);
+            }
+        }
+        g_object_unref(e);
+    }
+}
+
+static void
+on_refresh_explorer_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
+{
+    App *app = data;
+
+    /* Trois gestes, dans cet ordre, et l'ordre est le fond de l'affaire :
+     *
+     * 1. Découvrir les projets apparus sous une structure. Un sous-dossier
+     *    créé hors de CDB dans le répertoire d'accueil EST un nouveau
+     *    projet : les enfants d'une structure viennent d'un readdir, pas de
+     *    roots.json. Marquer avant de découvrir marquerait une liste qui
+     *    l'ignore encore.
+     * 2. Marquer le contenu filesystem périmé.
+     * 3. Reconstruire. rebuild_explorer() recrée le tree model mais PAS le
+     *    contenu déjà scanné — sans les flags posés en 2, il resservirait
+     *    le cache, ce qui est exactement le bug qu'on répare.
+     *
+     * Ce que le bouton ne fait pas : retirer les projets dont le dossier a
+     * disparu du disque (voir roots_rescan_structures), ni recharger
+     * roots.json — une racine ajoutée ailleurs passe par « + ». */
+    roots_rescan_structures(app->roots);
+    mark_all_dirty(app);
+    rebuild_explorer(app);
+}
+
 static void
 on_new_entry_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
 {
@@ -1655,6 +1808,7 @@ build_roots_panel(App *app)
     GtkWidget *title_box;
     GtkWidget *title;
     GtkWidget *add_button;
+    GtkWidget *refresh_button;
     GtkWidget *scrolled;
 
     /* ÉTAT : modèle + sélection, créé une fois et partagé par toutes les
@@ -1671,11 +1825,27 @@ build_roots_panel(App *app)
     gtk_widget_set_margin_start(add_button, 6);
     gtk_widget_set_margin_end(add_button, 6);
 
+    /* Rechargement manuel de l'arborescence. Le geste est délibérément
+     * dans la main de l'utilisateur : rebuild_explorer() recrée le modèle
+     * et la sélection, donc le confier à une minuterie ou à un
+     * GFileMonitor effacerait une multi-sélection en cours sous ses
+     * doigts — git checkout, compilation, agent qui écrit. Un bouton ne
+     * peut pas faire ça. */
+    refresh_button = gtk_button_new_from_icon_name("view-refresh-symbolic");
+    gtk_widget_add_css_class(refresh_button, "flat");
+    gtk_widget_add_css_class(refresh_button, "cdb-flat");
+    gtk_widget_set_valign(refresh_button, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text(refresh_button,
+                                "Recharger l'arborescence des projets");
+    g_signal_connect(refresh_button, "clicked",
+                     G_CALLBACK(on_refresh_explorer_clicked), app);
+
     title_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_margin_top(title_box, 4);
     gtk_widget_set_margin_bottom(title_box, 2);
     gtk_box_append(GTK_BOX(title_box), title);
     gtk_box_append(GTK_BOX(title_box), add_button);
+    gtk_box_append(GTK_BOX(title_box), refresh_button);
 
     /* Zone de l'arbre : autoexpand=FALSE, tout replié (compact) ;
      * l'expansion n'arrive qu'au clic de l'utilisateur, sans limite.

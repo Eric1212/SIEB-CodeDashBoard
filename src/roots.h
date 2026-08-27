@@ -59,6 +59,12 @@ RootEntry *roots_add(GListStore *roots, RootEntry *parent,
  * doublons). */
 RootEntry *roots_add_structure(GListStore *roots, const char *path);
 
+/* Re-scan des structures : un sous-dossier direct non encore connu devient
+ * un root projet. Un projet n'est pas persisté, il est découvert — c'est
+ * ce qui rend un projet créé hors de CDB visible sans redémarrer. Les
+ * projets disparus du disque ne sont pas retirés. */
+void roots_rescan_structures(GListStore *roots);
+
 /* TRUE si le chemin est déjà un root (racine) ou un projet d'une
  * structure : empêche les doublons à l'ajout. */
 gboolean roots_conflict(GListStore *roots, const char *path);
