@@ -1,7 +1,7 @@
 # Plan i18n — CodeDashBoard (CDB)
 
-**Statut** : phase 0 (cleanup) terminée ; **prochaine étape : Jalon A**.
-**Date** : 2025-08-27 (rév. 3 — cleanup `/CDB::` livré).
+**Statut** : phase 0 et jalons A/B livrés ; **prochaine étape : Jalon C**.
+**Date** : 2025-08-27 (rév. 4 — A et B validés de bout en bout).
 **Décideur** : Éric Boucher.
 
 ---
@@ -58,7 +58,7 @@ Validé : 0 warning, `make test` 17/17.
 
 ## 4. Jalons i18n (chaque jalon compile, tourne, est validable)
 
-### Jalon A — Infrastructure gettext ← PROCHAIN
+### Jalon A — Infrastructure gettext ✅ (commit `b6d3414`)
 - `src/i18n.h` : wrapper définissant `GETTEXT_PACKAGE` (`"cdb"`), `LOCALEDIR`,
   inclusion de `<glib/gi18n.h>`, macros `_()`, `N_()`, `ngettext()`.
 - `src/main.c` : `setlocale` + `bindtextdomain` + `textdomain` en tout début
@@ -71,13 +71,21 @@ Validé : 0 warning, `make test` 17/17.
 **Critère de validation** : `make pot && make mo` produit un `.mo` valide
 (même vide de traductions).
 
-### Jalon B — Chaîne témoin (end-to-end)
+### Jalon B — Chaîne témoin (end-to-end) ✅
+**Chaîne livrée** : `main.c:1822` `"Explorateur"` → msgid `"Explorer"`, `fr.po`
+→ `"Explorateur"`, `en.po` msgstr vide (retombe sur le msgid).
+
+**Découverte validée par `strace` sur le binaire** : libintl résout bien la
+locale régionale `fr_CA.UTF-8` vers le catalogue `fr` (il tente
+`fr_CA.UTF-8`, `fr_CA`, `fr_CA.utf8`, `fr.UTF-8`, `fr.utf8`, puis **`fr`** ✅).
+**Pas besoin de catalogue `fr_CA` distinct** — règle à retenir pour toute
+future langue régionale (`pt_BR`, `es_MX`…).
 - Marquer **une** chaîne de `main.c` avec `_()`.
 - Créer `fr.po` et `en.po` minimaux.
 - **Critère** : `LANG=en_US.UTF-8 ./cdb` affiche la chaîne en anglais ;
   sans `LANG` (français système), elle reste en français.
 
-### Jalon C — Petits fichiers
+### Jalon C — Petits fichiers ← PROCHAIN
 `ibox.c` (~4 chaînes), `session.c` (~3), `llmlive.c` (~1) : marquage,
 extraction, traduction. Valide la recette sur des cas réels mais petits.
 
