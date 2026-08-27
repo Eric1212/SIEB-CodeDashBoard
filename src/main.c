@@ -4663,6 +4663,26 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     if (!session_init())
         return;
 
+    /* Tout ce qui depend du numero de session se construit ICI, une fois
+     * session_init() passee. Avant, cdb_session vaut encore sa valeur
+     * statique 0 : dirty_store_new() et llm_config_load() figeraient alors
+     * les chemins et la config de la 000 (constate sous strace sur une
+     * session 001 : 000/dirty.json et 000/llm.json ouverts, alors que les
+     * cinq autres fichiers etaient au bon numero). app->roots est charge ici
+     * pour la meme raison, et parce que le core en a besoin a sa creation.
+     * Les gardes rendent l'initialisation idempotente ; si session_init
+     * annule on est deja sorti, et l'arret de main() tolere ces champs a
+     * NULL (dirty_store_free, llm_core_free, llm_config_free). */
+    if (app->dirty == NULL)
+        app->dirty = dirty_store_new();
+    if (app->roots == NULL)
+        app->roots = roots_load();
+    if (app->llm_cfg == NULL)
+        app->llm_cfg = llm_config_load();
+    if (app->llm_core == NULL)
+        app->llm_core = llm_core_new(app->llm_cfg, app->roots,
+                                     app->multi_paths);
+
     /* Live (C5) : APRES session_init — le numéro de session
      * fixe le dossier de llm_live.json. */
     llm_live_load(app->llm_core);
@@ -4789,8 +4809,9 @@ on_activate(GtkApplication *gtk_app, gpointer data)
                                               (const char *[]){"<Primary>s", NULL});
     }
 
-    /* Système de tuiles : modèle (source de vérité) + rendu paned. */
-    app->roots = roots_load();
+    /* Système de tuiles : modèle (source de vérité) + rendu paned.
+     * app->roots n'est plus chargé ici : il est déjà disponible plus haut,
+     * où le core en a besoin à sa création. */
     app->layout = layout_load();
     app->layout_holder = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     render_layout(app);
@@ -5098,11 +5119,16 @@ main(int argc, char **argv)
     app = g_new0(App, 1);
     app->sel_anchor = GTK_INVALID_LIST_POSITION;
     app->multi_paths = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    app->dirty = dirty_store_new();
     app->files = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
                                        per_file_free);
-    app->llm_cfg = llm_config_load();
-    app->llm_core = llm_core_new(app->llm_cfg, app->roots, app->multi_paths);
+    /* PAS DE dirty / llm_cfg / llm_core ici : ces trois objets dependent du
+     * numero de session, que session_init() ne resout qu'a l'activation (il
+     * lui faut un display pour le dialogue de numero). Construits a cet
+     * instant, ils figeraient cdb_session = 0 — la valeur statique de
+     * session.c — et ouvriraient 000/dirty.json et 000/llm.json au lieu de
+     * ceux de la session lancee. Verifie sous strace : 5 fichiers au bon
+     * numero, 2 au 000. Tout ce qui depend de la session se cree donc dans
+     * on_activate(), apres session_init(). */
 
     /* NON_UNIQUE : chaque processus est sa propre application — sinon
      * l'enfant délègue son activation au primaire (même ID D-Bus) et
