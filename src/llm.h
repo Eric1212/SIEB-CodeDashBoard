@@ -376,7 +376,8 @@ typedef struct {
 typedef enum {
     CDB_SPEC_BASH = 0,
     CDB_SPEC_READ,
-    CDB_SPEC_INSERT
+    CDB_SPEC_INSERT,
+    CDB_SPEC_REPLACE
 } CdbSpecKind;
 
 /* Spécification d'un appel d'outil natif en file d'attente.

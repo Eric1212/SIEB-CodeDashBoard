@@ -91,6 +91,7 @@ llm_tools_prefs_load(void)
     gboolean    have_bash = FALSE;
     gboolean    have_read = FALSE;
     gboolean    have_insert = FALSE;
+    gboolean    have_replace = FALSE;
 
     if (json_parser_load_from_file(parser, path, NULL) &&
         json_parser_get_root(parser) != NULL &&
@@ -141,6 +142,8 @@ llm_tools_prefs_load(void)
                     have_read = TRUE;
                 if (g_strcmp0(p->name, "cdb_insert") == 0)
                     have_insert = TRUE;
+                if (g_strcmp0(p->name, "cdb_replace") == 0)
+                    have_replace = TRUE;
                 g_ptr_array_add(out, p);
             }
         }
@@ -168,6 +171,13 @@ llm_tools_prefs_load(void)
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
         p->name = g_strdup("cdb_insert");
+        tool_pref_apply_defaults(p);
+        g_ptr_array_add(out, p);
+    }
+    if (!have_replace) {
+        LlmToolPref *p = g_new0(LlmToolPref, 1);
+
+        p->name = g_strdup("cdb_replace");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }
