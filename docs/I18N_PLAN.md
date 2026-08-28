@@ -1,9 +1,9 @@
 # Plan i18n — CodeDashBoard (CDB)
 
-**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2 livrés ;
-**prochaine étape : Jalon D3** (Settings/LLM).
-**Date** : 2025-08-27 (rév. 5 — D éclaté en sous-jalons, politique des
-diagnostics ajoutée, garde-fou fuzzy).
+**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4 livrés — **le
+Jalon D est bouclé** ; **prochaine étape : Jalon E** (`llmtile.c`).
+**Date** : 2025-08-28 (rév. 6 — Jalon D bouclé : D3 + D4 livrés, msgmerge en
+`--no-fuzzy-matching`, catalogue à 125 msgids tous traduits).
 **Décideur** : Éric Boucher.
 
 ---
@@ -101,7 +101,7 @@ en réalité ~120 littérales dont beaucoup ne sont pas de l'UI).
 | **D1.5** | **Diagnostics** : 26 rapports d'échec marqués, 11 traces de télémétrie détruites, journal `CDB_DEBUG` conservé et marqué | ✅ `b096a08` + `2632ae4` — politique au §5 |
 | **D2** | Menu contextuel, validations de nom, alertes, tooltip d'ajout de root + **premier `ngettext`** | ✅ `4485020` (18 msgids) |
 | **D3** | Settings / LLM : labels, placeholders, descriptions de catégories, `Vide\n(emplacement réservé)` | ← **PROCHAIN** |
-| **D4** | Menus du HeaderBar. Décision prise : traduire les libellés déjà anglais (`Settings` → « Paramètres », `Exit` → « Quitter », `About CDB` → « À propos »). ⚠ **accouplement découvert** : `main.c` retrouve la fenêtre Settings **par son titre** (`strstr(title, "Settings")`) dans le harnais `CDB_TEST_SETTINGS` — à corriger ensemble, sinon le test devient muet en session française | ⏳ |
+| **D4** | Menus du HeaderBar et des tuiles. Fait : le harnais `CDB_TEST_SETTINGS` ne retrouve plus la fenêtre par son titre mais par un marqueur technique (`g_object_set_data "cdb-settings"`) — le titre devient donc traduisable. Option B appliquée : `Settings` → **« Réglages »** (le plan promettait « Paramètres » ; livré « Réglages », terme GNOME d'un panneau de config, et le msgid est partagé avec le titre de tuile), `Exit` → « Quitter », `About CDB` → « À propos de CDB ». `Settings` = 1 msgid, 2 références (`layout.c:325` + `main.c:4644`) | ✅ `1494fdd` (14 msgids) |
 
 ### Jalon E — `llmtile.c` (~44 chaînes restantes)
 Marquage, slots inclus. Refactor du hack `"%d tour%s"` en vrai
@@ -153,7 +153,7 @@ msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier
 
 ---
 
-## 6. Règles de marquage (référence pour les jalons D→F)
+## 6. Règles de marquage (référence pour les jalons E→F)
 
 1. **Marquer `_()`** : toute chaîne visible par l'utilisateur (labels,
    boutons, tooltips, dialogues, annonces CDB, **prompts système LLM**),
