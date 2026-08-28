@@ -846,7 +846,9 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
         if (row_sel && n_sel >= 2) {
             /* Suppression groupée (fichiers/dossiers sélectionnés). */
             GtkWidget *btn;
-            char      *label = g_strdup_printf("Supprimer %u éléments", n_sel);
+            char      *label = g_strdup_printf(ngettext("Delete %u item",
+                                                        "Delete %u items",
+                                                        n_sel), n_sel);
 
             btn = gtk_button_new_with_label(label);
             g_free(label);
@@ -857,13 +859,13 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
         if (!is_root || entry->kind == ROOT_PROJECT) {
             GtkWidget *btn;
 
-            btn = gtk_button_new_with_label("Nouveau fichier…");
+            btn = gtk_button_new_with_label(_("New file…"));
             g_object_set_data_full(G_OBJECT(btn), "dir", g_strdup(dir_path),
                                    g_free);
             g_signal_connect(btn, "clicked", G_CALLBACK(on_new_file_clicked), app);
             gtk_box_append(GTK_BOX(box), btn);
 
-            btn = gtk_button_new_with_label("Nouveau dossier…");
+            btn = gtk_button_new_with_label(_("New folder…"));
             g_object_set_data_full(G_OBJECT(btn), "dir", g_strdup(dir_path),
                                    g_free);
             g_signal_connect(btn, "clicked", G_CALLBACK(on_new_dir_clicked), app);
@@ -875,14 +877,14 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
         if (!is_root) {
             GtkWidget *btn;
 
-            btn = gtk_button_new_with_label("Renommer…");
+            btn = gtk_button_new_with_label(_("Rename…"));
             g_object_set_data_full(G_OBJECT(btn), "path",
                                    g_strdup(((FileEntry *)item)->path), g_free);
             g_signal_connect(btn, "clicked", G_CALLBACK(on_rename_clicked), app);
             gtk_box_append(GTK_BOX(box), btn);
 
-            btn = gtk_button_new_with_label(is_dir ? "Supprimer le dossier"
-                                                   : "Supprimer");
+            btn = gtk_button_new_with_label(is_dir ? _("Delete folder")
+                                                   : _("Delete"));
             g_object_set_data_full(G_OBJECT(btn), "path",
                                    g_strdup(((FileEntry *)item)->path), g_free);
             g_signal_connect(btn, "clicked", G_CALLBACK(on_delete_file_clicked), app);
@@ -892,7 +894,7 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
         /* Suppressions / ajouts propres aux roots. */
         if (is_root) {
             if (entry->kind == ROOT_STRUCTURE) {
-                GtkWidget *add_button = gtk_button_new_with_label("Ajouter un projet…");
+                GtkWidget *add_button = gtk_button_new_with_label(_("Add a project…"));
 
                 g_object_set_data(G_OBJECT(add_button), "structure", entry);
                 g_signal_connect(add_button, "clicked",
@@ -902,13 +904,13 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
             if (entry->parent != NULL) {
                 /* Projet enfant : suppression destructive, confirmation
                  * obligatoire (« Retape : DELETE »). */
-                rm_button = gtk_button_new_with_label("Supprimer ce projet…");
+                rm_button = gtk_button_new_with_label(_("Delete this project…"));
                 g_object_set_data(G_OBJECT(rm_button), "entry", entry);
                 g_signal_connect(rm_button, "clicked",
                                  G_CALLBACK(on_delete_project_clicked), app);
             } else {
                 /* Root : suppression directe (pas de confirmation). */
-                rm_button = gtk_button_new_with_label("Supprimer ce root");
+                rm_button = gtk_button_new_with_label(_("Delete this root"));
                 g_signal_connect(rm_button, "clicked",
                                  G_CALLBACK(on_remove_root_clicked), app);
             }
@@ -958,15 +960,15 @@ on_create_project_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
         error_msg = "Le nom du projet est vide.";
     } else if (strchr(name, '/') != NULL || g_strcmp0(name, ".") == 0 ||
                g_strcmp0(name, "..") == 0) {
-        error_msg = "Nom invalide (pas de « / », ni « . », ni « .. »).";
+        error_msg = _("Invalid name (no \"/\", no \".\", no \"..\").");
     } else if (name[0] == '.') {
         error_msg = "Un projet caché (commençant par « . ») n'est pas autorisé.";
     } else {
         full = g_build_filename(d->structure->path, name, NULL);
         if (g_file_test(full, G_FILE_TEST_EXISTS)) {
-            error_msg = "Ce dossier existe déjà.";
+            error_msg = _("This folder already exists.");
         } else if (g_mkdir(full, 0700) != 0) {
-            error_msg = "Impossible de créer le dossier.";
+            error_msg = _("Cannot create the folder.");
         } else {
             roots_add(d->app->roots, d->structure, ROOT_PROJECT, full);
             roots_save(d->app->roots);
@@ -1365,7 +1367,7 @@ on_new_entry_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
         error_msg = "Le nom est vide.";
     } else if (strchr(name, '/') != NULL || g_strcmp0(name, ".") == 0 ||
                g_strcmp0(name, "..") == 0) {
-        error_msg = "Nom invalide (pas de « / », ni « . », ni « .. »).";
+        error_msg = _("Invalid name (no \"/\", no \".\", no \"..\").");
     } else {
         full = g_build_filename(d->dir_path, name, NULL);
 
@@ -1378,20 +1380,20 @@ on_new_entry_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
                 return; /* même nom : rien à faire */
             }
             if (g_file_test(full, G_FILE_TEST_EXISTS)) {
-                error_msg = "Ce nom existe déjà.";
+                error_msg = _("This name already exists.");
             } else if (g_rename(d->old_path, full) != 0) {
                 error_msg = "Impossible de renommer.";
             }
         } else if (g_file_test(full, G_FILE_TEST_EXISTS)) {
-            error_msg = "Ce nom existe déjà.";
+            error_msg = _("This name already exists.");
         } else if (d->is_dir) {
             if (g_mkdir(full, 0700) != 0)
-                error_msg = "Impossible de créer le dossier.";
+                error_msg = _("Cannot create the folder.");
         } else {
             GError *err = NULL;
 
             if (!g_file_set_contents(full, "", 0, &err)) {
-                error_msg = "Impossible de créer le fichier.";
+                error_msg = _("Cannot create the file.");
                 g_error_free(err);
             }
         }
@@ -1637,7 +1639,7 @@ on_delete_multi_clicked(GtkButton *button, gpointer data)
     rebuild_explorer(app);
     if (failed) {
         GtkAlertDialog *alert = gtk_alert_dialog_new(
-            "Certains éléments n'ont pas pu être supprimés.");
+            _("Some items could not be deleted."));
         gtk_alert_dialog_show(alert, app->win);
     }
     g_ptr_array_free(paths, TRUE);
@@ -1695,7 +1697,7 @@ on_pick_folder_finished(GObject *source, GAsyncResult *res, gpointer data)
          * Refus si le chemin est déjà un root ou un projet de structure. */
         if (roots_conflict(app->roots, path)) {
             GtkAlertDialog *alert = gtk_alert_dialog_new(
-                "Ce dossier est déjà un root ou un projet d'une structure.");
+                _("This folder is already a root or a project of a structure."));
             gtk_alert_dialog_show(alert, app->win);
         } else if (app->pending_kind == ROOT_STRUCTURE) {
             roots_add_structure(app->roots, path);
@@ -1776,8 +1778,8 @@ build_add_button(void)
     GtkWidget  *button;
     GtkWidget  *popover;
 
-    g_menu_append(menu, "Root de structure…", "win.add-structure");
-    g_menu_append(menu, "Root de projet…", "win.add-project");
+    g_menu_append(menu, _("Structure root…"), "win.add-structure");
+    g_menu_append(menu, _("Project root…"), "win.add-project");
     popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
     cdb_pop_style(popover);
     g_object_unref(menu);
@@ -1788,7 +1790,7 @@ build_add_button(void)
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), "list-add-symbolic");
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(button), popover);
     gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
-    gtk_widget_set_tooltip_text(button, "Ajouter un root");
+    gtk_widget_set_tooltip_text(button, _("Add a root"));
     return button;
 }
 
