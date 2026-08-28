@@ -17,7 +17,7 @@
  * i18n_init(), à appeler en tout début de main(), avant toute création de
  * widget GTK.
  *
- * Règles de marquage : voir docs/I18N_PLAN.md §5.
+ * Règles de marquage : voir docs/I18N_PLAN.md §6 ; sort des diagnostics : §5.
  */
 #ifndef CDB_I18N_H
 #define CDB_I18N_H

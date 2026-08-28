@@ -1,7 +1,9 @@
 # Plan i18n — CodeDashBoard (CDB)
 
-**Statut** : phase 0 et jalons A/B livrés ; **prochaine étape : Jalon C**.
-**Date** : 2025-08-27 (rév. 4 — A et B validés de bout en bout).
+**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2 livrés ;
+**prochaine étape : Jalon D3** (Settings/LLM).
+**Date** : 2025-08-27 (rév. 5 — D éclaté en sous-jalons, politique des
+diagnostics ajoutée, garde-fou fuzzy).
 **Décideur** : Éric Boucher.
 
 ---
@@ -85,58 +87,131 @@ future langue régionale (`pt_BR`, `es_MX`…).
 - **Critère** : `LANG=en_US.UTF-8 ./cdb` affiche la chaîne en anglais ;
   sans `LANG` (français système), elle reste en français.
 
-### Jalon C — Petits fichiers ← PROCHAIN
-`ibox.c` (~4 chaînes), `session.c` (~3), `llmlive.c` (~1) : marquage,
-extraction, traduction. Valide la recette sur des cas réels mais petits.
+### Jalon C — Petits fichiers ✅ (`fc46a16`)
+`ibox.c`, `session.c`, `llmlive.c` + les libellés que la tuile pose sur la
+boîte (sortis de E pour recoller une famille sémantique coupée). 14 msgids.
 
-### Jalon D — `main.c` (~50 chaînes)
-Marquage + passage à l'anglais pivot. Attention aux `g_strdup_printf` avec
-formats, et au pluriel `"Supprimer %u éléments"` →
-`ngettext("Delete %u item", "Delete %u items", n)`.
+### Jalon D — `main.c` — **éclaté en sous-jalons**
+Le fichier est trop gros pour un seul diff relisible (~50 chaînes annoncées,
+en réalité ~120 littérales dont beaucoup ne sont pas de l'UI).
 
-### Jalon E — `llmtile.c` (~46 chaînes)
+| Sous-jalon | Contenu | État |
+|---|---|---|
+| **D1** | Les quatre dialogues de l'explorateur | ✅ `89751b5` (11 msgids) |
+| **D1.5** | **Diagnostics** : 26 rapports d'échec marqués, 11 traces de télémétrie détruites, journal `CDB_DEBUG` conservé et marqué | ✅ `b096a08` + `2632ae4` — politique au §5 |
+| **D2** | Menu contextuel, validations de nom, alertes, tooltip d'ajout de root + **premier `ngettext`** | ✅ `4485020` (18 msgids) |
+| **D3** | Settings / LLM : labels, placeholders, descriptions de catégories, `Vide\n(emplacement réservé)` | ← **PROCHAIN** |
+| **D4** | Menus du HeaderBar. Décision prise : traduire les libellés déjà anglais (`Settings` → « Paramètres », `Exit` → « Quitter », `About CDB` → « À propos »). ⚠ **accouplement découvert** : `main.c` retrouve la fenêtre Settings **par son titre** (`strstr(title, "Settings")`) dans le harnais `CDB_TEST_SETTINGS` — à corriger ensemble, sinon le test devient muet en session française | ⏳ |
+
+### Jalon E — `llmtile.c` (~44 chaînes restantes)
 Marquage, slots inclus. Refactor du hack `"%d tour%s"` en vrai
 `ngettext("turn", "turns", n)`.
 
-### Jalon F — `llmcore.c` (~36 chaînes UI + prompts système)
+### Jalon F — `llmcore.c` (UI + prompts système)
 Tri entre chaînes UI/prompts (à marquer) et clés JSON (à exclure).
 **Simplifié par la phase 0** : plus de tri `/CDB::` à faire.
+⚠ ~20 `g_strdup_printf("lecture impossible : %s", …)` y sont des **résultats
+d'outils envoyés au modèle ET affichés dans la boîte** : à marquer, en
+gardant présent qu'ils partent aussi sur le réseau.
 
-### Jalon G — Garde-fous et sélecteur
-- `make test` étendu : `msgfmt --check` sur tous les `.po` (échec = test rouge).
+### Jalon G — Sélecteur de langue et docs
 - Sélecteur de langue dans l'UI + persistance config.
 - Section « Internationalisation » dans `CLAUDE.md` (règles de marquage,
   procédure d'ajout d'une langue).
+- ~~`make test` étendu à `msgfmt --check`~~ : **frappé.** Les tests unitaires
+  `tests/agent_state` ont été retirés du projet (`19805d8`), sur décision
+  d'Éric. Le garde-fou i18n vit désormais dans `make i18n-check` — voir §7.
 
 ---
 
-## 5. Règles de marquage (référence pour les jalons C→F)
+## 5. Politique des diagnostics (décidée en D1.5)
+
+74 appels de sortie dans le projet (`g_print*`, `g_warning`, un `fprintf`),
+triés **au cas par cas, en lisant le code** — et non par heuristique : trois
+scripts de classification successifs se sont contredits (34, puis 7, puis 67
+sous garde), la méthode a donc été abandonnée au profit de la lecture.
+
+| Population | Traitement | Motif |
+|---|---|---|
+| **Rapports d'échec** (26 sites, 7 fichiers) | **marqués** | incondi­tionnels *par conception* : une écriture de config qui échoue doit rester visible. Non marqués, un utilisateur en `LANG=en` apprenait sa perte de données en français |
+| **Passes-simples GLib** (`"CDB: %s"` avec `error->message`) | **non marqués** | le texte vient de GLib, déjà traduit dans ~80 langues ; un msgid serait un doublon |
+| **Journal `CDB_DEBUG`** (12 lignes à prose) | **marquées** | `CDB_DEBUG=1` est documenté dans `CLAUDE.md` § Debug : surface publique, donc pas de franglais |
+| **Sans mot à traduire** (`load_file path=%s`, `activate pos=%u`, `tile id=%s widget=%p`, `[btn] busy=%d`, fragments `" [%u]=%s"`) | **non marquées** | le `msgstr` serait identique au `msgid` byte à byte : du bruit de catalogue |
+| **Télémétrie d'une traque close** (11 sites) | **détruits** | `row=%p`, `mods=0x%x`, « CLAIMÉ », `MUTATION` : ils disaient *comment* le code marche, pas *ce qui se passe*. La traque du multi-select par geste est gagnée |
+| **Harnais `CDB_TEST_*`** (`test_settings_step`, `test_modal_idle`, `cdb_test_delay`…) | **gardés, non marqués** | autorisés mais reconnus vestiges : **dette de ménage**. Traduire des chaînes qui sauteront au prochain ménage serait du travail perdu |
+
+**Ce que le journal est devenu** : ouverture → sauvegarde → suppression →
+création → sélection → rebuild → thème, avec les noms. Un log lisible **sans
+la fenêtre** — terminal, copié‑collé, rapport de bug — ce qui était le critère
+décisif : une trace ne se juge pas contre l'écran, mais contre le log seul.
+
+**Le piège à connaître, en D1.5 et de nouveau en D2** : `msgmerge` marie les
+msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier »**
+(l'inverse exact de l'action) et réduit un pluriel à `"Supprimer"` sans `%u`.
+`msgfmt --check` les accepte sans un mot ; seule la détection des entrées
+`fuzzy` les fait voir. D'où le durcissement de `make i18n-check`.
+
+---
+
+## 6. Règles de marquage (référence pour les jalons D→F)
 
 1. **Marquer `_()`** : toute chaîne visible par l'utilisateur (labels,
-   boutons, tooltips, dialogues, annonces CDB, messages console, **prompts
-   système LLM**).
-2. **Ne pas marquer** : clés JSON, noms de thèmes, CSS, formats purs
-   (`"%s"`), chaînes techniques sans texte.
+   boutons, tooltips, dialogues, annonces CDB, **prompts système LLM**),
+   ainsi que les rapports d'échec et le journal `CDB_DEBUG` — avec la
+   nuance décisive du §5.
+2. **Ne pas marquer** : clés JSON, noms de thèmes, CSS, **identifiants
+   d'action** (`win.new-window`) et d'icônes (`view-refresh-symbolic`),
+   **jetons comparés en code** (`"DELETE"` de la confirmation de suppression),
+   commandes shell (`"cp -a %s %s"`), **passes-simples GLib** (`"CDB: %s"`
+   dont le texte vient d'un `error->message` déjà traduit par GLib), et toute
+   **chaîne sans mot à traduire** (`"load_file path=%s"`, `"tile id=%s
+   widget=%p"`) — le `msgstr` y serait identique au `msgid` byte à byte.
 3. **Pluriels** : toujours `ngettext(singulier, pluriel, n)` — jamais de
-   concaténation du type `"%d tour%s"`.
+   concaténation du type `"%d tour%s"`. Premier cas réel livré en D2.
 4. **Formats** : conserver les marqueurs `%s`, `%d` ; si l'ordre peut changer
-   selon la langue, utiliser les marqueurs positionnels `%1$s`, `%2$d`.
-5. **Commentaires** : restent en français, inchangés.
+   selon la langue, utiliser les positionnels `%1$s`, `%2$d`.
+   **Une phrase montée en morceaux doit être défaite, pas traduite au
+   morceau** : `"Créer %s dans :\n%s"` recevait le fragment français « un
+   dossier » / « un fichier » ; D1 l'a remplacé par deux msgids de phrase
+   entière, sinon chaque langue hérite de l'ordre de mots du français.
+5. **Ponctuation** : l'espace française avant `: ; ! ?` et les chevrons `« »`
+   vivent dans `fr.po`, jamais dans le msgid anglais. Les points de suspension
+   (`…`) restent dans le msgid : ils signalent une boîte qui s'ouvre.
+6. **Commentaires** : restent en français, inchangés.
 
 ---
 
-## 6. Commandes (après Jalon A)
+## 7. Commandes et garde-fous
 
 ```sh
 make pot        # régénère po/cdb.pot depuis les sources marquées
 make po         # met à jour fr.po / en.po depuis le .pot (msgmerge)
 make mo         # compile po/locale/<lang>/LC_MESSAGES/cdb.mo
+make            # construit AUSSI les catalogues : sans ça, un `make clean`
+                # laissait l'app sans traduction (piège réel, vu en D1.5)
+make i18n-check # msgfmt --check + exige ZÉRO entrée fuzzy
 make run        # lance CDB (langue = système)
 LANG=en_US.UTF-8 ./cdb   # force l'anglais
 ```
 
+**Le garde-fou `i18n-check` n'est pas décoratif.** `msgfmt --check` accepte
+une entrée `#, fuzzy` sans un mot, alors que `gettext` l'**ignore** à
+l'exécution : une traduction fuzzy est une traduction morte. En D2, `msgmerge`
+avait marié `Delete folder` à « Nouveau dossier » — l'inverse exact de
+l'action — et réduit un pluriel à `"Supprimer"` sans `%u`. Seul le comptage
+des fuzzy l'a fait voir. Un contrôle qui ne peut pas échouer ne prouve rien :
+le motif a été vérifié sur la forme réelle (`#, fuzzy, c-format` → 1,
+`#, c-format` → 0).
+
+**Ce qu'on ne peut PAS vérifier par le CLI** : une clé finissant par `\n` est
+injouable en shell, la commande `$(…)` rognant le saut de ligne terminal —
+d'où de faux « 0/14 conformes » en D1.5. La preuve passe par `msgunfmt` sur le
+`.mo` compilé, ou par `ngettext` pour les pluriels.
+
 ---
 
-*Plan établi conjointement avec Claude (2025-08-27). Rév. 3 : phase 0
-(cleanup `/CDB::`) livrée. Toute modification passe par une révision de ce
-document.*
+*Plan établi conjointement avec Claude (2025-08-27). Rév. 5 : Jalon D éclaté
+en D1/D1.5/D2/D3/D4 ; politique des diagnostics ajoutée (§5) ; règles de non-
+marquage portées de 2 à 5 catégories (§6.2) ; interdiction des phrases montées
+en morceaux (§6.4) ; garde-fou fuzzy et limites du contrôle CLI (§7).
+Toute modification passe par une révision de ce document.*
