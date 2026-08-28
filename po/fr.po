@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-27 19:37-0400\n"
+"POT-Creation-Date: 2026-08-27 20:41-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -15,6 +15,58 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
+#: src/ibox.c:255
+msgid "✔ executed"
+msgstr "✔ exécuté"
+
+#: src/ibox.c:255
+msgid "✖ refused"
+msgstr "✖ refusé"
+
+#: src/ibox.c:486
+msgid "Run"
+msgstr "Exécuter"
+
+#: src/ibox.c:487
+msgid "Refuse"
+msgstr "Refuser"
+
+#: src/ibox.c:547
+msgid "⤢ show all"
+msgstr "⤢ tout voir"
+
+#: src/llmlive.c:173
+msgid "Interrupted by the CDB restart."
+msgstr "Interrompu au redémarrage de CDB."
+
+#: src/llmtile.c:2747
+msgid "(CDB action)"
+msgstr "(action CDB)"
+
+#: src/llmtile.c:2753
+msgid "✔ allowed +"
+msgstr "✔ autorisé +"
+
+#: src/llmtile.c:2754
+msgid "✔ allowed"
+msgstr "✔ autorisé"
+
 #: src/main.c:1822
 msgid "Explorer"
 msgstr "Explorateur"
+
+#: src/session.c:304
+msgid "New session"
+msgstr "Nouvelle session"
+
+#: src/session.c:317
+msgid "Session number (000-999):"
+msgstr "Numéro de session (000-999) :"
+
+#: src/session.c:328
+msgid "Cancel"
+msgstr "Annuler"
+
+#: src/session.c:329
+msgid "Open"
+msgstr "Ouvrir"

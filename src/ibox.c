@@ -12,6 +12,7 @@
  */
 
 #include "ibox.h"
+#include "i18n.h"
 
 /* Un GtkTextView avec wrap=NONE rend exactement une ligne visuelle par
  * ligne du texte : la hauteur est donc calculable au caractère près.
@@ -251,7 +252,7 @@ choice_caption(Ibox *b)
 {
     if (b->choice_text != NULL)
         return b->choice_text;
-    return b->choice == IB_CHOICE_YES ? "✔ exécuté" : "✖ refusé";
+    return b->choice == IB_CHOICE_YES ? _("✔ executed") : _("✖ refused");
 }
 
 /* État final de la barre : le gagnant occupe 100 % de la largeur et porte
@@ -482,8 +483,8 @@ ibox_new(void)
      * (l'ancien ch_lbl est mort avec ch_row). */
     b->ch_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(b->ch_box, "ibox-ask");
-    b->ch_yes = gtk_button_new_with_label("Exécuter");
-    b->ch_no  = gtk_button_new_with_label("Refuser");
+    b->ch_yes = gtk_button_new_with_label(_("Run"));
+    b->ch_no  = gtk_button_new_with_label(_("Refuse"));
     gtk_widget_add_css_class(b->ch_yes, "ibox-half");
     gtk_widget_add_css_class(b->ch_no,  "ibox-half");
     gtk_widget_add_css_class(b->ch_yes, "ibox-yes");
@@ -543,7 +544,7 @@ ibox_new(void)
         b->out_scroll = pane_new(&b->out_buf);
         gtk_widget_set_size_request(b->out_scroll, -1, IB_LINE_PX);
         gtk_box_append(GTK_BOX(body), b->out_scroll);
-        b->out_more = gtk_button_new_with_label("⤢ tout voir");
+        b->out_more = gtk_button_new_with_label(_("⤢ show all"));
         gtk_widget_add_css_class(b->out_more, "ibox-more");
         gtk_widget_add_css_class(b->out_more, "flat");
         gtk_widget_set_halign(b->out_more, GTK_ALIGN_START);

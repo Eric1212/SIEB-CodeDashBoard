@@ -9,7 +9,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "session.h"
 #include <glib/gstdio.h>
-#include <glib/gi18n.h>
+#include "i18n.h"
 #include <unistd.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -301,7 +301,7 @@ session_pick_dialog(GtkWindow *parent)
     GMainLoop      *loop;
 
     win = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(win), "Nouvelle session");
+    gtk_window_set_title(GTK_WINDOW(win), _("New session"));
     gtk_window_set_transient_for(GTK_WINDOW(win), parent);
     gtk_window_set_modal(GTK_WINDOW(win), TRUE);
     gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
@@ -314,7 +314,7 @@ session_pick_dialog(GtkWindow *parent)
     gtk_widget_set_margin_end(box, 16);
     gtk_window_set_child(GTK_WINDOW(win), box);
 
-    lbl = gtk_label_new("Numéro de session (000-999) :");
+    lbl = gtk_label_new(_("Session number (000-999):"));
     gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
     gtk_box_append(GTK_BOX(box), lbl);
 
@@ -325,8 +325,8 @@ session_pick_dialog(GtkWindow *parent)
 
     row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(row, GTK_ALIGN_END);
-    cancel = gtk_button_new_with_label("Annuler");
-    ok = gtk_button_new_with_label("Ouvrir");
+    cancel = gtk_button_new_with_label(_("Cancel"));
+    ok = gtk_button_new_with_label(_("Open"));
     gtk_widget_add_css_class(ok, "suggested-action");
     g_signal_connect(cancel, "clicked", G_CALLBACK(on_pick_cancel), &ctx);
     g_signal_connect(ok, "clicked", G_CALLBACK(on_pick_ok), &ctx);

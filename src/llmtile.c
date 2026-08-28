@@ -14,6 +14,7 @@
 #include "llmslots.h"
 #include "roots.h"
 #include "llmlive.h"
+#include "i18n.h"
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 #include <glib/gstdio.h>
@@ -2743,14 +2744,14 @@ box_open(LlmTile *t, const char *summary, const char *tool_call_id,
     hist_ensure_voice_tags(t);
 
     box = ibox_new();
-    ibox_set_input(box, summary != NULL ? summary : "(action CDB)");
+    ibox_set_input(box, summary != NULL ? summary : _("(CDB action)"));
     if (auto_allowed) {
         /* Même glyphe que « ✔ exécuté » : le ✚ tranchait avec le reste de
          * l'échelle de décision (✔ / ✖). Le « + » final reste, lui — il
          * marque l'effet propre d'ALLOW+ (reset du terminal), pas un état
          * de la boîte. */
-        ibox_set_choice_label(box, allowplus ? "✔ autorisé +"
-                                             : "✔ autorisé");
+        ibox_set_choice_label(box, allowplus ? _("✔ allowed +")
+                                             : _("✔ allowed"));
         /* animate = FALSE : rien ne se décide sous les yeux d'Éric, la
          * barre nait déjà tranchée, verte à 100 %. */
         ibox_set_choice(box, IB_CHOICE_YES, FALSE);

@@ -4,6 +4,7 @@
 
 #include "llmlive.h"
 #include "session.h"
+#include "i18n.h"
 
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
@@ -169,7 +170,7 @@ llm_live_repair_open_tool_calls(LlmCore *c)
             repair.local = FALSE;
             repair.kind = LLM_MSG_TOOL_RESULT;
             repair.content = g_strdup(
-                "Interrompu au redémarrage de CDB.");
+                _("Interrupted by the CDB restart."));
             repair.tool_call_id = g_strdup(tc->id);
             g_array_append_vals(c->history, &repair, 1);
 
