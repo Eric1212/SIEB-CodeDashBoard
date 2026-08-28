@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-28 13:35-0400\n"
+"POT-Creation-Date: 2026-08-28 14:15-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -72,6 +72,10 @@ msgstr "Éditeur"
 #: src/layout.c:319 src/main.c:1812
 msgid "Explorer"
 msgstr "Explorateur"
+
+#: src/layout.c:325 src/main.c:4644
+msgid "Settings"
+msgstr "Réglages"
 
 #: src/layout.c:327
 msgid "Empty"
@@ -168,7 +172,9 @@ msgstr "CDB: écriture profil actif : %s\n"
 msgid ""
 "Binary file or non-UTF-8 encoding:\n"
 "%s"
-msgstr "Fichier binaire ou encodage non UTF-8 :\n%s"
+msgstr ""
+"Fichier binaire ou encodage non UTF-8 :\n"
+"%s"
 
 #: src/main.c:767
 #, c-format
@@ -486,7 +492,41 @@ msgstr "clé HyperCharm…"
 msgid ""
 "Empty\n"
 "(reserved slot)"
-msgstr "Vide\n(emplacement réservé)"
+msgstr ""
+"Vide\n"
+"(emplacement réservé)"
+
+#: src/main.c:3923
+msgid "Split horizontally"
+msgstr "Diviser horizontalement"
+
+#: src/main.c:3924
+msgid "Split vertically"
+msgstr "Diviser verticalement"
+
+#: src/main.c:3960
+msgid "Remove this tile"
+msgstr "Retirer cette tuile"
+
+#: src/main.c:3970
+msgid "Group"
+msgstr "Groupe"
+
+#: src/main.c:3980
+msgid "Split group horizontally"
+msgstr "Diviser le groupe horizontalement"
+
+#: src/main.c:3981
+msgid "Split group vertically"
+msgstr "Diviser le groupe verticalement"
+
+#: src/main.c:3995
+msgid "Collapse group to this piece"
+msgstr "Réduire le groupe à cette pièce"
+
+#: src/main.c:4005
+msgid "Remove group"
+msgstr "Retirer le groupe"
 
 #: src/main.c:4291
 #, c-format
@@ -498,13 +538,33 @@ msgstr "CDB: écriture window.json : %s\n"
 msgid "CDB: modal limit of %d reached"
 msgstr "CDB: limite de %d modales atteinte"
 
-#: src/main.c:4452
+#: src/main.c:4411
+msgid "Settings — CodeDashBoard"
+msgstr "Réglages — CodeDashBoard"
+
+#: src/main.c:4455
 msgid "CDB: readlink /proc/self/exe failed"
 msgstr "CDB: readlink /proc/self/exe échoué"
 
-#: src/main.c:4485
+#: src/main.c:4488
 msgid "CDB: failed to spawn the new session"
 msgstr "CDB: échec du spawn de la nouvelle session"
+
+#: src/main.c:4643
+msgid "About CDB"
+msgstr "À propos de CDB"
+
+#: src/main.c:4645
+msgid "Exit"
+msgstr "Quitter"
+
+#: src/main.c:4669
+msgid "New window"
+msgstr "Nouvelle fenêtre"
+
+#: src/main.c:4670
+msgid "New session…"
+msgstr "Nouvelle session…"
 
 #: src/roots.c:180
 #, c-format

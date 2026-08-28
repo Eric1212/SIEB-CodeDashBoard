@@ -322,7 +322,7 @@ layout_name(const char *id)
     if (strcmp(id, "llm") == 0)
         return "LLM";
     if (strcmp(id, "settings") == 0)
-        return "Settings";
+        return _("Settings");
     if (strcmp(id, "empty") == 0)
         return _("Empty");
     return id;

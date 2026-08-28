@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-28 13:35-0400\n"
+"POT-Creation-Date: 2026-08-28 14:15-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -71,6 +71,10 @@ msgstr ""
 
 #: src/layout.c:319 src/main.c:1812
 msgid "Explorer"
+msgstr ""
+
+#: src/layout.c:325 src/main.c:4644
+msgid "Settings"
 msgstr ""
 
 #: src/layout.c:327
@@ -478,6 +482,38 @@ msgid ""
 "(reserved slot)"
 msgstr ""
 
+#: src/main.c:3923
+msgid "Split horizontally"
+msgstr ""
+
+#: src/main.c:3924
+msgid "Split vertically"
+msgstr ""
+
+#: src/main.c:3960
+msgid "Remove this tile"
+msgstr ""
+
+#: src/main.c:3970
+msgid "Group"
+msgstr ""
+
+#: src/main.c:3980
+msgid "Split group horizontally"
+msgstr ""
+
+#: src/main.c:3981
+msgid "Split group vertically"
+msgstr ""
+
+#: src/main.c:3995
+msgid "Collapse group to this piece"
+msgstr ""
+
+#: src/main.c:4005
+msgid "Remove group"
+msgstr ""
+
 #: src/main.c:4291
 #, c-format
 msgid "CDB: failed to write window.json: %s\n"
@@ -488,12 +524,32 @@ msgstr ""
 msgid "CDB: modal limit of %d reached"
 msgstr ""
 
-#: src/main.c:4452
+#: src/main.c:4411
+msgid "Settings — CodeDashBoard"
+msgstr ""
+
+#: src/main.c:4455
 msgid "CDB: readlink /proc/self/exe failed"
 msgstr ""
 
-#: src/main.c:4485
+#: src/main.c:4488
 msgid "CDB: failed to spawn the new session"
+msgstr ""
+
+#: src/main.c:4643
+msgid "About CDB"
+msgstr ""
+
+#: src/main.c:4645
+msgid "Exit"
+msgstr ""
+
+#: src/main.c:4669
+msgid "New window"
+msgstr ""
+
+#: src/main.c:4670
+msgid "New session…"
 msgstr ""
 
 #: src/roots.c:180

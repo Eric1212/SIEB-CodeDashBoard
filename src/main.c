@@ -3920,8 +3920,8 @@ build_tile_menu(Layout *node, App *app)
         a->piece = node->id;
         a->popover = pop;
         g_ptr_array_add(acts, a);
-        add_menu_button(menu, h == 0 ? "Diviser horizontalement"
-                                     : "Diviser verticalement",
+        add_menu_button(menu, h == 0 ? _("Split horizontally")
+                                     : _("Split vertically"),
                         a);
     }
 
@@ -3957,7 +3957,7 @@ build_tile_menu(Layout *node, App *app)
         r->remove = TRUE;
         r->popover = pop;
         g_ptr_array_add(acts, r);
-        add_menu_button(menu, "Retirer cette tuile", r);
+        add_menu_button(menu, _("Remove this tile"), r);
     }
 
     /* Actions de GROUPE sur le bloc parent (les blocs n'ont pas de barre
@@ -3967,7 +3967,7 @@ build_tile_menu(Layout *node, App *app)
 
         gtk_box_append(GTK_BOX(menu),
                        gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
-        gtk_box_append(GTK_BOX(menu), cdb_pop_title_new("Groupe"));
+        gtk_box_append(GTK_BOX(menu), cdb_pop_title_new(_("Group")));
         for (int h = 0; h < 2; h++) {
             TileAction *a = g_new0(TileAction, 1);
 
@@ -3977,8 +3977,8 @@ build_tile_menu(Layout *node, App *app)
             a->piece = "empty"; /* le bloc n'a pas de pièce */
             a->popover = pop;
             g_ptr_array_add(acts, a);
-            add_menu_button(menu, h == 0 ? "Diviser le groupe horizontalement"
-                                         : "Diviser le groupe verticalement",
+            add_menu_button(menu, h == 0 ? _("Split group horizontally")
+                                         : _("Split group vertically"),
                             a);
         }
         {
@@ -3992,7 +3992,7 @@ build_tile_menu(Layout *node, App *app)
             a->piece = node->id;
             a->popover = pop;
             g_ptr_array_add(acts, a);
-            add_menu_button(menu, "Réduire le groupe à cette pièce", a);
+            add_menu_button(menu, _("Collapse group to this piece"), a);
         }
         if (grp->parent != NULL) {
             TileAction *r = g_new0(TileAction, 1);
@@ -4002,7 +4002,7 @@ build_tile_menu(Layout *node, App *app)
             r->remove = TRUE;
             r->popover = pop;
             g_ptr_array_add(acts, r);
-            add_menu_button(menu, "Retirer le groupe", r);
+            add_menu_button(menu, _("Remove group"), r);
         }
     }
 
@@ -4408,7 +4408,10 @@ on_settings_activated(GSimpleAction G_GNUC_UNUSED *action,
     GtkWidget *win = gtk_window_new();
     GtkWidget *content = build_settings(app);
 
-    gtk_window_set_title(GTK_WINDOW(win), "Settings — CodeDashBoard");
+    gtk_window_set_title(GTK_WINDOW(win), _("Settings — CodeDashBoard"));
+    /* Marqueur technique, non traduit : c'est par LUI que le harnais
+     * CDB_TEST_SETTINGS retrouve cette fenêtre, plus par son titre. */
+    g_object_set_data(G_OBJECT(win), "cdb-settings", GINT_TO_POINTER(1));
     gtk_window_set_transient_for(GTK_WINDOW(win), app->win);
     /* NON modale : l'utilisateur peut avoir besoin de copier/coller
      * (clé API, endpoint…) depuis l'éditeur pendant que Settings est
@@ -4637,9 +4640,9 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         GtkWidget *brand = gtk_label_new("CDB");
         GtkWidget *sep = gtk_label_new("::");
 
-        g_menu_append(menu, "About CDB", "win.about");
-        g_menu_append(menu, "Settings", "win.settings");
-        g_menu_append(menu, "Exit", "win.exit");
+        g_menu_append(menu, _("About CDB"), "win.about");
+        g_menu_append(menu, _("Settings"), "win.settings");
+        g_menu_append(menu, _("Exit"), "win.exit");
 
         gtk_widget_add_css_class(brand, "titlebar-brand");
         gtk_widget_add_css_class(sep, "titlebar-sep");
@@ -4663,8 +4666,8 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             GtkWidget *new_win_btn = gtk_menu_button_new();
             GMenu     *menu = g_menu_new();
 
-            g_menu_append(menu, "Nouvelle fenêtre", "win.new-window");
-            g_menu_append(menu, "Nouvelle session…", "win.new-session");
+            g_menu_append(menu, _("New window"), "win.new-window");
+            g_menu_append(menu, _("New session…"), "win.new-session");
             gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(new_win_btn),
                                           "window-new-symbolic");
             GtkWidget *new_pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
@@ -4987,9 +4990,12 @@ test_settings_step(gpointer data)
         break;
     case 1:
     case 3: {
-        /* Retrouve la fenêtre settings PAR TITRE avec une ref possédée
-         * pendant l'usage — jamais de pointeur brut entre les étapes
-         * (la fenêtre peut être détruite dès close). */
+        /* Retrouve la fenêtre settings par SON MARQUEUR technique, avec une
+         * ref possédée pendant l'usage — jamais de pointeur brut entre les
+         * étapes (la fenêtre peut être détruite dès close). On ne passe plus
+         * par le titre : il est traduisible, et s'y fier rendrait ce test
+         * muet en session française — pis, il matchait aussi le titre d'une
+         * tuile « Settings » renvoyé par layout_name(). */
         GtkWindow *swin = NULL;
         GList     *l;
 
@@ -4997,11 +5003,8 @@ test_settings_step(gpointer data)
                    step == 2 ? "1" : "2");
         l = gtk_window_list_toplevels();
         for (; l != NULL && swin == NULL; l = l->next) {
-            const char *title =
-                gtk_window_get_title(GTK_WINDOW(l->data));
-
-            if (l->data != app->win && title != NULL &&
-                strstr(title, "Settings") != NULL)
+            if (l->data != app->win &&
+                g_object_get_data(G_OBJECT(l->data), "cdb-settings") != NULL)
                 swin = g_object_ref(GTK_WINDOW(l->data));
         }
         g_list_free(l);
