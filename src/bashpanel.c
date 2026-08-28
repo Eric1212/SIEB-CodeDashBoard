@@ -51,7 +51,7 @@ bash_panel_renumber(BashPanel *p)
         if (GTK_IS_LABEL(label)) {
             char buf[16];
 
-            g_snprintf(buf, sizeof(buf), "bash %d", i + 1);
+            g_snprintf(buf, sizeof(buf), "%d", i);
             gtk_label_set_text(GTK_LABEL(label), buf);
         }
     }
@@ -92,7 +92,8 @@ on_close_tab(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     bash_panel_update(p);
 }
 
-/* Label d'onglet : « bash N » + bouton fermer (data = le terminal). */
+/* Label d'onglet : le n° de terminal (0-based, tel que l'outil le reçoit)
+ * + bouton fermer (data = le terminal). */
 static GtkWidget *
 bash_tab_label(GtkWidget *term, int index)
 {
@@ -102,7 +103,7 @@ bash_tab_label(GtkWidget *term, int index)
     char       buf[16];
 
     box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
-    g_snprintf(buf, sizeof(buf), "bash %d", index);
+    g_snprintf(buf, sizeof(buf), "%d", index);
     label = gtk_label_new(buf);
     gtk_box_append(GTK_BOX(box), label);
 
@@ -158,7 +159,7 @@ bash_panel_add_tab(BashPanel *p)
 
     if (p->count >= BASH_TAB_MAX)
         return;
-    index = p->count + 1;
+    index = p->count;
     term = vte_terminal_new();
     /* Réservoir paginable pour la boucle agentique : 100k lignes. */
     vte_terminal_set_scrollback_lines(VTE_TERMINAL(term), 100000);
@@ -221,7 +222,7 @@ bash_panel_reset_tab(guint index)
     vte_terminal_set_scrollback_lines(VTE_TERMINAL(new_term), 100000);
     bash_tab_spawn(p, VTE_TERMINAL(new_term));
     gtk_notebook_insert_page(nb, new_term,
-                             bash_tab_label(new_term, pos + 1), pos);
+                             bash_tab_label(new_term, pos), pos);
     p->count++;
     gtk_notebook_remove_page(nb, pos + 1);
     p->count--;
