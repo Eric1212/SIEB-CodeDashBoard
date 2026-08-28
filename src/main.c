@@ -1022,7 +1022,7 @@ on_add_project_to_structure(GtkButton *button, gpointer data)
     gtk_popover_popdown(GTK_POPOVER(gtk_widget_get_parent(GTK_WIDGET(button))));
 
     dialog = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(dialog), "Nouveau projet");
+    gtk_window_set_title(GTK_WINDOW(dialog), _("New project"));
     gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
     gtk_window_set_transient_for(GTK_WINDOW(dialog), app->win);
     gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
@@ -1034,7 +1034,7 @@ on_add_project_to_structure(GtkButton *button, gpointer data)
     gtk_widget_set_margin_end(content, 16);
     gtk_window_set_child(GTK_WINDOW(dialog), content);
 
-    label_text = g_strdup_printf("Créer un dossier dans :\n%s",
+    label_text = g_strdup_printf(_("Create a folder in:\n%s"),
                                  structure->path);
     label = gtk_label_new(label_text);
     gtk_label_set_xalign(GTK_LABEL(label), 0.0);
@@ -1042,7 +1042,7 @@ on_add_project_to_structure(GtkButton *button, gpointer data)
     gtk_box_append(GTK_BOX(content), label);
 
     entry = gtk_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "nom du projet");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), _("project name"));
     gtk_widget_set_hexpand(entry, TRUE);
     gtk_box_append(GTK_BOX(content), entry);
 
@@ -1054,8 +1054,8 @@ on_add_project_to_structure(GtkButton *button, gpointer data)
 
     btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(btn_row, GTK_ALIGN_END);
-    cancel = gtk_button_new_with_label("Annuler");
-    create = gtk_button_new_with_label("Créer");
+    cancel = gtk_button_new_with_label(_("Cancel"));
+    create = gtk_button_new_with_label(_("Create"));
     gtk_widget_add_css_class(create, "suggested-action");
     g_signal_connect(cancel, "clicked",
                      G_CALLBACK(on_create_project_cancel), d);
@@ -1140,7 +1140,7 @@ on_delete_project_clicked(GtkButton *button, gpointer data)
     gtk_popover_popdown(GTK_POPOVER(gtk_widget_get_parent(GTK_WIDGET(button))));
 
     dialog = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(dialog), "Supprimer le projet");
+    gtk_window_set_title(GTK_WINDOW(dialog), _("Delete project"));
     gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
     gtk_window_set_transient_for(GTK_WINDOW(dialog), app->win);
     gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
@@ -1153,8 +1153,8 @@ on_delete_project_clicked(GtkButton *button, gpointer data)
     gtk_window_set_child(GTK_WINDOW(dialog), content);
 
     label_text = g_strdup_printf(
-        "Le dossier et tout son contenu seront définitivement supprimés :\n"
-        "%s\n\nRetape : DELETE pour confirmer.",
+        _("The folder and all its contents will be permanently deleted:\n"
+          "%s\n\nRetype DELETE to confirm."),
         entry->path);
     label = gtk_label_new(label_text);
     gtk_label_set_xalign(GTK_LABEL(label), 0.0);
@@ -1175,8 +1175,8 @@ on_delete_project_clicked(GtkButton *button, gpointer data)
 
     btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(btn_row, GTK_ALIGN_END);
-    cancel = gtk_button_new_with_label("Annuler");
-    del_button = gtk_button_new_with_label("Supprimer");
+    cancel = gtk_button_new_with_label(_("Cancel"));
+    del_button = gtk_button_new_with_label(_("Delete"));
     gtk_widget_add_css_class(del_button, "destructive-action");
     gtk_widget_set_sensitive(del_button, FALSE);
     d->delete_button = del_button;
@@ -1449,8 +1449,8 @@ open_new_entry_dialog(App *app, const char *dir_path, gboolean is_dir)
     char         *label_text;
 
     dialog = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(dialog), is_dir ? "Nouveau dossier"
-                                                    : "Nouveau fichier");
+    gtk_window_set_title(GTK_WINDOW(dialog), is_dir ? _("New folder")
+                                                    : _("New file"));
     gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
     gtk_window_set_transient_for(GTK_WINDOW(dialog), app->win);
     gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
@@ -1462,8 +1462,8 @@ open_new_entry_dialog(App *app, const char *dir_path, gboolean is_dir)
     gtk_widget_set_margin_end(content, 16);
     gtk_window_set_child(GTK_WINDOW(dialog), content);
 
-    label_text = g_strdup_printf("Créer %s dans :\n%s",
-                                 is_dir ? "un dossier" : "un fichier",
+    label_text = g_strdup_printf(is_dir ? _("Create a folder in:\n%s")
+                                        : _("Create a file in:\n%s"),
                                  dir_path);
     label = gtk_label_new(label_text);
     gtk_label_set_xalign(GTK_LABEL(label), 0.0);
@@ -1485,8 +1485,8 @@ open_new_entry_dialog(App *app, const char *dir_path, gboolean is_dir)
 
     btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(btn_row, GTK_ALIGN_END);
-    cancel = gtk_button_new_with_label("Annuler");
-    create = gtk_button_new_with_label("Créer");
+    cancel = gtk_button_new_with_label(_("Cancel"));
+    create = gtk_button_new_with_label(_("Create"));
     gtk_widget_add_css_class(create, "suggested-action");
     g_signal_connect(cancel, "clicked", G_CALLBACK(on_new_entry_cancel), d);
     g_signal_connect(create, "clicked", G_CALLBACK(on_new_entry_clicked), d);
@@ -1536,7 +1536,7 @@ open_rename_dialog(App *app, const char *old_path)
     char         *base;
 
     dialog = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(dialog), "Renommer");
+    gtk_window_set_title(GTK_WINDOW(dialog), _("Rename"));
     gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
     gtk_window_set_transient_for(GTK_WINDOW(dialog), app->win);
     gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
@@ -1571,8 +1571,8 @@ open_rename_dialog(App *app, const char *old_path)
 
     btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(btn_row, GTK_ALIGN_END);
-    cancel = gtk_button_new_with_label("Annuler");
-    create = gtk_button_new_with_label("Renommer");
+    cancel = gtk_button_new_with_label(_("Cancel"));
+    create = gtk_button_new_with_label(_("Rename"));
     gtk_widget_add_css_class(create, "suggested-action");
     g_signal_connect(cancel, "clicked", G_CALLBACK(on_new_entry_cancel), d);
     g_signal_connect(create, "clicked", G_CALLBACK(on_new_entry_clicked), d);

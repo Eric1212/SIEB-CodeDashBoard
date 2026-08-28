@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-27 20:41-0400\n"
+"POT-Creation-Date: 2026-08-27 21:24-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -51,6 +51,66 @@ msgstr ""
 msgid "✔ allowed"
 msgstr ""
 
+#: src/main.c:1025
+msgid "New project"
+msgstr ""
+
+#: src/main.c:1037 src/main.c:1465
+#, c-format
+msgid ""
+"Create a folder in:\n"
+"%s"
+msgstr ""
+
+#: src/main.c:1045
+msgid "project name"
+msgstr ""
+
+#: src/main.c:1057 src/main.c:1178 src/main.c:1488 src/main.c:1574
+#: src/session.c:328
+msgid "Cancel"
+msgstr ""
+
+#: src/main.c:1058 src/main.c:1489
+msgid "Create"
+msgstr ""
+
+#: src/main.c:1143
+msgid "Delete project"
+msgstr ""
+
+#: src/main.c:1156
+#, c-format
+msgid ""
+"The folder and all its contents will be permanently deleted:\n"
+"%s\n"
+"\n"
+"Retype DELETE to confirm."
+msgstr ""
+
+#: src/main.c:1179
+msgid "Delete"
+msgstr ""
+
+#: src/main.c:1452
+msgid "New folder"
+msgstr ""
+
+#: src/main.c:1453
+msgid "New file"
+msgstr ""
+
+#: src/main.c:1466
+#, c-format
+msgid ""
+"Create a file in:\n"
+"%s"
+msgstr ""
+
+#: src/main.c:1539 src/main.c:1575
+msgid "Rename"
+msgstr ""
+
 #: src/main.c:1822
 msgid "Explorer"
 msgstr ""
@@ -61,10 +121,6 @@ msgstr ""
 
 #: src/session.c:317
 msgid "Session number (000-999):"
-msgstr ""
-
-#: src/session.c:328
-msgid "Cancel"
 msgstr ""
 
 #: src/session.c:329
