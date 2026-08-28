@@ -2811,7 +2811,8 @@ typedef struct {
 /* -------------------------------------------------------------- */
 
 typedef struct SettingsSection {
-    const char *title;
+    const char *id;                      /* clé technique : dispatch + API   */
+    const char *title;                   /* libellé affichable (traduisible) */
     const char *placeholder;             /* section simple */
     const struct SettingsSection *subs;  /* ou sous-sections (accordéon) */
     gsize        n_subs;
@@ -2861,18 +2862,21 @@ build_settings_section(const SettingsSection *sec)
     g_signal_connect(header_btn, "toggled",
                      G_CALLBACK(on_settings_section_toggled), NULL);
 
-    /* Corps : formulaire provider, sous-accordéons, ou placeholder. */
-    if (g_strcmp0(sec->title, "OpenRouter") == 0)
-        body = build_provider_form("OpenRouter");
-    else if (g_strcmp0(sec->title, "OpenCode") == 0)
-        body = build_provider_form("OpenCode");
-    else if (g_strcmp0(sec->title, "HyperCharm") == 0)
-        body = build_provider_form("HyperCharm");
-    else if (g_strcmp0(sec->title, "Retry on error") == 0)
+    /* Corps : formulaire provider, sous-accordéons, ou placeholder.
+     * Dispatch sur sec->id (clé technique), JAMAIS sur sec->title : le titre
+     * est affichable donc traduisible, et une comparaison sur lui choisirait
+     * un autre formulaire — ou aucun — dès qu'une langue le renommerait. */
+    if (g_strcmp0(sec->id, "OpenRouter") == 0)
+        body = build_provider_form(sec->id);
+    else if (g_strcmp0(sec->id, "OpenCode") == 0)
+        body = build_provider_form(sec->id);
+    else if (g_strcmp0(sec->id, "HyperCharm") == 0)
+        body = build_provider_form(sec->id);
+    else if (g_strcmp0(sec->id, "Retry on error") == 0)
         body = build_harness_form();
-    else if (g_strcmp0(sec->title, "Init-Prompt") == 0)
+    else if (g_strcmp0(sec->id, "Init-Prompt") == 0)
         body = build_initprompt_editor();
-    else if (g_strcmp0(sec->title, "Tools") == 0)
+    else if (g_strcmp0(sec->id, "Tools") == 0)
         body = build_tools_form();
     else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -3770,24 +3774,24 @@ static GtkWidget *
 build_settings(App *app G_GNUC_UNUSED)
 {
     static const SettingsSection provider_subs[] = {
-        { "OpenAi-Compatible", "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
-        { "HyperCharm",        NULL, NULL, 0 }, /* formulaire provider */
-        { "OpenCode",          NULL, NULL, 0 }, /* formulaire provider */
-        { "OpenRouter",        NULL, NULL, 0 }, /* formulaire provider */
+        { "OpenAi-Compatible", "OpenAi-Compatible", "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+        { "HyperCharm", "HyperCharm", NULL, NULL, 0 },   /* formulaire provider */
+        { "OpenCode",   "OpenCode",   NULL, NULL, 0 },   /* formulaire provider */
+        { "OpenRouter", "OpenRouter", NULL, NULL, 0 },   /* formulaire provider */
     };
     static const SettingsSection harness_subs[] = {
-        { "Retry on error", NULL, NULL, 0 }, /* formulaire retry */
-        { "Init-Prompt", NULL, NULL, 0 }, /* éditeur du prompt système */
+        { "Retry on error", "Retry on error", NULL, NULL, 0 },  /* formulaire retry */
+        { "Init-Prompt",    "Init-Prompt",    NULL, NULL, 0 },  /* éditeur du prompt système */
     };
     static const SettingsSection llm_subs[] = {
-        { "Harness",    NULL, harness_subs, G_N_ELEMENTS(harness_subs) },
-        { "Tools",      NULL, NULL, 0 }, /* formulaire outils */
-        { "Providers",  NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
+        { "Harness",   "Harness",   NULL, harness_subs, G_N_ELEMENTS(harness_subs) },
+        { "Tools",     "Tools",     NULL, NULL, 0 },  /* formulaire outils */
+        { "Providers", "Providers", NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
     };
     static const SettingsSection sections[] = {
-        { "General",     "(à venir : thème, police, indentation…)", NULL, 0 },
-        { "GitHub/Git",  "(à venir : token, user, repo par défaut…)", NULL, 0 },
-        { "LLM",         NULL, llm_subs, G_N_ELEMENTS(llm_subs) },
+        { "General",    "General",    "(à venir : thème, police, indentation…)", NULL, 0 },
+        { "GitHub/Git", "GitHub/Git", "(à venir : token, user, repo par défaut…)", NULL, 0 },
+        { "LLM",        "LLM",        NULL, llm_subs, G_N_ELEMENTS(llm_subs) },
     };
     GtkWidget *scroll = gtk_scrolled_window_new();
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
