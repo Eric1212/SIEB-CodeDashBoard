@@ -1,11 +1,17 @@
 /*
  * i18n.h : internationalisation de CDB via gettext.
  *
- * Définit GETTEXT_PACKAGE avant d'inclure <glib/gi18n.h> (qui exige ce
- * symbole), puis expose les macros de marquage :
- *   _()       traduction simple
- *   N_()      marquage sans traduction (pour extraction, traduit plus tard)
- *   ngettext  formes plurielles
+ * <glib/gi18n.h> fournit les macros de marquage et n'exige aucun symbole :
+ *   _()    traduction simple      -> gettext(String), domaine courant
+ *   N_()   marquage seul          -> (String) ; pour les chaînes stockées
+ *            (tableaux statiques, libellés résolus plus tard)
+ *   C_()   traduction à contexte
+ * ngettext() (pluriels) vient de <libintl.h>, inclus par gi18n.h.
+ *
+ * GETTEXT_PACKAGE est le nom de notre domaine — celui que i18n_init() lie
+ * par bindtextdomain()/textdomain() et le nom du catalogue, cdb.mo. On le
+ * définit avant l'inclusion par convention : seul <glib/gi18n-lib.h>,
+ * réservé aux bibliothèques, impose réellement ce symbole.
  *
  * L'initialisation (setlocale + bindtextdomain + textdomain) est faite par
  * i18n_init(), à appeler en tout début de main(), avant toute création de

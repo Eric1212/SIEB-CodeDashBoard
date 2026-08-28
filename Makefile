@@ -13,7 +13,11 @@ OBJ     := $(SRC:.c=.o)
 DEP     := $(OBJ:.o=.d)
 TARGET  := cdb
 
-all: $(TARGET)
+# Les catalogues .mo font partie du build normal : sans eux CDB tombe
+# silencieusement sur les msgid (anglais pivot), et un utilisateur francophone
+# verrait son interface passer en anglais après un `make clean`. `mo` est
+# phony mais dépend des fichiers .mo : msgfmt ne relance qu'au besoin.
+all: $(TARGET) mo
 
 $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LIBS) $(LDFLAGS)
@@ -21,7 +25,7 @@ $(TARGET): $(OBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-run: $(TARGET)
+run: $(TARGET) mo
 	./$(TARGET)
 
 # Build avec AddressSanitizer + UBSan (debug de corruption mémoire).
@@ -56,7 +60,7 @@ MOS      := $(foreach l,$(LANGS),$(LOCALEDIR)/$(l)/LC_MESSAGES/cdb.mo)
 pot:
 	sed 's|^\.\./||' $(PODIR)/POTFILES.in | grep -v '^\#' | grep . > $(PODIR)/.potfiles
 	rm -f $(POT)
-	$(XGETTEXT) --from-code=UTF-8 --keyword=_ --keyword=N_:1,2 \
+	$(XGETTEXT) --from-code=UTF-8 --keyword=_ --keyword=N_:1 \
 	    --keyword=ngettext:1,2 --add-comments=TRANSLATORS \
 	    --package-name=cdb --package-version=0.1 \
 	    --copyright-holder="SIEB" \
