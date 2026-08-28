@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-28 01:02-0400\n"
+"POT-Creation-Date: 2026-08-28 02:25-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -151,6 +151,20 @@ msgstr "CDB: écriture préfs tools : %s\n"
 msgid "CDB: failed to write active profile: %s\n"
 msgstr "CDB: écriture profil actif : %s\n"
 
+#: src/main.c:768
+#, c-format
+msgid "CDB: removing \"%s\"\n"
+msgstr "CDB: suppression de « %s »\n"
+
+#: src/main.c:799
+msgid "CDB: right-click on no row\n"
+msgstr "CDB: clic droit sans ligne\n"
+
+#: src/main.c:932
+#, c-format
+msgid "CDB: popover requested for \"%s\"\n"
+msgstr "CDB: popover popup demandé pour « %s »\n"
+
 #: src/main.c:1014
 msgid "New project"
 msgstr "Nouveau projet"
@@ -198,6 +212,11 @@ msgstr ""
 msgid "Delete"
 msgstr "Supprimer"
 
+#: src/main.c:1400
+#, c-format
+msgid "CDB: created \"%s\" in \"%s\"\n"
+msgstr "CDB: création « %s » dans « %s »\n"
+
 #: src/main.c:1441
 msgid "New folder"
 msgstr "Nouveau dossier"
@@ -231,6 +250,55 @@ msgstr ""
 #: src/main.c:1811
 msgid "Explorer"
 msgstr "Explorateur"
+
+#: src/main.c:1870
+#, c-format
+msgid "CDB: selection -> %lu item(s) (changed pos=%u n=%u)\n"
+msgstr "CDB: sélection -> %lu éléments (changed pos=%u n=%u)\n"
+
+#: src/main.c:2019
+#, c-format
+msgid "CDB: pick=%s — no row position\n"
+msgstr "CDB: pick=%s — pas de pos\n"
+
+#: src/main.c:2066
+msgid "CDB: Ctrl+click outside any item\n"
+msgstr "CDB: Ctrl+clic hors item\n"
+
+#: src/main.c:2081
+#, c-format
+msgid "CDB: Shift+click range [%u, %u] (unselect_rest=%d)\n"
+msgstr "CDB: Shift+clic plage [%u, %u] (unselect_rest=%d)\n"
+
+#: src/main.c:2095
+#, c-format
+msgid "CDB: Ctrl+click toggle pos=%u before: size=%lu is_selected=%d"
+msgstr "CDB: Ctrl+clic toggle pos=%u avant: size=%lu is_selected=%d"
+
+#: src/main.c:2124
+#, c-format
+msgid "CDB: Ctrl+click full bitset size=%lu:"
+msgstr "CDB: Ctrl+clic bitset complet size=%lu:"
+
+#: src/main.c:2537
+#, c-format
+msgid "CDB: rebuild_explorer (open folders=%u)\n"
+msgstr "CDB: rebuild_explorer (dossiers ouverts=%u)\n"
+
+#: src/main.c:2556
+#, c-format
+msgid "CDB: rebuild_explorer view built (n_items=%u)\n"
+msgstr "CDB: rebuild_explorer vue créée (n_items=%u)\n"
+
+#: src/main.c:2595
+#, c-format
+msgid "CDB: style scheme = %s (dark=%d)\n"
+msgstr "CDB: schéma = %s (dark=%d)\n"
+
+#: src/main.c:3606
+#, c-format
+msgid "CDB: Init-Prompt scheme=%s found=%d\n"
+msgstr "CDB: Init-Prompt schéma=%s trouvé=%d\n"
 
 #: src/main.c:4286
 #, c-format

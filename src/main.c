@@ -765,7 +765,7 @@ on_remove_root_clicked(GtkButton *button, gpointer data)
 
     if (app->pending_remove != NULL) {
         if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: suppression de « %s »\n", app->pending_remove->path);
+            g_printerr(_("CDB: removing \"%s\"\n"), app->pending_remove->path);
         roots_remove(app->roots, app->pending_remove);
         roots_save(app->roots);
         app->pending_remove = NULL;
@@ -794,11 +794,11 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
     gboolean        is_dir;
     RootEntry      *entry = NULL;
 
-    if (g_getenv("CDB_DEBUG") != NULL)
-        g_printerr("CDB: clic droit capté (row=%p)\n", (void *)row);
-
-    if (row == NULL)
+    if (row == NULL) {
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr(_("CDB: right-click on no row\n"));
         return;
+    }
     item = gtk_tree_list_row_get_item(row);
     is_root = g_type_is_a(G_TYPE_FROM_INSTANCE(item), ROOT_TYPE_ENTRY);
     is_dir = !is_root && ((FileEntry *)item)->is_dir;
@@ -929,7 +929,7 @@ on_row_pressed(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
         gtk_popover_popup(GTK_POPOVER(popover));
 
         if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: popover popup demandé pour « %s »\n", dir_path);
+            g_printerr(_("CDB: popover requested for \"%s\"\n"), dir_path);
     }
     } /* fin bloc sélection multiple */
 }
@@ -1397,7 +1397,7 @@ on_new_entry_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
         }
         if (error_msg == NULL) {
             if (g_getenv("CDB_DEBUG") != NULL)
-                g_printerr("CDB: création « %s » dans « %s »\n",
+                g_printerr(_("CDB: created \"%s\" in \"%s\"\n"),
                            name, d->dir_path);
             mark_parent_dirty(d->app, d->dir_path);
             rebuild_explorer(d->app);
@@ -1867,7 +1867,7 @@ on_selection_changed(GtkSelectionModel *model, guint position, guint n_items,
 
     if (g_getenv("CDB_DEBUG") != NULL) {
         GtkBitset *bits = gtk_selection_model_get_selection(model);
-        g_printerr("CDB: sélection -> %lu éléments (changed pos=%u n=%u)\n",
+        g_printerr(_("CDB: selection -> %lu item(s) (changed pos=%u n=%u)\n"),
                    (unsigned long)gtk_bitset_get_size(bits), position, n_items);
         gtk_bitset_unref(bits);
     }
@@ -2016,7 +2016,7 @@ explorer_pos_at(GtkWidget *view, double x, double y)
     }
 
     if (g_getenv("CDB_DEBUG") != NULL)
-        g_printerr("CDB: pick=%s — pas de pos\n",
+        g_printerr(_("CDB: pick=%s — no row position\n"),
                    pick != NULL ? G_OBJECT_TYPE_NAME(pick) : "NULL");
     return GTK_INVALID_LIST_POSITION;
 }
@@ -2063,7 +2063,7 @@ on_primary_pressed(GtkGestureClick *gesture,
 
     if (pos == GTK_INVALID_LIST_POSITION) {
         if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: Ctrl+clic hors item\n");
+            g_printerr(_("CDB: Ctrl+click outside any item\n"));
         return;
     }
 
@@ -2078,7 +2078,7 @@ on_primary_pressed(GtkGestureClick *gesture,
         lo = MIN(anchor, pos);
         n = MAX(anchor, pos) - lo + 1;
         if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: Shift+clic plage [%u, %u] (unselect_rest=%d)\n",
+            g_printerr(_("CDB: Shift+click range [%u, %u] (unselect_rest=%d)\n"),
                        lo, lo + n - 1, unselect_rest);
         gtk_selection_model_select_range(GTK_SELECTION_MODEL(app->selection),
                                          lo, n, unselect_rest);
@@ -2092,7 +2092,7 @@ on_primary_pressed(GtkGestureClick *gesture,
             GTK_SELECTION_MODEL(app->selection));
         gboolean was_selected = gtk_selection_model_is_selected(
             GTK_SELECTION_MODEL(app->selection), pos);
-        g_printerr("CDB: Ctrl+clic toggle pos=%u avant: size=%lu is_selected=%d",
+        g_printerr(_("CDB: Ctrl+click toggle pos=%u before: size=%lu is_selected=%d"),
                    pos, (unsigned long)gtk_bitset_get_size(bits), was_selected);
         gtk_bitset_unref(bits);
         if (app->tree_model != NULL) {
@@ -2121,7 +2121,7 @@ on_primary_pressed(GtkGestureClick *gesture,
             guint n = (guint)gtk_bitset_get_size(all);
             guint i = 0;
             GtkBitsetIter it;
-            g_printerr("CDB: Ctrl+clic bitset complet size=%lu:", (unsigned long)n);
+            g_printerr(_("CDB: Ctrl+click full bitset size=%lu:"), (unsigned long)n);
             if (gtk_bitset_iter_init_first(&it, all, &i)) {
                 do {
                     const char *label = "<unknown>";
@@ -2534,7 +2534,7 @@ rebuild_explorer(App *app)
         collect_expanded(G_LIST_MODEL(app->tree_model), expanded);
 
     if (g_getenv("CDB_DEBUG") != NULL)
-        g_printerr("CDB: rebuild_explorer (dossiers ouverts=%u)\n",
+        g_printerr(_("CDB: rebuild_explorer (open folders=%u)\n"),
                    expanded->len);
 
     /* L'ancien état (modèle + sélection) est remplacé : on libère nos
@@ -2553,7 +2553,7 @@ rebuild_explorer(App *app)
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(app->explorer_scrolled),
                                       build_roots_view(app));
         if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: rebuild_explorer vue créée (n_items=%u)\n",
+            g_printerr(_("CDB: rebuild_explorer view built (n_items=%u)\n"),
                        g_list_model_get_n_items(G_LIST_MODEL(app->tree_model)));
     }
 
@@ -2592,7 +2592,7 @@ update_style_scheme(App *app)
         gtk_source_buffer_set_style_scheme(app->buffer, scheme);
 
     if (g_getenv("CDB_DEBUG") != NULL)
-        g_printerr("CDB: schéma = %s (dark=%d)\n", name,
+        g_printerr(_("CDB: style scheme = %s (dark=%d)\n"), name,
                    adw_style_manager_get_dark(style_mgr));
 }
 
@@ -3603,7 +3603,7 @@ build_initprompt_editor(void)
             gtk_source_style_scheme_manager_get_scheme(smgr_m, sname);
 
         if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: Init-Prompt schéma=%s trouvé=%d\n", sname,
+            g_printerr(_("CDB: Init-Prompt scheme=%s found=%d\n"), sname,
                        scheme != NULL);
         sbuf = gtk_source_buffer_new(NULL);
         if (scheme != NULL)

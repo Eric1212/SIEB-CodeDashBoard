@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-28 01:02-0400\n"
+"POT-Creation-Date: 2026-08-28 02:25-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -153,6 +153,20 @@ msgstr ""
 msgid "CDB: failed to write active profile: %s\n"
 msgstr ""
 
+#: src/main.c:768
+#, c-format
+msgid "CDB: removing \"%s\"\n"
+msgstr ""
+
+#: src/main.c:799
+msgid "CDB: right-click on no row\n"
+msgstr ""
+
+#: src/main.c:932
+#, c-format
+msgid "CDB: popover requested for \"%s\"\n"
+msgstr ""
+
 #: src/main.c:1014
 msgid "New project"
 msgstr ""
@@ -194,6 +208,11 @@ msgstr ""
 msgid "Delete"
 msgstr ""
 
+#: src/main.c:1400
+#, c-format
+msgid "CDB: created \"%s\" in \"%s\"\n"
+msgstr ""
+
 #: src/main.c:1441
 msgid "New folder"
 msgstr ""
@@ -222,6 +241,55 @@ msgstr ""
 
 #: src/main.c:1811
 msgid "Explorer"
+msgstr ""
+
+#: src/main.c:1870
+#, c-format
+msgid "CDB: selection -> %lu item(s) (changed pos=%u n=%u)\n"
+msgstr ""
+
+#: src/main.c:2019
+#, c-format
+msgid "CDB: pick=%s — no row position\n"
+msgstr ""
+
+#: src/main.c:2066
+msgid "CDB: Ctrl+click outside any item\n"
+msgstr ""
+
+#: src/main.c:2081
+#, c-format
+msgid "CDB: Shift+click range [%u, %u] (unselect_rest=%d)\n"
+msgstr ""
+
+#: src/main.c:2095
+#, c-format
+msgid "CDB: Ctrl+click toggle pos=%u before: size=%lu is_selected=%d"
+msgstr ""
+
+#: src/main.c:2124
+#, c-format
+msgid "CDB: Ctrl+click full bitset size=%lu:"
+msgstr ""
+
+#: src/main.c:2537
+#, c-format
+msgid "CDB: rebuild_explorer (open folders=%u)\n"
+msgstr ""
+
+#: src/main.c:2556
+#, c-format
+msgid "CDB: rebuild_explorer view built (n_items=%u)\n"
+msgstr ""
+
+#: src/main.c:2595
+#, c-format
+msgid "CDB: style scheme = %s (dark=%d)\n"
+msgstr ""
+
+#: src/main.c:3606
+#, c-format
+msgid "CDB: Init-Prompt scheme=%s found=%d\n"
 msgstr ""
 
 #: src/main.c:4286
