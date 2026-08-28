@@ -88,13 +88,24 @@ pot:
 
 
 # Initialisation d'un .po manquant, puis mise à jour depuis le .pot.
+#
+# --no-fuzzy-matching est un choix, pas un réglage de confort : msgmerge
+# marie les msgid par similarité lexicale et a produit, sur deux jalons
+# consécutifs, des traductions FAUSSES — "Cannot delete." -> « Impossible
+# de créer le fichier. », "Delete folder" -> « Nouveau dossier », "Reload
+# the projects tree" -> « Supprimer le projet ». Le drapeau fuzzy rend la
+# faute inoffensive à l'exécution (gettext ignore ces entrées) mais la
+# laisse pré-remplie à qui ouvre le .po dans Poedit : un clic et elle est
+# validée. Sans fuzzy, la chaîne reste vide et le msgid anglais s'affiche
+# — un trou visible, jamais un contresens invisible.
 po: pot
 	@for l in $(LANGS); do \
 	    if [ ! -f $(PODIR)/$$l.po ]; then \
 	        $(MSGINIT) --no-translator --locale=$$l \
 	            --input=$(POT) --output=$(PODIR)/$$l.po; \
 	    fi; \
-	    $(MSGMERGE) --update --backup=none $(PODIR)/$$l.po $(POT); \
+	    $(MSGMERGE) --update --no-fuzzy-matching --backup=none \
+	        $(PODIR)/$$l.po $(POT); \
 	done
 
 # Compilation des catalogues binaires (.mo) dans po/locale/<lang>/LC_MESSAGES/.
