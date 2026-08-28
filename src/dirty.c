@@ -7,6 +7,7 @@
 
 #include "dirty.h"
 #include "session.h"
+#include "i18n.h"
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
 
@@ -57,7 +58,7 @@ dirty_store_new(void)
     parser = json_parser_new();
     if (!json_parser_load_from_file(parser, ds->file, &error)) {
         if (!g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT))
-            g_printerr("CDB: dirty.json : %s\n", error->message);
+            g_printerr(_("CDB: failed to read dirty.json: %s\n"), error->message);
         g_error_free(error);
         g_object_unref(parser);
         return ds;
@@ -97,7 +98,7 @@ dirty_store_new(void)
                 if (path == NULL || content == NULL)
                     continue;
                 if (!g_file_test(path, G_FILE_TEST_IS_REGULAR)) {
-                    g_printerr("CDB: dirty abandonné, fichier absent : %s\n",
+                    g_printerr(_("CDB: dirty dropped, file missing: %s\n"),
                                path);
                     continue;
                 }
@@ -242,7 +243,7 @@ dirty_persist_now(DirtyStore *ds)
     root = json_builder_get_root(builder);
     text = json_to_string(root, TRUE);
     if (!g_file_set_contents(ds->file, text, -1, &error)) {
-        g_printerr("CDB: écriture dirty.json : %s\n",
+        g_printerr(_("CDB: failed to write dirty.json: %s\n"),
                    error->message);
         g_error_free(error);
     }

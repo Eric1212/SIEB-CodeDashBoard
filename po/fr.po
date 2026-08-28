@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-27 21:24-0400\n"
+"POT-Creation-Date: 2026-08-28 01:02-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -14,6 +14,26 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#: src/bashpanel.c:130
+#, c-format
+msgid "CDB: bash spawn failed: %s\n"
+msgstr "CDB: bash spawn échoué : %s\n"
+
+#: src/dirty.c:61
+#, c-format
+msgid "CDB: failed to read dirty.json: %s\n"
+msgstr "CDB: dirty.json : %s\n"
+
+#: src/dirty.c:101
+#, c-format
+msgid "CDB: dirty dropped, file missing: %s\n"
+msgstr "CDB: dirty abandonné, fichier absent : %s\n"
+
+#: src/dirty.c:246
+#, c-format
+msgid "CDB: failed to write dirty.json: %s\n"
+msgstr "CDB: écriture dirty.json : %s\n"
 
 #: src/ibox.c:255
 msgid "✔ executed"
@@ -35,9 +55,79 @@ msgstr "Refuser"
 msgid "⤢ show all"
 msgstr "⤢ tout voir"
 
+#: src/layout.c:123
+#, c-format
+msgid "CDB: failed to write layout.json: %s\n"
+msgstr "CDB: écriture layout.json : %s\n"
+
+#: src/layout.c:191
+#, c-format
+msgid "CDB: failed to read layout.json: %s\n"
+msgstr "CDB: layout.json : %s\n"
+
+#: src/llmcore.c:242
+#, c-format
+msgid "CDB: models.dev failed: %s\n"
+msgstr "CDB: models.dev échoué : %s\n"
+
+#: src/llmcore.c:322
+#, c-format
+msgid "CDB: /models failed: %s\n"
+msgstr "CDB: /models échoué : %s\n"
+
+#: src/llmcore.c:597
+#, c-format
+msgid "CDB: /credits %s failed: %s\n"
+msgstr "CDB: /credits %s échoué : %s\n"
+
+#: src/llmcore.c:745
+#, c-format
+msgid "CDB: failed to write allowed_models: %s\n"
+msgstr "CDB: écriture allowed_models : %s\n"
+
+#: src/llmcore.c:849
+#, c-format
+msgid "CDB: failed to write retry429: %s\n"
+msgstr "CDB: écriture retry429 : %s\n"
+
+#: src/llmcore.c:930
+#, c-format
+msgid "CDB: failed to write retry5xx: %s\n"
+msgstr "CDB: écriture retry5xx : %s\n"
+
+#: src/llmcore.c:1050
+#, c-format
+msgid "CDB: failed to save active provider: %s\n"
+msgstr "CDB: écriture switch active : %s\n"
+
+#: src/llmcore.c:1233
+#, c-format
+msgid "CDB: failed to write llm.json: %s\n"
+msgstr "CDB: écriture llm.json : %s\n"
+
+#: src/llmcore.c:1338
+#, c-format
+msgid "CDB: failed to write prompts/default.txt: %s\n"
+msgstr "CDB: écriture prompts/default.txt : %s\n"
+
 #: src/llmlive.c:173
 msgid "Interrupted by the CDB restart."
 msgstr "Interrompu au redémarrage de CDB."
+
+#: src/llmslots.c:69
+#, c-format
+msgid "CDB: failed to write %s: %s\n"
+msgstr "CDB: écriture %s : %s\n"
+
+#: src/llmslots.c:86
+#, c-format
+msgid "CDB: failed to read %s: %s\n"
+msgstr "CDB: lecture %s : %s\n"
+
+#: src/llmslots.c:173
+#, c-format
+msgid "CDB: failed to delete %s: %s\n"
+msgstr "CDB: suppression %s : %s\n"
 
 #: src/llmtile.c:2747
 msgid "(CDB action)"
@@ -51,11 +141,21 @@ msgstr "✔ autorisé +"
 msgid "✔ allowed"
 msgstr "✔ autorisé"
 
-#: src/main.c:1025
+#: src/llmtoolpref.c:297
+#, c-format
+msgid "CDB: failed to write tool prefs: %s\n"
+msgstr "CDB: écriture préfs tools : %s\n"
+
+#: src/llmtoolpref.c:385
+#, c-format
+msgid "CDB: failed to write active profile: %s\n"
+msgstr "CDB: écriture profil actif : %s\n"
+
+#: src/main.c:1014
 msgid "New project"
 msgstr "Nouveau projet"
 
-#: src/main.c:1037 src/main.c:1465
+#: src/main.c:1026 src/main.c:1454
 #, c-format
 msgid ""
 "Create a folder in:\n"
@@ -64,24 +164,24 @@ msgstr ""
 "Créer un dossier dans :\n"
 "%s"
 
-#: src/main.c:1045
+#: src/main.c:1034
 msgid "project name"
 msgstr "nom du projet"
 
-#: src/main.c:1057 src/main.c:1178 src/main.c:1488 src/main.c:1574
+#: src/main.c:1046 src/main.c:1167 src/main.c:1477 src/main.c:1563
 #: src/session.c:328
 msgid "Cancel"
 msgstr "Annuler"
 
-#: src/main.c:1058 src/main.c:1489
+#: src/main.c:1047 src/main.c:1478
 msgid "Create"
 msgstr "Créer"
 
-#: src/main.c:1143
+#: src/main.c:1132
 msgid "Delete project"
 msgstr "Supprimer le projet"
 
-#: src/main.c:1156
+#: src/main.c:1145
 #, c-format
 msgid ""
 "The folder and all its contents will be permanently deleted:\n"
@@ -94,19 +194,19 @@ msgstr ""
 "\n"
 "Retape : DELETE pour confirmer."
 
-#: src/main.c:1179
+#: src/main.c:1168
 msgid "Delete"
 msgstr "Supprimer"
 
-#: src/main.c:1452
+#: src/main.c:1441
 msgid "New folder"
 msgstr "Nouveau dossier"
 
-#: src/main.c:1453
+#: src/main.c:1442
 msgid "New file"
 msgstr "Nouveau fichier"
 
-#: src/main.c:1466
+#: src/main.c:1455
 #, c-format
 msgid ""
 "Create a file in:\n"
@@ -115,13 +215,50 @@ msgstr ""
 "Créer un fichier dans :\n"
 "%s"
 
-#: src/main.c:1539 src/main.c:1575
+#: src/main.c:1528 src/main.c:1564
 msgid "Rename"
 msgstr "Renommer"
 
-#: src/main.c:1822
+#: src/main.c:1540
+#, c-format
+msgid ""
+"Rename:\n"
+"%s"
+msgstr ""
+"Renommer :\n"
+"%s"
+
+#: src/main.c:1811
 msgid "Explorer"
 msgstr "Explorateur"
+
+#: src/main.c:4286
+#, c-format
+msgid "CDB: failed to write window.json: %s\n"
+msgstr "CDB: écriture window.json : %s\n"
+
+#: src/main.c:4372
+#, c-format
+msgid "CDB: modal limit of %d reached"
+msgstr "CDB: limite de %d modales atteinte"
+
+#: src/main.c:4447
+msgid "CDB: readlink /proc/self/exe failed"
+msgstr "CDB: readlink /proc/self/exe échoué"
+
+#: src/main.c:4480
+msgid "CDB: failed to spawn the new session"
+msgstr "CDB: échec du spawn de la nouvelle session"
+
+#: src/roots.c:180
+#, c-format
+msgid "CDB: failed to read roots.json: %s\n"
+msgstr "CDB: roots.json: %s\n"
+
+#: src/roots.c:482
+#, c-format
+msgid "CDB: root not found: %s\n"
+msgstr "CDB: root introuvable: %s\n"
 
 #: src/session.c:304
 msgid "New session"

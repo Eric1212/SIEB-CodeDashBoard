@@ -134,7 +134,6 @@ on_cursor_notify(GObject G_GNUC_UNUSED *obj, GParamSpec G_GNUC_UNUSED *pspec, gp
 
 /* Prototypes (définitions plus bas dans le fichier). */
 static void reveal_path(App *app, const char *file_path);
-static void trace_destroy(GtkWidget *w, gpointer data);
 static void rebuild_explorer(App *app);
 static void on_selection_changed(GtkSelectionModel *model, guint position,
                                  guint n_items, gpointer data);
@@ -217,7 +216,6 @@ trim_buffers(App *app)
 {
     GHashTableIter it;
     gpointer       key, val;
-    guint          dropped = 0;
 
     if (app->files == NULL)
         return;
@@ -230,11 +228,7 @@ trim_buffers(App *app)
         if (dirty_contains(app->dirty, path))
             continue;
         g_hash_table_iter_remove(&it); /* per_file_free : buffer + baseline */
-        dropped++;
     }
-    if (dropped > 0 && g_getenv("CDB_DEBUG") != NULL)
-        g_printerr("CDB: trim_buffers %u buffer(s) propre(s) évicté(s)\n",
-                   dropped);
 }
 
 static void
@@ -704,9 +698,6 @@ on_row_setup(GtkListItemFactory G_GNUC_UNUSED *factory, GtkListItem *item,
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), 3);
     g_signal_connect(gesture, "pressed", G_CALLBACK(on_row_pressed), data);
     gtk_widget_add_controller(expander, GTK_EVENT_CONTROLLER(gesture));
-
-    if (g_getenv("CDB_DEBUG") != NULL)
-        g_printerr("CDB: row setup (gesture bouton 3 attaché)\n");
 }
 
 static void
@@ -778,8 +769,6 @@ on_remove_root_clicked(GtkButton *button, gpointer data)
         roots_remove(app->roots, app->pending_remove);
         roots_save(app->roots);
         app->pending_remove = NULL;
-        if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: MUTATION unselect_all from %s\n", G_STRFUNC);
         gtk_selection_model_unselect_all(GTK_SELECTION_MODEL(app->selection));
     }
     gtk_popover_popdown(GTK_POPOVER(gtk_widget_get_parent(GTK_WIDGET(button))));
@@ -1548,7 +1537,7 @@ open_rename_dialog(App *app, const char *old_path)
     gtk_widget_set_margin_end(content, 16);
     gtk_window_set_child(GTK_WINDOW(dialog), content);
 
-    label_text = g_strdup_printf("Renommer :\n%s", old_path);
+    label_text = g_strdup_printf(_("Rename:\n%s"), old_path);
     label = gtk_label_new(label_text);
     gtk_label_set_xalign(GTK_LABEL(label), 0.0);
     g_free(label_text);
@@ -1856,8 +1845,6 @@ build_roots_panel(App *app)
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_vexpand(scrolled, TRUE);
-    if (g_getenv("CDB_DEBUG") != NULL)
-        g_signal_connect(scrolled, "destroy", G_CALLBACK(trace_destroy), app);
     app->explorer_scrolled = scrolled;
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled),
                                   build_roots_view(app));
@@ -2093,9 +2080,6 @@ on_primary_pressed(GtkGestureClick *gesture,
         if (g_getenv("CDB_DEBUG") != NULL)
             g_printerr("CDB: Shift+clic plage [%u, %u] (unselect_rest=%d)\n",
                        lo, lo + n - 1, unselect_rest);
-        if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: MUTATION select_range lo=%u n=%u unselect_rest=%d from %s\n",
-                       lo, n, unselect_rest, G_STRFUNC);
         gtk_selection_model_select_range(GTK_SELECTION_MODEL(app->selection),
                                          lo, n, unselect_rest);
         selection_sync_from_model(app);
@@ -2175,18 +2159,7 @@ on_primary_pressed(GtkGestureClick *gesture,
             g_hash_table_remove(app->multi_paths, path);
         else
             g_hash_table_add(app->multi_paths, path);
-        if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: Ctrl+clic -> multi_paths size=%lu\n",
-                       (unsigned long)g_hash_table_size(app->multi_paths));
         selection_apply_from_paths(app);
-    }
-
-    if (g_getenv("CDB_DEBUG") != NULL) {
-        GtkBitset *bits = gtk_selection_model_get_selection(
-            GTK_SELECTION_MODEL(app->selection));
-        g_printerr("CDB: Ctrl+clic toggle pos=%u après: size=%lu\n",
-                   pos, (unsigned long)gtk_bitset_get_size(bits));
-        gtk_bitset_unref(bits);
     }
 }
 
@@ -2202,12 +2175,8 @@ on_primary_released(GtkGestureClick *gesture, int G_GNUC_UNUSED n_press,
 
     /* Se fier au press, pas à l'état actuel : Ctrl peut être relâché
      * avant le bouton, la vue ferait alors un select exclusif. */
-    if (app->last_click_mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) {
-        if (g_getenv("CDB_DEBUG") != NULL)
-            g_printerr("CDB: release CLAIMÉ (mods=0x%x) — pas d'écrasement\n",
-                       app->last_click_mods);
+    if (app->last_click_mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK))
         gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
-    }
 
     /* Réinitialise les modificateurs pour les activations clavier suivantes. */
     app->last_click_mods = 0;
@@ -2244,8 +2213,6 @@ on_row_activate(GtkListView *view, guint position, gpointer data)
             g_object_unref(row);
         return;
     }
-    if (g_getenv("CDB_DEBUG") != NULL)
-        g_printerr("CDB: activate -> ouverture fichier\n");
 
     if (row == NULL)
         return;
@@ -2490,35 +2457,6 @@ collect_expanded(GListModel *model, GPtrArray *paths)
 /* ÉTAT de l'explorateur : modèle + sélection. Créé une seule fois, partagé
  * par toutes les vues « explorer » ; retirer une tuile ne détruit rien.
  * La sélection multi (app->multi_paths) est la source de vérité. */
-/* Trace d'état (CDB_DEBUG) : adresses + refcounts des objets d'état
- * partagés — permet de voir quand tree_model/selection deviennent
- * invalides (double-unref / use-after-free). */
-static void
-trace_destroy(GtkWidget *w, gpointer data)
-{
-    App *app = data;
-
-    if (g_getenv("CDB_DEBUG") == NULL)
-        return;
-    g_printerr("CDB: destroy %s @%p (refs selection=%d)\n",
-               G_OBJECT_TYPE_NAME(w), (void *)w,
-               app->selection != NULL
-                   ? (int)((GObject *)app->selection)->ref_count : -1);
-}
-
-static void
-trace_state(App *app, const char *where)
-{
-    if (g_getenv("CDB_DEBUG") == NULL)
-        return;
-    g_printerr("CDB: [%s] tree_model=%p selection=%p (refs=%d) roots=%p "
-               "layout=%p\n",
-               where, (void *)app->tree_model, (void *)app->selection,
-               app->selection != NULL ? (int)((GObject *)app->selection)->ref_count
-                                      : -1,
-               (void *)app->roots, (void *)app->layout);
-}
-
 static void
 create_roots_state(App *app)
 {
@@ -2541,7 +2479,6 @@ create_roots_state(App *app)
      * restent : on réapplique la multi (source de vérité) si elle existe. */
     if (g_hash_table_size(app->multi_paths) >= 1)
         selection_apply_from_paths(app);
-    trace_state(app, "create_roots_state");
 }
 
 /* VUE de l'explorateur : une GtkListView par tuile, sur l'état partagé. */
@@ -2566,12 +2503,6 @@ build_roots_view(App *app)
      * jamais libérées (fuite bornée par le nombre de vues créées, l'état
      * reste vivant pour toute la durée de vie de l'application). */
     g_object_ref(app->selection);
-    if (g_getenv("CDB_DEBUG") != NULL) {
-        g_printerr("CDB: build_roots_view selection refs apres new=%d\n",
-                   app->selection != NULL
-                       ? (int)((GObject *)app->selection)->ref_count : -1);
-        g_signal_connect(view, "destroy", G_CALLBACK(trace_destroy), app);
-    }
     gtk_list_view_set_single_click_activate(GTK_LIST_VIEW(view), TRUE);
     g_signal_connect(view, "activate", G_CALLBACK(on_row_activate), app);
     {
@@ -2812,8 +2743,6 @@ build_editor(App *app)
 
     /* VUE : une par tuile, attachée au buffer partagé. */
     view = gtk_source_view_new_with_buffer(app->buffer);
-    if (g_getenv("CDB_DEBUG") != NULL)
-        g_signal_connect(view, "destroy", G_CALLBACK(trace_destroy), app);
     app->source_view = view;
     gtk_source_view_set_show_line_numbers(GTK_SOURCE_VIEW(view), TRUE);
     gtk_source_view_set_tab_width(GTK_SOURCE_VIEW(view), 4);
@@ -4098,8 +4027,6 @@ build_tile_wrapper(Layout *node, App *app, GtkWidget *content)
     /* Taille minimale d'une tuile : 100×100 px (le paned parent ne peut
      * pas réduire davantage — shrink désactivé dans render_layout_node). */
     gtk_widget_set_size_request(box, 100, 100);
-    if (g_getenv("CDB_DEBUG") != NULL)
-        g_signal_connect(box, "destroy", G_CALLBACK(trace_destroy), app);
     /* Barre de titre compacte : un GtkHeaderBar fait ~51 px de haut — avec
      * les tuiles/blocs empilés (et un niveau de barre par split), les
      * barres mangeaient ~1/3 de la page. Une ligne label + menu suffit. */
@@ -4247,7 +4174,6 @@ on_layout_map(GtkWidget G_GNUC_UNUSED *widget, gpointer data)
 static void
 render_layout(App *app)
 {
-    trace_state(app, "render_layout: avant unparent");
     /* gtk_widget_unparent retire proprement l'ancien arbre (les vues sont
      * détruites : widgets GInitiallyUnowned sans ref externe). */
     if (app->layout_root != NULL) {
@@ -4257,18 +4183,13 @@ render_layout(App *app)
     app->source_view = NULL;
     app->diffbar = NULL;
     app->explorer_scrolled = NULL;
-    trace_state(app, "render_layout: apres unparent");
 
     app->layout_root = render_layout_node(app->layout, app);
-    if (g_getenv("CDB_DEBUG") != NULL)
-        g_signal_connect(app->layout_root, "destroy",
-                         G_CALLBACK(trace_destroy), app);
     gtk_widget_set_vexpand(app->layout_root, TRUE);
     gtk_box_append(GTK_BOX(app->layout_holder), app->layout_root);
     g_signal_connect_after(app->layout_root, "map",
                            G_CALLBACK(on_layout_map), app);
     gtk_widget_set_visible(app->layout_root, TRUE);
-    trace_state(app, "render_layout: fin");
 }
 
 /* ------------------------------------------------ */
@@ -4362,7 +4283,7 @@ window_state_save(App *app)
         GError   *error = NULL;
 
         if (!g_file_set_contents(path, text, -1, &error)) {
-            g_printerr("CDB: écriture window.json : %s\n",
+            g_printerr(_("CDB: failed to write window.json: %s\n"),
                        error->message);
             g_error_free(error);
         }
@@ -4448,7 +4369,7 @@ on_new_window_activated(GSimpleAction G_GNUC_UNUSED *action,
     App *app = data;
 
     if (!modal_open_empty(app))
-        g_warning("CDB: limite de %d modales atteinte", MODAL_MAX);
+        g_warning(_("CDB: modal limit of %d reached"), MODAL_MAX);
 }
 
 /* About CDB : GtkAboutDialog standard. */
@@ -4523,7 +4444,7 @@ on_new_session_activated(GSimpleAction G_GNUC_UNUSED *action,
     (void)app;
     r = readlink("/proc/self/exe", self, sizeof(self) - 1);
     if (r <= 0) {
-        g_warning("CDB: readlink /proc/self/exe échoué");
+        g_warning(_("CDB: readlink /proc/self/exe failed"));
         return;
     }
     self[r] = '\0';
@@ -4556,7 +4477,7 @@ on_new_session_activated(GSimpleAction G_GNUC_UNUSED *action,
         posix_spawnattr_destroy(&attr);
         g_free(envp);
         if (rc != 0)
-            g_warning("CDB: échec du spawn de la nouvelle session");
+            g_warning(_("CDB: failed to spawn the new session"));
     }
 }
 

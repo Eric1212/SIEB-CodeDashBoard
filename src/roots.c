@@ -11,6 +11,7 @@
 
 #include "roots.h"
 #include "session.h"
+#include "i18n.h"
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
 #include <stdio.h>
@@ -176,7 +177,7 @@ roots_load(void)
 
     parser = json_parser_new();
     if (!json_parser_load_from_file(parser, path, &error)) {
-        g_printerr("CDB: roots.json: %s\n", error->message);
+        g_printerr(_("CDB: failed to read roots.json: %s\n"), error->message);
         g_error_free(error);
         g_object_unref(parser);
         g_free(path);
@@ -478,7 +479,7 @@ roots_remove(GListStore *roots, RootEntry *entry)
         }
         g_object_unref(e);
     }
-    g_printerr("CDB: root introuvable: %s\n", entry->path);
+    g_printerr(_("CDB: root not found: %s\n"), entry->path);
 }
 
 /* Suppression récursive d'un dossier : ne suit pas les liens symboliques

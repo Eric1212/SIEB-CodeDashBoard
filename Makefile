@@ -103,12 +103,28 @@ $(LOCALEDIR)/%/LC_MESSAGES/cdb.mo: $(PODIR)/%.po
 	@mkdir -p $(dir $@)
 	$(MSGFMT) --check --statistics --output=$@ $<
 
-# Garde-fou : vérifie que chaque .po est syntaxiquement valide.
+# Garde-fou : chaque .po doit etre syntaxiquement valide ET sans entree
+# « fuzzy ». msgfmt --check ne signale pas le fuzzy — un catalogue fuzzy
+# compile tres bien — mais gettext IGNORE ces entrees a l'execution : une
+# traduction fuzzy est une traduction morte, donc une regression muette.
+# Cas reel attrape par msgmerge : "Rename:\n%s" marie a "Rename" (fuzzy),
+# ce qui aurait rendu le corps du dialogue Renommage en anglais.
 i18n-check:
-	@for f in $(POS); do \
-	    [ -f "$$f" ] && $(MSGFMT) --check --output=/dev/null $$f \
-	        && echo "ok  $$f"; \
-	done; true
+	@fail=0; for f in $(POS); do \
+	    [ -f "$$f" ] || continue; \
+	    if $(MSGFMT) --check --output=/dev/null $$f; then \
+	        n=$$(grep -c '^#,.*fuzzy' $$f); \
+	        if [ $$n -ne 0 ]; then \
+	            echo "ECHEC $$f : $$n entree(s) fuzzy, ignoree(s) a l'execution :"; \
+	            grep -n '^#,.*fuzzy' $$f; \
+	            fail=1; \
+	        else \
+	            echo "ok  $$f"; \
+	        fi; \
+	    else \
+	        echo "ECHEC $$f (msgfmt --check)"; fail=1; \
+	    fi; \
+	done; exit $$fail
 
 clean:
 	rm -f $(OBJ) $(DEP) $(TARGET)

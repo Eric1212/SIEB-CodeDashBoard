@@ -6,6 +6,7 @@
  */
 
 #include "llm.h"
+#include "i18n.h"
 #include <json-glib/json-glib.h>
 #include <string.h>
 
@@ -293,7 +294,7 @@ llm_config_save_tool_mode(const char *name, LlmToolProfile profile,
         if (text != NULL &&
             !g_file_set_contents(path, text, -1, &error)) {
             if (error != NULL) {
-                g_printerr("CDB: écriture préfs tools : %s\n",
+                g_printerr(_("CDB: failed to write tool prefs: %s\n"),
                            error->message);
                 g_error_free(error);
             }
@@ -381,7 +382,7 @@ llm_config_set_active_profile(LlmToolProfile profile)
         json_generator_set_root(gen, work);
         if (text != NULL && !g_file_set_contents(path, text, -1, &error)) {
             if (error != NULL) {
-                g_printerr("CDB: écriture profil actif : %s\n",
+                g_printerr(_("CDB: failed to write active profile: %s\n"),
                            error->message);
                 g_error_free(error);
             }

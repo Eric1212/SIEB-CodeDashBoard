@@ -4,6 +4,7 @@
 
 #include "layout.h"
 #include "session.h"
+#include "i18n.h"
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
 #include <string.h>
@@ -11,7 +12,6 @@
 #define CDB_LAYOUT_FILE "layout.json"
 
 #define DEFAULT_FRACTION 0.25
-
 static char *
 layout_config_path(void)
 {
@@ -120,7 +120,7 @@ layout_save(Layout *root)
     root_node = json_builder_get_root(builder);
     text = json_to_string(root_node, TRUE);
     if (!g_file_set_contents(layout_config_path(), text, -1, &error)) {
-        g_printerr("CDB: écriture layout.json : %s\n",
+        g_printerr(_("CDB: failed to write layout.json: %s\n"),
                    error->message);
         g_error_free(error);
     }
@@ -188,7 +188,7 @@ layout_load(void)
     parser = json_parser_new();
     if (!json_parser_load_from_file(parser, path, &error)) {
         if (!g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT))
-            g_printerr("CDB: layout.json : %s\n", error->message);
+            g_printerr(_("CDB: failed to read layout.json: %s\n"), error->message);
         g_error_free(error);
         g_object_unref(parser);
         g_free(path);

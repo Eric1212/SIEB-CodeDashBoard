@@ -8,6 +8,7 @@
 
 #include "llmslots.h"
 #include "session.h"
+#include "i18n.h"
 
 #include <glib/gstdio.h>
 #include <errno.h>
@@ -65,7 +66,7 @@ write_json_file(const char *path, const char *json)
     GError *error = NULL;
 
     if (!g_file_set_contents(path, json, -1, &error)) {
-        g_printerr("CDB: écriture %s : %s\n", path, error->message);
+        g_printerr(_("CDB: failed to write %s: %s\n"), path, error->message);
         g_error_free(error);
         return FALSE;
     }
@@ -82,7 +83,7 @@ read_json_file(const char *path)
     if (!g_file_test(path, G_FILE_TEST_IS_REGULAR))
         return NULL;
     if (!g_file_get_contents(path, &text, NULL, &error)) {
-        g_printerr("CDB: lecture %s : %s\n", path, error->message);
+        g_printerr(_("CDB: failed to read %s: %s\n"), path, error->message);
         g_error_free(error);
         return NULL;
     }
@@ -169,7 +170,7 @@ llm_slots_clear(int slot)
     char *path = slot_path_in(dir, slot);
 
     if (g_unlink(path) != 0 && errno != ENOENT)
-        g_printerr("CDB: suppression %s : %s\n", path, g_strerror(errno));
+        g_printerr(_("CDB: failed to delete %s: %s\n"), path, g_strerror(errno));
     g_free(path);
     g_free(dir);
 }
