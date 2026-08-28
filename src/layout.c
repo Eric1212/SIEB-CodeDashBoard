@@ -314,9 +314,9 @@ layout_name(const char *id)
     if (id == NULL)
         return "?";
     if (strcmp(id, "editor") == 0)
-        return "Éditeur";
+        return _("Editor");
     if (strcmp(id, "explorer") == 0)
-        return "Explorateur";
+        return _("Explorer");
     if (strcmp(id, "bash") == 0)
         return "Bash";
     if (strcmp(id, "llm") == 0)
@@ -324,6 +324,6 @@ layout_name(const char *id)
     if (strcmp(id, "settings") == 0)
         return "Settings";
     if (strcmp(id, "empty") == 0)
-        return "Vide";
+        return _("Empty");
     return id;
 }

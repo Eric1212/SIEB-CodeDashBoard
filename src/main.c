@@ -295,8 +295,7 @@ load_file(App *app, const char *path)
              * pas l'afficher — on prévient au lieu de casser le buffer. */
             if (!g_utf8_validate(content, len, NULL)) {
                 GtkAlertDialog *alert = gtk_alert_dialog_new(
-                    "Fichier binaire ou encodage non UTF-8 :\n%s", path);
-
+                    _("Binary file or non-UTF-8 encoding:\n%s"), path);
                 gtk_alert_dialog_show(alert, app->win);
                 g_free(content);
                 g_object_unref(pf->buffer);
@@ -957,12 +956,12 @@ on_create_project_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
     g_strstrip(name);
 
     if (name[0] == '\0') {
-        error_msg = "Le nom du projet est vide.";
+        error_msg = _("Project name is empty.");
     } else if (strchr(name, '/') != NULL || g_strcmp0(name, ".") == 0 ||
                g_strcmp0(name, "..") == 0) {
         error_msg = _("Invalid name (no \"/\", no \".\", no \"..\").");
     } else if (name[0] == '.') {
-        error_msg = "Un projet caché (commençant par « . ») n'est pas autorisé.";
+        error_msg = _("A hidden project (starting with \".\") is not allowed.");
     } else {
         full = g_build_filename(d->structure->path, name, NULL);
         if (g_file_test(full, G_FILE_TEST_EXISTS)) {
@@ -1094,7 +1093,7 @@ on_confirm_delete_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
 
     if (!roots_delete_recursive(d->entry->path)) {
         GtkAlertDialog *alert = gtk_alert_dialog_new(
-            "Impossible de supprimer le dossier (permissions ?).");
+            _("Cannot delete the folder (permissions?)."));
         gtk_alert_dialog_show(alert, d->app->win);
         return;
     }
@@ -1364,7 +1363,7 @@ on_new_entry_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
     g_strstrip(name);
 
     if (name[0] == '\0') {
-        error_msg = "Le nom est vide.";
+        error_msg = _("Name is empty.");
     } else if (strchr(name, '/') != NULL || g_strcmp0(name, ".") == 0 ||
                g_strcmp0(name, "..") == 0) {
         error_msg = _("Invalid name (no \"/\", no \".\", no \"..\").");
@@ -1382,7 +1381,7 @@ on_new_entry_clicked(GtkButton G_GNUC_UNUSED *button, gpointer data)
             if (g_file_test(full, G_FILE_TEST_EXISTS)) {
                 error_msg = _("This name already exists.");
             } else if (g_rename(d->old_path, full) != 0) {
-                error_msg = "Impossible de renommer.";
+                error_msg = _("Cannot rename.");
             }
         } else if (g_file_test(full, G_FILE_TEST_EXISTS)) {
             error_msg = _("This name already exists.");
@@ -1463,7 +1462,7 @@ open_new_entry_dialog(App *app, const char *dir_path, gboolean is_dir)
 
     entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(entry),
-                                   is_dir ? "nom du dossier" : "nom du fichier");
+                                   is_dir ? _("folder name") : _("file name"));
     gtk_widget_set_hexpand(entry, TRUE);
     gtk_box_append(GTK_BOX(content), entry);
 
@@ -1656,7 +1655,7 @@ on_delete_file_clicked(GtkButton *button, gpointer data)
     gtk_popover_popdown(GTK_POPOVER(gtk_widget_get_parent(GTK_WIDGET(button))));
     if (!fs_remove_recursive(path)) {
         GtkAlertDialog *alert = gtk_alert_dialog_new(
-            "Impossible de supprimer.");
+            _("Cannot delete."));
         gtk_alert_dialog_show(alert, app->win);
         return;
     }
@@ -1718,8 +1717,8 @@ pick_folder(App *app, RootKind kind)
 
     app->pending_kind = kind;
     gtk_file_dialog_set_title(dialog, kind == ROOT_STRUCTURE
-        ? "Choisir un root de structure"
-        : "Choisir un root de projet");
+        ? _("Choose a structure root")
+        : _("Choose a project root"));
     gtk_file_dialog_select_folder(dialog, app->win, NULL,
                                   on_pick_folder_finished, app);
     g_object_unref(dialog);
@@ -1829,7 +1828,7 @@ build_roots_panel(App *app)
     gtk_widget_add_css_class(refresh_button, "cdb-flat");
     gtk_widget_set_valign(refresh_button, GTK_ALIGN_CENTER);
     gtk_widget_set_tooltip_text(refresh_button,
-                                "Recharger l'arborescence des projets");
+                                _("Reload the projects tree"));
     g_signal_connect(refresh_button, "clicked",
                      G_CALLBACK(on_refresh_explorer_clicked), app);
 
@@ -2925,7 +2924,7 @@ on_provider_save_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
     const char *key = gtk_editable_get_text(GTK_EDITABLE(key_entry));
 
     llm_config_save_provider(provider, key);
-    gtk_label_set_text(GTK_LABEL(status), "Enregistré \u2713");
+    gtk_label_set_text(GTK_LABEL(status), _("Saved \u2713"));
 }
 
 /* ------------------------------------------------ */
@@ -3376,7 +3375,7 @@ build_tools_form(void)
 
     /* Ligne d'en-tête : coin vide + les trois noms de profil. */
     {
-        GtkWidget *corner = gtk_label_new("Outil");
+        GtkWidget *corner = gtk_label_new(_("Tool"));
         gtk_widget_set_halign(corner, GTK_ALIGN_START);
         gtk_widget_add_css_class(corner, "heading");
         gtk_grid_attach(GTK_GRID(grid), corner, 0, 0, 1, 1);
@@ -3424,18 +3423,18 @@ static GtkWidget *
 build_harness_form(void)
 {
     GtkWidget     *grid = gtk_grid_new();
-    GtkWidget     *retry_lbl = gtk_label_new("Retry sur HTTP 429 :");
+    GtkWidget     *retry_lbl = gtk_label_new(_("Retry on HTTP 429:"));
     GtkWidget     *sw = gtk_switch_new();
-    GtkWidget     *max_lbl = gtk_label_new("Répétitions (0 = infini) :");
-    GtkWidget     *delay_lbl = gtk_label_new("Délai entre essais (ms) :");
+    GtkWidget     *max_lbl = gtk_label_new(_("Retries (0 = infinite):"));
+    GtkWidget     *delay_lbl = gtk_label_new(_("Delay between attempts (ms):"));
     GtkAdjustment *adj_max = gtk_adjustment_new(200, 0, 5000, 10, 100, 0);
     GtkWidget     *spin_max = gtk_spin_button_new(adj_max, 10, 0);
     GtkAdjustment *adj_d = gtk_adjustment_new(250, 10, 100000, 10, 1000, 0);
     GtkWidget     *spin_delay = gtk_spin_button_new(adj_d, 10, 0);
-    GtkWidget     *retry5_lbl = gtk_label_new("Retry sur HTTP 5xx :");
+    GtkWidget     *retry5_lbl = gtk_label_new(_("Retry on HTTP 5xx:"));
     GtkWidget     *sw5 = gtk_switch_new();
-    GtkWidget     *max5_lbl = gtk_label_new("Répétitions (0 = infini) :");
-    GtkWidget     *delay5_lbl = gtk_label_new("Délai entre essais (ms) :");
+    GtkWidget     *max5_lbl = gtk_label_new(_("Retries (0 = infinite):"));
+    GtkWidget     *delay5_lbl = gtk_label_new(_("Delay between attempts (ms):"));
     GtkAdjustment *adj5_max = gtk_adjustment_new(120, 0, 5000, 10, 100, 0);
     GtkWidget     *spin5_max = gtk_spin_button_new(adj5_max, 10, 0);
     GtkAdjustment *adj5_d = gtk_adjustment_new(1000, 10, 100000, 100, 1000, 0);
@@ -3560,7 +3559,7 @@ on_ip_save_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     text = gtk_text_buffer_get_text(buf, &s, &e, FALSE);
     llm_persona_save(text);
     g_free(text);
-    gtk_label_set_text(GTK_LABEL(ctx->status), "Enregistré ✓");
+    gtk_label_set_text(GTK_LABEL(ctx->status), _("Saved ✓"));
 }
 
 static GtkWidget *
@@ -3654,7 +3653,7 @@ build_initprompt_editor(void)
         GTK_SCROLLED_WINDOW(scroll), TRUE);
 
     {
-        GtkWidget *save_btn = gtk_button_new_with_label("Enregistrer");
+        GtkWidget *save_btn = gtk_button_new_with_label(_("Save"));
 
         gtk_widget_add_css_class(save_btn, "flat");
         g_signal_connect(save_btn, "clicked",
@@ -3680,11 +3679,11 @@ static GtkWidget *
 build_provider_form(const char *provider_name)
 {
     GtkWidget *grid = gtk_grid_new();
-    GtkWidget *key_lbl = gtk_label_new("Clé API :");
+    GtkWidget *key_lbl = gtk_label_new(_("API key:"));
     GtkWidget *key_entry = gtk_entry_new();
-    GtkWidget *model_lbl = gtk_label_new("Modèles autorisés :");
+    GtkWidget *model_lbl = gtk_label_new(_("Allowed models:"));
     GtkWidget *model_entry = gtk_entry_new();
-    GtkWidget *save_btn = gtk_button_new_with_label("Enregistrer");
+    GtkWidget *save_btn = gtk_button_new_with_label(_("Save"));
     GtkWidget *status = gtk_label_new("");
 
     gtk_widget_set_halign(key_lbl, GTK_ALIGN_START);
@@ -3696,18 +3695,18 @@ build_provider_form(const char *provider_name)
     gtk_entry_set_visibility(GTK_ENTRY(key_entry), FALSE);
     if (g_strcmp0(provider_name, "OpenCode") == 0) {
         gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry),
-                                       "(optionnelle)");
+                                       _("(optional)"));
         gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
-                                       "(vide : tous les modèles)");
+                                       _("(empty: all models)"));
     } else if (g_strcmp0(provider_name, "HyperCharm") == 0) {
         gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry),
-                                       "clé HyperCharm…");
+                                       _("HyperCharm key…"));
         gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
-                                       "(vide : tous les modèles)");
+                                       _("(empty: all models)"));
     } else {
         gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry), "sk-or-v1-…");
         gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
-                                       "(vide : tous les modèles)");
+                                       _("(empty: all models)"));
     }
 
     /* Préremplit la clé depuis llm.json — pour TOUS les providers,
@@ -3826,7 +3825,7 @@ create_piece(const char *id, App *app)
         w = build_settings(app);
     } else {
         /* Vide : emplacement réservé, prêt à recevoir un morceau (Phase 2). */
-        w = gtk_label_new("Vide\n(emplacement réservé)");
+        w = gtk_label_new(_("Empty\n(reserved slot)"));
         gtk_widget_set_halign(w, GTK_ALIGN_CENTER);
         gtk_widget_set_valign(w, GTK_ALIGN_CENTER);
     }
