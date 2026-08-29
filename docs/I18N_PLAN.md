@@ -1,9 +1,11 @@
 # Plan i18n — CodeDashBoard (CDB)
 
-**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4 livrés — **le
-Jalon D est bouclé** ; **prochaine étape : Jalon E** (`llmtile.c`).
-**Date** : 2025-08-28 (rév. 6 — Jalon D bouclé : D3 + D4 livrés, msgmerge en
-`--no-fuzzy-matching`, catalogue à 125 msgids tous traduits).
+**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4, E livrés — **le
+Jalon E est bouclé** ; **prochaine étape : Jalon F** (`llmcore.c`).
+**Date** : 2025-08-28 (rév. 7 — Jalon E livré : 71 msgids de `llmtile.c`,
+premier pluriel de la tuile via `ngettext`, patron `N_()` pour les tables
+statiques (§6.7) ; catalogue à 196 msgids, `fr.po` 196/196 traduits,
+`make i18n-check` vert sur les deux langues, zéro entrée fuzzy).
 **Décideur** : Éric Boucher.
 
 ---
@@ -103,17 +105,75 @@ en réalité ~120 littérales dont beaucoup ne sont pas de l'UI).
 | **D3** | Settings / LLM : labels, placeholders, descriptions de catégories, `Vide\n(emplacement réservé)` | ← **PROCHAIN** |
 | **D4** | Menus du HeaderBar et des tuiles. Fait : le harnais `CDB_TEST_SETTINGS` ne retrouve plus la fenêtre par son titre mais par un marqueur technique (`g_object_set_data "cdb-settings"`) — le titre devient donc traduisable. Option B appliquée : `Settings` → **« Réglages »** (le plan promettait « Paramètres » ; livré « Réglages », terme GNOME d'un panneau de config, et le msgid est partagé avec le titre de tuile), `Exit` → « Quitter », `About CDB` → « À propos de CDB ». `Settings` = 1 msgid, 2 références (`layout.c:325` + `main.c:4644`) | ✅ `1494fdd` (14 msgids) |
 
-### Jalon E — `llmtile.c` (~44 chaînes restantes)
-Marquage, slots inclus. Refactor du hack `"%d tour%s"` en vrai
-`ngettext("turn", "turns", n)`.
-
+### Jalon E — `llmtile.c` — ✅ `0c1a766` (71 msgids ; +10 titres de sections)
+Marquage, slots inclus. **Le refactor imposé est fait** : le hack
+`"%d tour%s"` avec son `> 1 ? "s" : ""` est détruit aux deux sites (titre du
+popover et tooltip), remplacés par `ngettext("… %d turn", "… %d turns", n)` —
+2 msgids à 2 formes, premier pluriel de la tuile et 2e du projet (après D2).
+Autres points de E :
+- **Trois chaînes « affichées et servantes de clé » vérifiées** (le motif qui
+  a mordu en D3.5 et D4) : `[image %u]` n'est jamais re-parsé, `[CDB] ` est
+  bien une paire pose/test, `"[CDB] "`/`voice-*`/`slot-action` restent des
+  marqueurs techniques. Aucune n'a été marquée.
+- **`N_()` découvert en cours de route**, par comptage de msgids et non par
+  lecture du `.po` : les six libellés du menu des slots, stockés dans une
+  table `static const`, n'entraient pas au catalogue. Voir §6.7.
+- **Restés volontairement non marqués** (conformité §6.2 et §5) : étiquettes
+  d'acteur `— Éric —` / `— Claude —` / `— CDB · local —` (noms propres),
+  `CDB_TEST_PROJET` + `[PROJET]` + `[CHEMIN]` (vestiges de harnais), glyphes
+  du spinner, `"%s : %g %s"` / `"%.2f USD"` / `"%dh %02dm %02ds"` (lectures
+  de calcul et d'unités, sans mot).
+- **Tranché par Éric (rév. 7)** : (1) la question du deux-points est **nulle** —
+  une espace avant `:` dans `"%s : %g %s × %g = %.2f USD"` n'est pas un fait de
+  langue : ces lectures restent non marquées (§6.2). **Mais** la formulation
+  d'origine (« on n'y revient pas en F ») était fausse et Éric l'a relevée :
+  l'exemption porte sur *l'absence de mot*, jamais sur *l'absence d'accent*.
+  `et`, `ou`, `dans`, `requis`, `vide`, `fichier`, `manquant` ne s'accentuent
+  pas. Un scan à mots (non à accents) sur `llmcore.c` signale **198 lignes à
+  lire** — dont `"text manquant ou vide."` (2084), `"fichier absent : utilise
+  cdb_create."` (2102), `"before_hash obsolete ou absent…"` (2163). Contrôle
+  fait sur `llmtile.c` avec ce même filtre : **0**, E n'est pas atteint.
+  ⚠ **Recadrage d'Éric (rév. 7)** : ma formule « liste à lire » était encore
+  trop généreuse. Un script ne qualifie pas, il situe ; la qualification se
+  fait à la lecture. Règle posée en §6.8, **F se lira en entier**. Le même
+  scan a d'ailleurs annoncé « vide » un `msgstr ""` suivi de ses
+  continuations : deux ratés, une seule cause.
+- §6.3 a une **récidive en F** : `llmcore.c:2920` (`nlines > 1 ? "s" : ""`) et
+  la famille `%u ligne%s` (2841, 2856, 2878, 2919). À traiter comme en E.
+- **Terminologie actée par Éric (rév. 7)** : `Settings` → « Réglages » (sa
+  préférence va à « Paramètres » — un seul `msgstr`, 2 références, à tout
+  moment réversible) ; `LLM` → **« Modèles »**, le sigle étant inconnu de
+  ceux qui lisent l'écran ; `Tools` → « Outils » ; `Providers` → **« Fournis-
+  seurs »** (« Inférenceurs » écarté). Conséquence en chaîne, voulue : le nom
+  commun devient « fournisseur » dans les phrases — sinon le panneau dirait
+  Fournisseurs et le message « ce provider ». `fr.po` retouché en 5 sites
+  (155, 159, 163, 178, 445) ; les msgids anglais gardent `provider`. Le chemin
+  français se lit **« Réglages → Modèles → Fournisseurs / Outils »**.
+- **Fait hors E, mais nécessaire à cette décision** : les titres de sections
+  du panneau étaient nus (`main.c:2835`, `2845`, `2887`). D3.5 avait libéré le
+  titre — plus aucune clé n'en dépend, vérifié — mais personne n'y avait posé
+  le `_()`, si bien que « Outils » et « Fournisseurs » n'existaient nulle part
+  à l'écran. Marqués en `N_()` : 7 titres. **Restés nus volontairement** :
+  `HyperCharm`, `OpenCode`, `OpenRouter`, `OpenAi-Compatible`, `GitHub/Git`
+  (noms, §6.2). Les trois `placeholder` étaient **en français dans le code** :
+  ils ont d'abord été écrits en anglais, sinon le msgid fût entré français au
+  catalogue. Les `id` ne sont pas marqués — `g_strcmp0(sec->id, "Tools")`
+  dispatche dessus, et traduire la clé choisirait un autre formulaire.
+  `_(NULL)` : toléré sur cette machine (sondé, catalogue chargé et absent),
+  mais non documenté par `dgettext` → garde explicite à `2887`. Bilan :
+  +10 msgids, catalogue à 206, 0 trou, 0 fuzzy.
 ### Jalon F — `llmcore.c` (UI + prompts système)
 Tri entre chaînes UI/prompts (à marquer) et clés JSON (à exclure).
 **Simplifié par la phase 0** : plus de tri `/CDB::` à faire.
 ⚠ ~20 `g_strdup_printf("lecture impossible : %s", …)` y sont des **résultats
 d'outils envoyés au modèle ET affichés dans la boîte** : à marquer, en
 gardant présent qu'ils partent aussi sur le réseau.
-
+**Acquis de E à appliquer en F** : les tables de libellés (dont
+`LLM_PROFILE_NAMES`, comparée en `llmtile.c:1920`) prennent `N_()` à la
+définition et `_()` à l'usage — règle §6.7. La paire `"[CDB] "` (posée à
+`llmcore.c:4761`, testée par `g_str_has_prefix` à `llmtile.c:1539`) est une
+convention de transport : **ne pas la marquer**, elle casse le rendu de la
+voix CDB si elle devient traduite.
 ### Jalon G — Sélecteur de langue et docs
 - Sélecteur de langue dans l'UI + persistance config.
 - Section « Internationalisation » dans `CLAUDE.md` (règles de marquage,
@@ -166,6 +226,11 @@ msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier
    dont le texte vient d'un `error->message` déjà traduit par GLib), et toute
    **chaîne sans mot à traduire** (`"load_file path=%s"`, `"tile id=%s
    widget=%p"`) — le `msgstr` y serait identique au `msgid` byte à byte.
+   ⚠ **Le test est « y a-t-il un mot », jamais « y a-t-il un accent ».**
+   `et`, `ou`, `dans`, `vide`, `absent`, `requis`, `manquant`, `fichier` sont
+   français et ne s'accentuent pas : `"text manquant ou vide."` est une phrase
+   à marquer, `"%s : %g %s × %g = %.2f USD"` n'en est pas une. Un repérage
+   fondé sur les diacritiques laisse passer la première classe entière.
 3. **Pluriels** : toujours `ngettext(singulier, pluriel, n)` — jamais de
    concaténation du type `"%d tour%s"`. Premier cas réel livré en D2.
 4. **Formats** : conserver les marqueurs `%s`, `%d` ; si l'ordre peut changer
@@ -178,6 +243,23 @@ msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier
    vivent dans `fr.po`, jamais dans le msgid anglais. Les points de suspension
    (`…`) restent dans le msgid : ils signalent une boîte qui s'ouvre.
 6. **Commentaires** : restent en français, inchangés.
+7. **Tableaux statiques** : une table `static const` ne peut pas porter `_()`
+   — `gettext()` n'est pas une constante C, l'initialisation statique la
+   refuse. Marquer `N_()` à la définition (extraction par `xgettext`, no-op
+   au runtime) et résoudre `_()` au point d'usage. Faute de `N_()`, la chaîne
+   n'entre pas au catalogue **sans le moindre avertissement** : le défaut est
+   invisible à la compilation, à `msgfmt --check` et à `i18n-check`. Seul le
+   comptage de msgids (`make pot` : 190 → 196) l'a révélé en E.
+8. **Méthode de repérage — règle d'Éric (rév. 7)** : aucun script, aucun grep
+   ne décide ce qui doit être traduit. La décision se prend en **lisant**,
+   ligne à ligne — §5 l'avait déjà tranché pour les diagnostics (trois
+   classificateurs, trois verdicts contradictoires : 34, 7, 67). Un scan peut
+   tout au plus *situer* : retrouver un numéro de ligne, compter des msgids
+   pour constater le silence d'`xgettext`. Dès qu'on lui demande de
+   **qualifier**, il rate, et E l'a montré deux fois : il a laissé passer
+   `"text manquant ou vide."` (aucun accent) et annoncé « vide » un
+   `msgstr ""` suivi de ses lignes de continuation. **Le Jalon F se lira en
+   entier**, `llmcore.c` compris, sans arbitre automatique.
 
 ---
 
