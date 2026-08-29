@@ -31,8 +31,11 @@ pas de gedit (GTK3, fork libgedit).
 
 Chaque processus CDB = une session 000-999 (`CDB_SESSION`, ou dialogue
 si une autre instance tourne). Config dans `~/.config/cdb/<NNN>/` :
-roots.json, layout.json, window.json, dirty.json, llm.json,
-llm_live.json, llm_slots/.
+`layout.json` (arbre des tuiles, langue, état de la fenêtre), `dirty.json`,
+`llm.json` (fournisseurs et clés API, actif, harness, outils, **et** l'état de
+l'explorateur : `roots`, `last_file`), `llm_live.json`, `llm_slots/`,
+`prompts/`. Il n'y a plus de `window.json` ni de `roots.json` : les deux ont
+été absorbés au Jalon G, chacun sous un membre de son fichier d'accueil.
 
 ## Architecture LLM
 

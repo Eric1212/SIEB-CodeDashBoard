@@ -2,19 +2,20 @@
 
 **Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4, E, F, **G** livrés.
 Le plan est clos en tant que tel : tout ce qui était traduisable l'est, la
-langue se choisit dans l'interface et se relit au démarrage. Reste hors code la
-validation d'écran par Éric, et une question de ménage non exécutée (`roots.json`,
-§4 Jalon G).
+langue se choisit dans l'interface et se relit au démarrage. Les deux ménages de
+config demandés par Éric sont faits (`window.json` → `layout.json`,
+`roots.json` → `llm.json`). Reste hors code la validation d'écran par Éric.
 **Date** : 2026-08-29 (rév. 9 — Jalon G livré : sélecteur de langue dans
 Réglages → Général, endonymes hors gettext, liste lue sur disque, `i18n_apply()`
-à escalier de candidats qui garde le territoire (§6.11), `layout.json`
-propriétaire unique de l'état d'affichage avec préservation des membres inconnus
-(§6.12) et rapatriement de `window.json` ; au passage, un widget jamais créé
-corrigé (§4 G.2) et le format réel de `session.h` rétabli. Catalogue à **302
-msgids**, 299 traduits, 3 non traduits **vouloirs**
-(`MINIMAL`/`DEFAULT`/`YOLO`), `make i18n-check` vert sur les deux langues, zéro
-fuzzy, build à 0 warning. Le « 2025-08-28 » de la révision 8 était une année
-erronée : la machine et l'historique portent 2026).
+à escalier de candidats qui garde le territoire (§6.11), `layout.json` et
+`llm.json` régis par la même règle — une écriture ne détruit pas ce
+qu'elle ne connaît pas (§6.12) — avec rapatriement de `window.json` et des
+racines ; au passage, un widget jamais créé corrigé (§4 G.2), un écrasement de
+`last_file` corrigé avec le déplacement, et les formats réels de `session.h`,
+`llm.h` et `roots.h` rétablis. Catalogue à **303 msgids**, 300 traduits, 3 non
+traduits **vouloirs** (`MINIMAL`/`DEFAULT`/`YOLO`), `make i18n-check` vert sur
+les deux langues, zéro fuzzy, build à 0 warning. Le « 2025-08-28 » de la
+révision 8 était une année erronée : la machine et l'historique portent 2026).
 **Décideur** : Éric Boucher.
 
 ---
@@ -367,10 +368,11 @@ l'utilisateur le gérer — aucun mécanisme de renouvellement n'a été constru
 | | |
 |---|---|
 | build | 0 erreur, 0 warning |
-| catalogue | **302 msgids** (297 + 5 de G), 299 traduits, 3 voulu, 0 fuzzy |
+| catalogue | **303 msgids** (297 à la fin de F, +6 dans G, −1 mort en route : la plainte d'écriture de `window.json` n'est plus prononcée par personne), 300 traduits, 3 voulu, 0 fuzzy |
 | `i18n-check` | ok fr, ok en |
 | cohabitation dans `layout.json` | 6 écritures croisées : l'arbre ne perd plus la langue, la langue ne perd plus l'arbre (sonde hors UI, `session_config_path` fourni localement — le `~/.config/cdb` réel ne sert pas de banc d'essai) |
-| migration | `window.json` absorbé sous `"window"`, **relu**, puis supprimé ; l'avis de fusion est sorti **en français**, ce qui prouve en un seul témoin que la langue du fichier est appliquée avant la première chaîne |
+| cohabitation dans `llm.json` | les **sept** écrivains réels appelés un par un (`save_provider`, `set_allowed_models`, `save_retry429`, `save_retry5xx`, `switch_active`, `set_active_profile`, `save_tool_mode`) puis `roots_save` et `roots_write_last_file` : après chacun, `roots`, `last_file` **et la clé API** se relisent intacts |
+| migrations | `window.json` → membre `"window"` de `layout.json` ; `roots.json` → membres `"roots"` + `"last_file"` de `llm.json`. Chacune : écriture, **relecture de la copie**, puis suppression de l'original. Deuxième lancement silencieux (idempotence vérifiée), et l'avis est sorti **en français** — un seul témoin qui prouve aussi que la langue du fichier est appliquée avant la première chaîne |
 | changement de langue | même processus : `en` → `en_CA.UTF-8`, `fr` → `fr_CA.UTF-8`, catalogues ET formats différents |
 | Réglages sous Xvfb (`CDB_TEST_SETTINGS`) | 0 `Gtk-CRITICAL` |
 
@@ -398,13 +400,21 @@ ressemblent dans `layout.c`. Je les ai laissés plutôt que de refactorer du cod
 écrit, compilé et sondé dans le même mouvement ; le jour où un quatrième
 membre arrive, c'est `file_update(mutate, u)` qu'il faudra écrire.
 
-**Refusé d'exécuter, en attente** : Éric a dit « `roots.json` devrait être dans
-`llm.json` ». Les faits contredisent la prémisse — `roots.json` porte `roots` +
-`last_file` (dossiers ouverts de l'explorateur, dernier fichier édité),
-`llm.json` porte `providers`, `active`, `harness`, `tools`, donc des **clés
-API**. Y loger l'état de l'explorateur reviendrait à ce qu'un changement de
-projet touche au fichier des secrets. **Rien n'a été bougé.** Le voisin cohérent
-de `roots.json` semble être `layout.json` ; à trancher par Éric.
+**Exécuté au second avis — mon premier argument était le mauvais.** J'avais
+objecté les `api_key` : `roots.json` porte l'état de l'explorateur, `llm.json`
+porte des secrets, et les rejoindre voulait dire qu'un changement de projet
+toucherait au fichier des clés. Éric a répondu « *tu sous-estimes llm* », et il
+visait juste : la confidentialité ne bouge pas d'un octet — même fichier, même
+dossier de session, mêmes permissions. Ce que je protégeais était une
+**frontière de code**, pas une donnée. Et cette frontière était déjà franchie :
+`llm.json` portait `providers`, `active`, `harness`, `tools` — quatre
+préoccupations, pas une — avec une règle de préservation **écrite noir sur
+blanc** dans `llm.h` depuis avant ce plan. Les racines n'ont fait qu'y entrer.
+
+Fait donc : `roots` et `last_file` sont des membres de `llm.json`, `roots.json`
+est migré une fois, relu, puis supprimé, avec la même discipline que
+`window.json`. Le déplacement a trouvé un défaut en chemin (§6.12 : `roots_save`
+écrasait `last_file`).
 
 - ~~`make test` étendu à `msgfmt --check`~~ : **frappé.** Les tests unitaires
   `tests/agent_state` ont été retirés du projet (`19805d8`), sur décision
@@ -606,6 +616,26 @@ msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier
     vit maintenant sous le membre `"window"` de `layout.json`, migré une fois
     puis l'ancien fichier supprimé — supprimé seulement après relecture de la
     copie.
+
+    Le second logement, `roots.json` dans `llm.json`, a réussi pour une raison
+    différente — et c'est la mesure qui l'a dite, pas la lecture : `llm.json`
+    est écrit par **sept** points (cinq dans `llmcore.c`, deux dans
+    `llmtoolpref.c`), et les sept mutent déjà la COPIE de l'objet relu. La règle
+    y était donc respectée avant que je n'y pose quoi que ce soit. Mes deux
+    premières regex m'avaient fait conclure l'inverse : elles comptaient « objet
+    reconstruit » à la simple présence d'un `json_object_new()`, qui se
+    trouvait être la branche de repli quand le fichier ne se parse pas — et ma
+    seconde version soumettait au dictionnaire les lignes de code plutôt que les
+    seuls commentaires, ce qui noyait 12 fautes réelles sous 184 mots légitimes.
+    Vérifié à l'exécution ensuite, par une sonde qui APPELLE les sept écrivains
+    un par un : après chacun, `roots`, `last_file` et la clé API se relisent
+    intacts.
+
+    Le déplacement a corrigé un défaut au passage : `roots_save()` écrivait son
+    fichier EN ENTIER avec la seule clé `roots`, ce qui effaçait `last_file` à
+    chaque ajout ou retrait de dossier — alors que `roots_write_last_file()`,
+    sur le MÊME fichier, relisait avant d'écrire. Deux règles, un fichier, et
+    une perte silencieuse. La fusion ne laisse plus ce choix.
 
 ---
 ## 7. Commandes et garde-fous
