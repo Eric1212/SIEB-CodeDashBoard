@@ -106,6 +106,18 @@ l'explorateur : `roots`, `last_file`), `llm_live.json`, `llm_slots/`,
   `"language"` de `layout.json`. Elle prend effet aussitôt pour tout ce qui est
   créé après (nouvelles tuiles, dialogues, et le prompt reconstruit à chaque
   requête) ; les écrans déjà montés gardent leurs étiquettes.
+- **En matière de langue, chacun fait de son mieux et personne n'attend
+  personne.** Trois couches traduisent : les catalogues de CDB, GTK/GLib (leurs
+  propres `.mo`), la libc (dates, nombres, devises). **L'absence d'une couche ne
+  dégrade pas les autres**, et l'unité de dégradation est **la chaîne**, jamais
+  l'écran : un `msgstr` vide rend son `msgid` anglais pendant que ses voisines
+  restent traduites. CDB a la langue mais pas la libc (`LC_ALL=fr_MA.UTF-8` sur
+  un poste sans locale marocaine) → l'écran est en français, et le démarrage
+  cherche une locale réelle de cette langue pour que les formats suivent. La
+  libc a la langue mais pas CDB (`es_ES`) → dates et menus GTK en espagnol (si
+  leurs catalogues sont installés), mes chaînes en anglais pivot. Ne jamais
+  « uniformiser » : ni attendre la locale système pour traduire, ni basculer
+  tout l'écran en anglais parce qu'un catalogue manque.
 
 ### Ajouter une langue
 

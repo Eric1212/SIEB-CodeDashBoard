@@ -587,6 +587,34 @@ msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier
        pas de pays : dates, heures et devises restent celles du poste. Mesuré à
        la sonde : `locale=en_CA.UTF-8`, date `Wed 31 Dec 1969 07:00:00 PM`.
 
+    e) **Chaque couche traduit ce qu'elle peut, sans attendre les autres**
+       (« quand il est question de langue, on fait de notre mieux » — Éric).
+       Trois couches concourent : les catalogues de CDB, GTK/GLib (leurs propres
+       `.mo`, donc un quatrième acteur selon les paquets installés), et la libc
+       (dates, nombres, devises). Deux conséquences écrites exprès, parce
+       qu'elles ne sont pas évidentes et qu'on serait tenté de les casser :
+
+       - **l'absence d'une couche ne dégrade pas les autres** ;
+       - **l'unité de dégradation est la chaîne, jamais l'écran** — un `msgstr`
+         vide rend son `msgid` anglais pendant que ses voisines restent
+         traduites. C'est ce qui permet « la partie traduite dans la bonne
+         langue, le reste en anglais » sur un même écran.
+
+       Les deux directions, mesurées à la sonde :
+
+       | environnement | CDB a la langue | la libc a la locale | écran |
+       |---|---|---|---|
+       | `fr_CA.UTF-8` | oui | oui | français, formats québécois |
+       | `fr_MA.UTF-8` | oui | **non** | **français** — au démarrage, la langue demandée est lue dans `LC_ALL`, pas dans la locale installée, et `i18n_apply("fr")` cherche une locale `fr` réelle. Sans ça, « C » ne charge **aucun** catalogue — pas même le `fr` que j'ai — et le français demandé sortait en anglais, en silence |
+       | `es_ES.UTF-8` | **non** | oui | dates espagnoles, chaînes CDB en anglais pivot |
+       | `en_FR.UTF-8` | oui | **non** | anglais, formats anglais récupérés par la même réparation |
+
+       Ce qu'il ne faut **pas** faire, et qui reviendrait naturellement si on
+       cherchait la cohérence à tout prix : attendre la locale système pour
+       traduire, ou basculer tout l'écran en anglais dès qu'un catalogue manque.
+       Les deux remplacent « chacun fait de son mieux » par « personne ne fait
+       rien ».
+
     **Étendue de l'application live** : le changement prend effet aussitôt sur
     tout ce qui se construit après — tuile nouvelle, dialogue, Réglages
     rouverte, et surtout le prompt et les schémas d'outils reconstitués **à
