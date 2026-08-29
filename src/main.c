@@ -2832,7 +2832,7 @@ static GtkWidget *
 build_settings_section(const SettingsSection *sec)
 {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    GtkWidget *header_btn = gtk_toggle_button_new_with_label(sec->title);
+    GtkWidget *header_btn = gtk_toggle_button_new_with_label(_(sec->title));
     GtkWidget *revealer = gtk_revealer_new();
     GtkWidget *body;
 
@@ -2842,7 +2842,7 @@ build_settings_section(const SettingsSection *sec)
     {
         GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         GtkWidget *arrow = gtk_label_new("›");
-        GtkWidget *title = gtk_label_new(sec->title);
+        GtkWidget *title = gtk_label_new(_(sec->title));
 
         gtk_widget_add_css_class(title, "titlebar-brand");
         gtk_widget_set_halign(title, GTK_ALIGN_START);
@@ -2884,7 +2884,7 @@ build_settings_section(const SettingsSection *sec)
             gtk_box_append(GTK_BOX(body),
                            build_settings_section(&sec->subs[i]));
     } else {
-        body = gtk_label_new(sec->placeholder);
+        body = gtk_label_new(sec->placeholder ? _(sec->placeholder) : NULL);
         gtk_label_set_xalign(GTK_LABEL(body), 0.0);
         gtk_widget_set_margin_start(body, 24);
         gtk_widget_set_margin_top(body, 6);
@@ -3773,24 +3773,24 @@ static GtkWidget *
 build_settings(App *app G_GNUC_UNUSED)
 {
     static const SettingsSection provider_subs[] = {
-        { "OpenAi-Compatible", "OpenAi-Compatible", "(à venir : endpoint, modèle, clé API…)", NULL, 0 },
+        { "OpenAi-Compatible", "OpenAi-Compatible", N_("(to come: endpoint, model, API key…)"), NULL, 0 },
         { "HyperCharm", "HyperCharm", NULL, NULL, 0 },   /* formulaire provider */
         { "OpenCode",   "OpenCode",   NULL, NULL, 0 },   /* formulaire provider */
         { "OpenRouter", "OpenRouter", NULL, NULL, 0 },   /* formulaire provider */
     };
     static const SettingsSection harness_subs[] = {
-        { "Retry on error", "Retry on error", NULL, NULL, 0 },  /* formulaire retry */
-        { "Init-Prompt",    "Init-Prompt",    NULL, NULL, 0 },  /* éditeur du prompt système */
+        { "Retry on error", N_("Retry on error"), NULL, NULL, 0 },  /* formulaire retry */
+        { "Init-Prompt",    N_("Init-Prompt"),    NULL, NULL, 0 },  /* éditeur du prompt système */
     };
     static const SettingsSection llm_subs[] = {
-        { "Harness",   "Harness",   NULL, harness_subs, G_N_ELEMENTS(harness_subs) },
-        { "Tools",     "Tools",     NULL, NULL, 0 },  /* formulaire outils */
-        { "Providers", "Providers", NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
+        { "Harness",   N_("Harness"),   NULL, harness_subs, G_N_ELEMENTS(harness_subs) },
+        { "Tools",     N_("Tools"),     NULL, NULL, 0 },  /* formulaire outils */
+        { "Providers", N_("Providers"), NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
     };
     static const SettingsSection sections[] = {
-        { "General",    "General",    "(à venir : thème, police, indentation…)", NULL, 0 },
-        { "GitHub/Git", "GitHub/Git", "(à venir : token, user, repo par défaut…)", NULL, 0 },
-        { "LLM",        "LLM",        NULL, llm_subs, G_N_ELEMENTS(llm_subs) },
+        { "General",    N_("General"),    N_("(to come: theme, font, indentation…)"), NULL, 0 },
+        { "GitHub/Git", "GitHub/Git",     N_("(to come: token, user, repo defaults…)"), NULL, 0 },
+        { "LLM",        N_("LLM"),        NULL, llm_subs, G_N_ELEMENTS(llm_subs) },
     };
     GtkWidget *scroll = gtk_scrolled_window_new();
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);

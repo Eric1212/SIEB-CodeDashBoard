@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-28 14:15-0400\n"
+"POT-Creation-Date: 2026-08-28 20:50-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -145,15 +145,344 @@ msgstr ""
 msgid "CDB: failed to delete %s: %s\n"
 msgstr ""
 
-#: src/llmtile.c:2747
+#: src/llmtile.c:153
+#, c-format
+msgid "%s: balance unavailable"
+msgstr ""
+
+#: src/llmtile.c:215
+msgid "Balance not exposed by this provider"
+msgstr ""
+
+#: src/llmtile.c:216
+msgid "No provider selected"
+msgstr ""
+
+#: src/llmtile.c:227
+msgid "No API key for this provider"
+msgstr ""
+
+#: src/llmtile.c:260
+msgid "Balance unavailable"
+msgstr ""
+
+#: src/llmtile.c:314
+#, c-format
+msgid "%s by %s · slug %s"
+msgstr ""
+
+#: src/llmtile.c:511
+msgid ""
+"No provider configured.\n"
+"Settings → LLM → Providers"
+msgstr ""
+
+#: src/llmtile.c:701
+msgid "Cancel generation"
+msgstr ""
+
+#: src/llmtile.c:702 src/llmtile.c:2316
+msgid "Send"
+msgstr ""
+
+#: src/llmtile.c:973
+#, c-format
+msgid "image paste failed: %s"
+msgstr ""
+
+#: src/llmtile.c:974
+msgid "unknown error"
+msgstr ""
+
+#: src/llmtile.c:985
+msgid "image paste failed: PNG encoding."
+msgstr ""
+
+#: src/llmtile.c:1126 src/llmtile.c:1195 src/llmtile.c:1745 src/main.c:1047
+#: src/main.c:1168 src/main.c:1478 src/main.c:1564 src/session.c:328
+msgid "Cancel"
+msgstr ""
+
+#: src/llmtile.c:1127
+msgid "OK"
+msgstr ""
+
+#: src/llmtile.c:1243
+#, c-format
+msgid ""
+"/* invalid JSON: %s — raw: */\n"
+"%s"
+msgstr ""
+
+#: src/llmtile.c:1265
+msgid "Copy"
+msgstr ""
+
+#: src/llmtile.c:1276
+msgid "modal limit reached (4): close one first."
+msgstr ""
+
+#: src/llmtile.c:1279
+msgid "JSON — as sent"
+msgstr ""
+
+#: src/llmtile.c:1294
+msgid "Save to a slot"
+msgstr ""
+
+#: src/llmtile.c:1295 src/llmtile.c:1344 src/llmtile.c:1597
+msgid "Slot number (0-999):"
+msgstr ""
+
+#: src/llmtile.c:1299
+#, c-format
+msgid "Slot %d already exists. Overwrite?"
+msgstr ""
+
+#: src/llmtile.c:1302 src/llmtile.c:1670
+msgid "Slot in use"
+msgstr ""
+
+#: src/llmtile.c:1302 src/llmtile.c:1670
+msgid "Overwrite"
+msgstr ""
+
+#: src/llmtile.c:1314
+#, c-format
+msgid "Slot %d saved."
+msgstr ""
+
+#: src/llmtile.c:1317
+#, c-format
+msgid "Failed to save slot %d."
+msgstr ""
+
+#: src/llmtile.c:1340
+msgid "cannot load while a request is in progress."
+msgstr ""
+
+#: src/llmtile.c:1343
+msgid "Load a slot"
+msgstr ""
+
+#: src/llmtile.c:1349
+#, c-format
+msgid "Slot %d is empty."
+msgstr ""
+
+#: src/llmtile.c:1356
+#, c-format
+msgid "Slot %d: invalid JSON (%s)."
+msgstr ""
+
+#: src/llmtile.c:1371
+msgid "no \"messages\" array in this slot."
+msgstr ""
+
+#: src/llmtile.c:1509 src/llmtile.c:2135
+msgid "(no new content)"
+msgstr ""
+
+#: src/llmtile.c:1584
+#, c-format
+msgid "Slot %d loaded — the thread was replaced."
+msgstr ""
+
+#: src/llmtile.c:1596 src/llmtile.c:1607
+msgid "Clear a slot"
+msgstr ""
+
+#: src/llmtile.c:1601
+#, c-format
+msgid "Slot %d is already empty."
+msgstr ""
+
+#: src/llmtile.c:1606
+#, c-format
+msgid "Clear slot %d?"
+msgstr ""
+
+#: src/llmtile.c:1607 src/llmtile.c:1788
+msgid "Clear"
+msgstr ""
+
+#: src/llmtile.c:1613
+#, c-format
+msgid "Slot %d cleared."
+msgstr ""
+
+#: src/llmtile.c:1647
+msgid "Three numbers 0-999 expected."
+msgstr ""
+
+#: src/llmtile.c:1651
+#, c-format
+msgid "Session %03d has no slots."
+msgstr ""
+
+#: src/llmtile.c:1659
+#, c-format
+msgid "Slot %d is empty in session %03d."
+msgstr ""
+
+#: src/llmtile.c:1667
+#, c-format
+msgid "Target slot %d already exists. Overwrite?"
+msgstr ""
+
+#: src/llmtile.c:1699
+msgid "Import from a session"
+msgstr ""
+
+#: src/llmtile.c:1717
+msgid "Source session (000-999):"
+msgstr ""
+
+#: src/llmtile.c:1718
+msgid "Source slot (0-999):"
+msgstr ""
+
+#: src/llmtile.c:1719
+msgid "Target slot (0-999):"
+msgstr ""
+
+#: src/llmtile.c:1746
+msgid "Import"
+msgstr ""
+
+#: src/llmtile.c:1765
+#, c-format
+msgid "Slot imported into slot %d."
+msgstr ""
+
+#: src/llmtile.c:1771
+msgid "import failed."
+msgstr ""
+
+#: src/llmtile.c:1783
+msgid "cannot clear while a request is in progress."
+msgstr ""
+
+#: src/llmtile.c:1786
+msgid "Clear the current chat"
+msgstr ""
+
+#: src/llmtile.c:1787
+msgid "Clear the current conversation?"
+msgstr ""
+
+#: src/llmtile.c:1814
+msgid "current chat cleared."
+msgstr ""
+
+#: src/llmtile.c:1821
+#, c-format
+msgid "%zu B"
+msgstr ""
+
+#: src/llmtile.c:1823
+#, c-format
+msgid "%.1f KB"
+msgstr ""
+
+#: src/llmtile.c:1824
+#, c-format
+msgid "%.1f MB"
+msgstr ""
+
+#: src/llmtile.c:1851 src/llmtile.c:2348
+msgid "Not saved"
+msgstr ""
+
+#: src/llmtile.c:1854
+#, c-format
+msgid "Not saved — +%s · %d turn"
+msgid_plural "Not saved — +%s · %d turns"
+msgstr[0] ""
+msgstr[1] ""
+
+#: src/llmtile.c:1860
+#, c-format
+msgid "Slot %d — up to date"
+msgstr ""
+
+#: src/llmtile.c:1863
+#, c-format
+msgid "Slot %d — +%s · %d turn"
+msgid_plural "Slot %d — +%s · %d turns"
+msgstr[0] ""
+msgstr[1] ""
+
+#: src/llmtile.c:1898
+#, c-format
+msgid "Tool profile: %s (Settings → LLM → Tools)"
+msgstr ""
+
+#: src/llmtile.c:1904
+#, c-format
+msgid "Active profile — %s"
+msgstr ""
+
+#: src/llmtile.c:1994
+msgid ""
+"no active model: choose one in the model menu (the \"?\" button) above the "
+"input."
+msgstr ""
+
+#: src/llmtile.c:2229
+msgid ""
+"LLM not configured.\n"
+"\n"
+"Settings → LLM → Providers: fill in a provider\n"
+"(API key), then choose a model in the menu\n"
+"below."
+msgstr ""
+
+#: src/llmtile.c:2333
+msgid "View sent JSON…"
+msgstr ""
+
+#: src/llmtile.c:2334
+msgid "Save to a slot…"
+msgstr ""
+
+#: src/llmtile.c:2335
+msgid "Load a slot…"
+msgstr ""
+
+#: src/llmtile.c:2336
+msgid "Clear a slot…"
+msgstr ""
+
+#: src/llmtile.c:2337
+msgid "Clear the current chat…"
+msgstr ""
+
+#: src/llmtile.c:2338
+msgid "Import from a session…"
+msgstr ""
+
+#: src/llmtile.c:2396
+msgid "Active profile"
+msgstr ""
+
+#: src/llmtile.c:2445
+msgid "Select a model…"
+msgstr ""
+
+#: src/llmtile.c:2466
+msgid "Configure…"
+msgstr ""
+
+#: src/llmtile.c:2749
 msgid "(CDB action)"
 msgstr ""
 
-#: src/llmtile.c:2753
+#: src/llmtile.c:2755
 msgid "✔ allowed +"
 msgstr ""
 
-#: src/llmtile.c:2754
+#: src/llmtile.c:2756
 msgid "✔ allowed"
 msgstr ""
 
@@ -260,11 +589,6 @@ msgstr ""
 
 #: src/main.c:1035
 msgid "project name"
-msgstr ""
-
-#: src/main.c:1047 src/main.c:1168 src/main.c:1478 src/main.c:1564
-#: src/session.c:328
-msgid "Cancel"
 msgstr ""
 
 #: src/main.c:1048 src/main.c:1479
@@ -474,6 +798,46 @@ msgstr ""
 
 #: src/main.c:3703
 msgid "HyperCharm key…"
+msgstr ""
+
+#: src/main.c:3776
+msgid "(to come: endpoint, model, API key…)"
+msgstr ""
+
+#: src/main.c:3782
+msgid "Retry on error"
+msgstr ""
+
+#: src/main.c:3783
+msgid "Init-Prompt"
+msgstr ""
+
+#: src/main.c:3786
+msgid "Harness"
+msgstr ""
+
+#: src/main.c:3787
+msgid "Tools"
+msgstr ""
+
+#: src/main.c:3788
+msgid "Providers"
+msgstr ""
+
+#: src/main.c:3791
+msgid "General"
+msgstr ""
+
+#: src/main.c:3791
+msgid "(to come: theme, font, indentation…)"
+msgstr ""
+
+#: src/main.c:3792
+msgid "(to come: token, user, repo defaults…)"
+msgstr ""
+
+#: src/main.c:3793
+msgid "LLM"
 msgstr ""
 
 #: src/main.c:3828

@@ -150,7 +150,7 @@ on_credits_fetched(gboolean available, double usd, double raw, gpointer data)
                                       c->cp->usd_per_unit, usd);
         } else {
             txt = g_strdup(LLM_CREDITS_UNKNOWN);
-            tip = g_strdup_printf("%s : solde indisponible", c->provider);
+            tip = g_strdup_printf(_("%s: balance unavailable"), c->provider);
         }
         credits_paint(c->label, txt, tip);
         g_free(txt);
@@ -212,8 +212,8 @@ llm_tile_credits_refresh(LlmTile *t)
     if (cp == NULL) {
         g_object_set_data(G_OBJECT(t->credits_label), CREDITS_WANTED, NULL);
         credits_paint(t->credits_label, LLM_CREDITS_UNKNOWN,
-                      prov != NULL ? "Solde non exposé par ce provider"
-                                   : "Aucun provider sélectionné");
+                      prov != NULL ? _("Balance not exposed by this provider")
+                                   : _("No provider selected"));
         return;
     }
 
@@ -224,7 +224,7 @@ llm_tile_credits_refresh(LlmTile *t)
         g_free(key);
         g_object_set_data(G_OBJECT(t->credits_label), CREDITS_WANTED, NULL);
         credits_paint(t->credits_label, LLM_CREDITS_UNKNOWN,
-                      "Pas de clé API pour ce provider");
+                      _("No API key for this provider"));
         return;
     }
     g_free(key);
@@ -257,7 +257,7 @@ llm_tile_credits_refresh(LlmTile *t)
         g_free(c->provider);
         g_free(c);
         credits_paint(t->credits_label, LLM_CREDITS_UNKNOWN,
-                      "Solde indisponible");
+                      _("Balance unavailable"));
     }
 }
 
@@ -311,7 +311,7 @@ llm_model_button_refresh(LlmTile *t)
     if (prov == NULL)
         prov = t->cfg->provider;
     if (name != NULL)
-        label = g_strdup_printf("%s par %s · slug %s", name, prov, slug);
+        label = g_strdup_printf(_("%s by %s · slug %s"), name, prov, slug);
     else if (prov != NULL)
         label = g_strdup_printf("%s · slug %s", prov, slug);
     else
@@ -508,7 +508,7 @@ llm_model_menu_ensure(LlmTile *t)
     names = llm_config_provider_names();
     if (names == NULL) {
         GtkWidget *lbl = gtk_label_new(
-            "Aucun provider configuré.\nSettings → LLM → Providers");
+            _("No provider configured.\nSettings → LLM → Providers"));
 
         gtk_widget_add_css_class(lbl, "dim-label");
         gtk_widget_set_margin_start(lbl, 8);
@@ -698,8 +698,8 @@ llm_busy_set(LlmTile *t, gboolean busy)
                              ? "media-playback-pause-symbolic"
                              : "media-playback-start-symbolic");
     gtk_widget_set_tooltip_text(t->send_btn, busy
-                                ? "Annuler la génération"
-                                : "Envoyer");
+                                ? _("Cancel generation")
+                                : _("Send"));
     gtk_widget_set_sensitive(t->send_btn, TRUE);
 
     /* Un seul rythme, celui de la boucle agentique (loi d'Éric, 27 août) :
@@ -970,8 +970,8 @@ on_llm_clip_texture(GObject *source_object,
     texture = gdk_clipboard_read_texture_finish(clip, res, &error);
     if (texture == NULL) {
         char *msg = g_strdup_printf(
-            "collage image impossible : %s",
-            error != NULL ? error->message : "erreur inconnue");
+            _("image paste failed: %s"),
+            error != NULL ? error->message : _("unknown error"));
 
         g_clear_error(&error);
         core_cdb_announce(t->core, msg);
@@ -982,7 +982,7 @@ on_llm_clip_texture(GObject *source_object,
     png = gdk_texture_save_to_png_bytes(texture);
     g_object_unref(texture);
     if (png == NULL) {
-        core_cdb_announce(t->core, "collage image impossible : encodage PNG.");
+        core_cdb_announce(t->core, _("image paste failed: PNG encoding."));
         return;
     }
 
@@ -1123,8 +1123,8 @@ num_pick_dialog(GtkWindow *parent, const char *title, const char *label)
 
     row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(row, GTK_ALIGN_END);
-    cancel = gtk_button_new_with_label("Annuler");
-    ok = gtk_button_new_with_label("Valider");
+    cancel = gtk_button_new_with_label(_("Cancel"));
+    ok = gtk_button_new_with_label(_("OK"));
     gtk_widget_add_css_class(ok, "suggested-action");
     g_signal_connect(cancel, "clicked", G_CALLBACK(on_num_pick_cancel), &ctx);
     g_signal_connect(ok, "clicked", G_CALLBACK(on_num_pick_ok), &ctx);
@@ -1192,7 +1192,7 @@ confirm_dialog(GtkWindow *parent, const char *title, const char *msg,
 
     row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(row, GTK_ALIGN_END);
-    cancel = gtk_button_new_with_label("Annuler");
+    cancel = gtk_button_new_with_label(_("Cancel"));
     ok = gtk_button_new_with_label(ok_label);
     gtk_widget_add_css_class(ok, destructive ? "destructive-action"
                                              : "suggested-action");
@@ -1240,7 +1240,7 @@ llm_slots_view(LlmTile *t)
         pretty = json_to_string(json_parser_get_root(parser), TRUE);
     } else {
         /* Ne devrait jamais arriver (sortie de json_to_string). */
-        pretty = g_strdup_printf("/* JSON invalide : %s — brut : */\n%s",
+        pretty = g_strdup_printf(_("/* invalid JSON: %s — raw: */\n%s"),
                                  error->message, raw);
         g_clear_error(&error);
     }
@@ -1262,7 +1262,7 @@ llm_slots_view(LlmTile *t)
     gtk_widget_set_size_request(scroll, 640, 480);
 
     titlebar = gtk_header_bar_new();
-    copy_btn = gtk_button_new_with_label("Copier");
+    copy_btn = gtk_button_new_with_label(_("Copy"));
     gtk_header_bar_pack_end(GTK_HEADER_BAR(titlebar), copy_btn);
 
     if (!modal_open(tile_window(t), t->modal_count, titlebar, scroll,
@@ -1273,10 +1273,10 @@ llm_slots_view(LlmTile *t)
         g_object_unref(titlebar);
         g_free(raw);
         hist_cdb_announce(t,
-            "limite de modales atteinte (4) : fermez-en une d'abord.");
+            _("modal limit reached (4): close one first."));
         return;
     }
-    gtk_window_set_title(win, "JSON — tel qu'envoyé");
+    gtk_window_set_title(win, _("JSON — as sent"));
     /* La copie porte sur le JSON BRUT ; libéré avec la fenêtre. */
     g_object_set_data_full(G_OBJECT(win), "raw-json", raw, g_free);
     g_signal_connect(copy_btn, "clicked",
@@ -1291,15 +1291,15 @@ llm_slots_save_dialog(LlmTile *t)
     char      *body;
     char      *msg;
 
-    slot = num_pick_dialog(parent, "Sauvegarder dans un slot",
-                           "Numéro de slot (0-999) :");
+    slot = num_pick_dialog(parent, _("Save to a slot"),
+                           _("Slot number (0-999):"));
     if (slot < 0)
         return;
     if (llm_slots_exists(slot)) {
-        char *q = g_strdup_printf("Le slot %d existe déjà. L'écraser ?",
+        char *q = g_strdup_printf(_("Slot %d already exists. Overwrite?"),
                                   slot);
 
-        if (!confirm_dialog(parent, "Slot occupé", q, "Écraser", TRUE)) {
+        if (!confirm_dialog(parent, _("Slot in use"), q, _("Overwrite"), TRUE)) {
             g_free(q);
             return;
         }
@@ -1311,10 +1311,10 @@ llm_slots_save_dialog(LlmTile *t)
         t->turns_since_ref = 0;
         t->ref_body_size = strlen(body);
         llm_slots_title_update(t);
-        msg = g_strdup_printf("Slot %d sauvegardé.", slot);
+        msg = g_strdup_printf(_("Slot %d saved."), slot);
         core_cdb_announce(t->core, msg);
     } else {
-        msg = g_strdup_printf("Échec de la sauvegarde du slot %d.", slot);
+        msg = g_strdup_printf(_("Failed to save slot %d."), slot);
         core_cdb_announce(t->core, msg);
     }
     g_free(msg);
@@ -1337,23 +1337,23 @@ llm_slots_load_dialog(LlmTile *t)
 
     if (t->busy) {
         hist_cdb_announce(t,
-            "chargement impossible pendant une requête en cours.");
+            _("cannot load while a request is in progress."));
         return;
     }
-    slot = num_pick_dialog(parent, "Charger un slot",
-                           "Numéro de slot (0-999) :");
+    slot = num_pick_dialog(parent, _("Load a slot"),
+                           _("Slot number (0-999):"));
     if (slot < 0)
         return;
     json = llm_slots_load(slot);
     if (json == NULL) {
-        msg = g_strdup_printf("Slot %d vide.", slot);
+        msg = g_strdup_printf(_("Slot %d is empty."), slot);
         core_cdb_announce(t->core, msg);
         g_free(msg);
         return;
     }
     parser = json_parser_new();
     if (!json_parser_load_from_data(parser, json, -1, &error)) {
-        msg = g_strdup_printf("Slot %d : JSON invalide (%s).", slot,
+        msg = g_strdup_printf(_("Slot %d: invalid JSON (%s)."), slot,
                               error->message);
         g_clear_error(&error);
         g_object_unref(parser);
@@ -1368,7 +1368,7 @@ llm_slots_load_dialog(LlmTile *t)
                         : NULL;
     if (msgs == NULL) {
         g_object_unref(parser);
-        core_cdb_announce(t->core, "pas de tableau « messages » dans ce slot.");
+        core_cdb_announce(t->core, _("no \"messages\" array in this slot."));
         return;
     }
 
@@ -1506,7 +1506,7 @@ llm_slots_load_dialog(LlmTile *t)
                     ? json_object_get_string_member(m, "tool_call_id") : NULL;
             LlmMsg rm = { 0 };
             const char *shown = content != NULL
-                                    ? content : "(aucun contenu nouveau)";
+                                    ? content : _("(no new content)");
 
             memset(&rm, 0, sizeof(rm));
             rm.actor = LLMACTOR_CDB;
@@ -1581,7 +1581,7 @@ llm_slots_load_dialog(LlmTile *t)
     }
     llm_slots_title_update(t);
 
-    msg = g_strdup_printf("Slot %d chargé — le fil a été remplacé.", slot);
+    msg = g_strdup_printf(_("Slot %d loaded — the thread was replaced."), slot);
     core_cdb_announce(t->core, msg);
     g_free(msg);
 }
@@ -1593,24 +1593,24 @@ llm_slots_clear_dialog(LlmTile *t)
     int        slot;
     char      *msg;
 
-    slot = num_pick_dialog(parent, "Vider un slot",
-                           "Numéro de slot (0-999) :");
+    slot = num_pick_dialog(parent, _("Clear a slot"),
+                           _("Slot number (0-999):"));
     if (slot < 0)
         return;
     if (!llm_slots_exists(slot)) {
-        msg = g_strdup_printf("Slot %d déjà vide.", slot);
+        msg = g_strdup_printf(_("Slot %d is already empty."), slot);
         core_cdb_announce(t->core, msg);
         g_free(msg);
         return;
     }
-    msg = g_strdup_printf("Vider le slot %d ?", slot);
-    if (!confirm_dialog(parent, "Vider un slot", msg, "Vider", TRUE)) {
+    msg = g_strdup_printf(_("Clear slot %d?"), slot);
+    if (!confirm_dialog(parent, _("Clear a slot"), msg, _("Clear"), TRUE)) {
         g_free(msg);
         return;
     }
     g_free(msg);
     llm_slots_clear(slot);
-    msg = g_strdup_printf("Slot %d vidé.", slot);
+    msg = g_strdup_printf(_("Slot %d cleared."), slot);
     core_cdb_announce(t->core, msg);
     g_free(msg);
 }
@@ -1644,11 +1644,11 @@ on_import_ok(GtkButton G_GNUC_UNUSED *b, gpointer data)
     ctx->attempted = TRUE;
     if (!a || !b2 || !c) {
         gtk_label_set_text(GTK_LABEL(ctx->err),
-                           "Trois nombres 0-999 attendus.");
+                           _("Three numbers 0-999 expected."));
         return;
     }
     if (!llm_slots_dir_exists(sess)) {
-        char *m = g_strdup_printf("La session %03d n'a pas de slots.",
+        char *m = g_strdup_printf(_("Session %03d has no slots."),
                                   sess);
 
         gtk_label_set_text(GTK_LABEL(ctx->err), m);
@@ -1656,7 +1656,7 @@ on_import_ok(GtkButton G_GNUC_UNUSED *b, gpointer data)
         return;
     }
     if (!llm_slots_exists_in(sess, src)) {
-        char *m = g_strdup_printf("Slot %d vide dans la session %03d.",
+        char *m = g_strdup_printf(_("Slot %d is empty in session %03d."),
                                   src, sess);
 
         gtk_label_set_text(GTK_LABEL(ctx->err), m);
@@ -1664,10 +1664,10 @@ on_import_ok(GtkButton G_GNUC_UNUSED *b, gpointer data)
         return;
     }
     if (llm_slots_exists(dst)) {
-        char *q = g_strdup_printf("Le slot cible %d existe déjà. "
-                                  "L'écraser ?", dst);
+        char *q = g_strdup_printf(_("Target slot %d already exists. "
+                                    "Overwrite?"), dst);
 
-        if (!confirm_dialog(ctx->dialog, "Slot occupé", q, "Écraser",
+        if (!confirm_dialog(ctx->dialog, _("Slot in use"), q, _("Overwrite"),
                             TRUE)) {
             g_free(q);
             return;
@@ -1696,7 +1696,7 @@ llm_slots_import_dialog(LlmTile *t)
     GMainLoop *loop;
 
     win = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(win), "Importer d'une session");
+    gtk_window_set_title(GTK_WINDOW(win), _("Import from a session"));
     gtk_window_set_transient_for(GTK_WINDOW(win), parent);
     gtk_window_set_modal(GTK_WINDOW(win), TRUE);
     gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
@@ -1714,9 +1714,9 @@ llm_slots_import_dialog(LlmTile *t)
             const char *label;
             GtkWidget **out;
         } fields[] = {
-            { "Session source (000-999) :", &ctx.e_session },
-            { "Slot source (0-999) :",      &ctx.e_src },
-            { "Slot cible (0-999) :",       &ctx.e_dst },
+            { _("Source session (000-999):"), &ctx.e_session },
+            { _("Source slot (0-999):"),      &ctx.e_src },
+            { _("Target slot (0-999):"),      &ctx.e_dst },
         };
 
         for (guint i = 0; i < G_N_ELEMENTS(fields); i++) {
@@ -1742,8 +1742,8 @@ llm_slots_import_dialog(LlmTile *t)
 
     row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(row, GTK_ALIGN_END);
-    cancel = gtk_button_new_with_label("Annuler");
-    ok = gtk_button_new_with_label("Importer");
+    cancel = gtk_button_new_with_label(_("Cancel"));
+    ok = gtk_button_new_with_label(_("Import"));
     gtk_widget_add_css_class(ok, "suggested-action");
     g_signal_connect(cancel, "clicked", G_CALLBACK(on_import_cancel), &ctx);
     g_signal_connect(ok, "clicked", G_CALLBACK(on_import_ok), &ctx);
@@ -1762,13 +1762,13 @@ llm_slots_import_dialog(LlmTile *t)
     g_main_loop_unref(loop);
 
     if (ctx.done) {
-        char *msg = g_strdup_printf("Slot importé dans le slot %d.",
+        char *msg = g_strdup_printf(_("Slot imported into slot %d."),
                                     ctx.dst_slot);
 
         core_cdb_announce(t->core, msg);
         g_free(msg);
     } else if (ctx.attempted) {
-        core_cdb_announce(t->core, "échec de l'import.");
+        core_cdb_announce(t->core, _("import failed."));
     }
 }
 
@@ -1780,12 +1780,12 @@ llm_chat_clear_dialog(LlmTile *t)
 
     if (t->busy) {
         hist_cdb_announce(t,
-            "vidage impossible pendant une requête en cours.");
+            _("cannot clear while a request is in progress."));
         return;
     }
-    if (!confirm_dialog(parent, "Vider le chat actuel",
-                        "Vider la conversation actuelle ?",
-                        "Vider", TRUE))
+    if (!confirm_dialog(parent, _("Clear the current chat"),
+                        _("Clear the current conversation?"),
+                        _("Clear"), TRUE))
         return;
 
     llm_history_wipe(t);
@@ -1811,17 +1811,17 @@ llm_chat_clear_dialog(LlmTile *t)
     }
     llm_slots_title_update(t);
 
-    core_cdb_announce(t->core, "chat actuel vidé.");
+    core_cdb_announce(t->core, _("current chat cleared."));
 }
 
 char *
 llm_slots_size_str(gsize bytes)
 {
     if (bytes < 1024)
-        return g_strdup_printf("%zu o", bytes);
+        return g_strdup_printf(_("%zu B"), bytes);
     if (bytes < 1024 * 1024)
-        return g_strdup_printf("%.1f Ko", bytes / 1024.0);
-    return g_strdup_printf("%.1f Mo", bytes / (1024.0 * 1024.0));
+        return g_strdup_printf(_("%.1f KB"), bytes / 1024.0);
+    return g_strdup_printf(_("%.1f MB"), bytes / (1024.0 * 1024.0));
 }
 
 void
@@ -1848,19 +1848,22 @@ llm_slots_title_update(LlmTile *t)
 
     if (t->slot_origin < 0) {
         if (t->turns_since_ref == 0)
-            txt = g_strdup("Non sauvegardé");
+            txt = g_strdup(_("Not saved"));
         else
-            txt = g_strdup_printf("Non sauvegardé — +%s · %d tour%s",
-                                  sizestr, t->turns_since_ref,
-                                  t->turns_since_ref > 1 ? "s" : "");
+            txt = g_strdup_printf(
+                ngettext("Not saved — +%s · %d turn",
+                         "Not saved — +%s · %d turns",
+                         t->turns_since_ref),
+                sizestr, t->turns_since_ref);
     } else {
         if (t->turns_since_ref == 0)
-            txt = g_strdup_printf("Slot %d — à jour", t->slot_origin);
+            txt = g_strdup_printf(_("Slot %d — up to date"), t->slot_origin);
         else
-            txt = g_strdup_printf("Slot %d — +%s · %d tour%s",
-                                  t->slot_origin, sizestr,
-                                  t->turns_since_ref,
-                                  t->turns_since_ref > 1 ? "s" : "");
+            txt = g_strdup_printf(
+                ngettext("Slot %d — +%s · %d turn",
+                         "Slot %d — +%s · %d turns",
+                         t->turns_since_ref),
+                t->slot_origin, sizestr, t->turns_since_ref);
     }
 
     gtk_label_set_text(GTK_LABEL(t->slots_title), txt);
@@ -1892,14 +1895,13 @@ llm_tile_profile_refresh(LlmTile *t)
     prof = llm_config_active_profile();
     gtk_menu_button_set_label(GTK_MENU_BUTTON(t->profile_btn),
                               llm_profile_name(prof));
-    tip = g_strdup_printf("Profil des outils : %s "
-                          "(Settings -> LLM -> Tools)",
+    tip = g_strdup_printf(_("Tool profile: %s (Settings → LLM → Tools)"),
                           llm_profile_name(prof));
     gtk_widget_set_tooltip_text(t->profile_btn, tip);
     g_free(tip);
 
     if (t->profile_title != NULL) {
-        char *head = g_strdup_printf("Profil actif — %s",
+        char *head = g_strdup_printf(_("Active profile — %s"),
                                      llm_profile_name(prof));
 
         gtk_label_set_text(GTK_LABEL(t->profile_title), head);
@@ -1989,8 +1991,8 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     if (t->cfg == NULL || t->cfg->model == NULL ||
         t->cfg->model[0] == '\0') {
         hist_cdb_announce(t,
-            "aucun modèle actif : choisissez-en un dans le menu de "
-            "modèle (bouton « ? ») au-dessus de la saisie.");
+            _("no active model: choose one in the model menu "
+              "(the \"?\" button) above the input."));
         g_free(prompt);
         return;
     }
@@ -2130,7 +2132,7 @@ llm_tile_replay_history(LlmTile *t)
         } else if (m->kind == LLM_MSG_TOOL_RESULT) {
             const char *shown = m->content != NULL
                                     ? m->content
-                                    : "(aucun contenu nouveau)";
+                                    : _("(no new content)");
 
             gtk_text_buffer_insert_with_tags_by_name(
                 t->hist, &eit, shown, -1, "voice-cdb", NULL);
@@ -2224,10 +2226,10 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     if (cfg == NULL) {
         /* Pas de config : aide au lieu du chat. */
         GtkWidget *lbl = gtk_label_new(
-            "LLM non configuré.\n\n"
-            "Settings → LLM → Providers : renseignez un provider\n"
-            "(clé API), puis choisissez un modèle dans le menu\n"
-            "ci-dessous.");
+            _("LLM not configured.\n\n"
+              "Settings → LLM → Providers: fill in a provider\n"
+              "(API key), then choose a model in the menu\n"
+              "below."));
 
         gtk_widget_set_halign(lbl, GTK_ALIGN_CENTER);
         gtk_widget_set_valign(lbl, GTK_ALIGN_CENTER);
@@ -2311,7 +2313,7 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
 
     t->send_btn = gtk_button_new_from_icon_name(
         "media-playback-start-symbolic");
-    gtk_widget_set_tooltip_text(t->send_btn, "Envoyer");
+    gtk_widget_set_tooltip_text(t->send_btn, _("Send"));
     gtk_widget_add_css_class(t->send_btn, "flat");
     gtk_widget_add_css_class(t->send_btn, "cdb-flat");
     gtk_widget_add_css_class(t->send_btn, "llm-compose-send");
@@ -2328,12 +2330,12 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
             const char *label;
             const char *action;
         } items[] = {
-            { "Voir le JSON envoyé…",      "view" },
-            { "Sauvegarder dans un slot…", "save" },
-            { "Charger un slot…",          "load" },
-            { "Vider un slot…",            "clear" },
-            { "Vider le chat actuel…",     "clear-chat" },
-            { "Importer d'une session…",   "import" },
+            { N_("View sent JSON…"),          "view" },
+            { N_("Save to a slot…"),          "save" },
+            { N_("Load a slot…"),             "load" },
+            { N_("Clear a slot…"),            "clear" },
+            { N_("Clear the current chat…"),  "clear-chat" },
+            { N_("Import from a session…"),   "import" },
         };
 
         slots_pop = gtk_popover_new();
@@ -2343,13 +2345,13 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
         slots_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
         /* Titre d'état du slot. */
-        t->slots_title = gtk_label_new("Non sauvegardé");
+        t->slots_title = gtk_label_new(_("Not saved"));
         gtk_label_set_xalign(GTK_LABEL(t->slots_title), 0.0);
         gtk_widget_add_css_class(t->slots_title, "cdb-pop-title");
         gtk_box_append(GTK_BOX(slots_box), t->slots_title);
 
         for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
-            GtkWidget *lbl = gtk_label_new(items[i].label);
+            GtkWidget *lbl = gtk_label_new(_(items[i].label));
             GtkWidget *b = gtk_button_new();
 
             gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
@@ -2391,7 +2393,7 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
         gtk_popover_set_has_arrow(GTK_POPOVER(prof_pop), FALSE);
         gtk_widget_add_css_class(prof_pop, "cdb-pop");
 
-        t->profile_title = gtk_label_new("Profil actif");
+        t->profile_title = gtk_label_new(_("Active profile"));
         gtk_label_set_xalign(GTK_LABEL(t->profile_title), 0.0);
         gtk_widget_add_css_class(t->profile_title, "cdb-pop-title");
         gtk_box_append(GTK_BOX(prof_box), t->profile_title);
@@ -2440,7 +2442,7 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
 
         t->model_search = gtk_search_entry_new();
         gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(t->model_search),
-                                              "Sélectionner un modèle…");
+                                              _("Select a model…"));
         g_signal_connect(t->model_search, "search-changed",
                          G_CALLBACK(on_llm_model_search_changed), t);
 
@@ -2461,7 +2463,7 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
         model_outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_box_append(GTK_BOX(model_outer), t->model_search);
         gtk_box_append(GTK_BOX(model_outer), model_scroll);
-        configure = gtk_button_new_with_label("Configurer…");
+        configure = gtk_button_new_with_label(_("Configure…"));
         gtk_widget_add_css_class(configure, "flat");
         gtk_widget_add_css_class(configure, "llm-configure");
         gtk_widget_set_halign(configure, GTK_ALIGN_FILL);

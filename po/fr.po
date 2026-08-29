@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-28 14:15-0400\n"
+"POT-Creation-Date: 2026-08-28 20:50-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -145,15 +145,355 @@ msgstr "CDB: lecture %s : %s\n"
 msgid "CDB: failed to delete %s: %s\n"
 msgstr "CDB: suppression %s : %s\n"
 
-#: src/llmtile.c:2747
+#: src/llmtile.c:153
+#, c-format
+msgid "%s: balance unavailable"
+msgstr "%s : solde indisponible"
+
+#: src/llmtile.c:215
+msgid "Balance not exposed by this provider"
+msgstr "Solde non exposé par ce fournisseur"
+
+#: src/llmtile.c:216
+msgid "No provider selected"
+msgstr "Aucun fournisseur sélectionné"
+
+#: src/llmtile.c:227
+msgid "No API key for this provider"
+msgstr "Pas de clé API pour ce fournisseur"
+
+#: src/llmtile.c:260
+msgid "Balance unavailable"
+msgstr "Solde indisponible"
+
+#: src/llmtile.c:314
+#, c-format
+msgid "%s by %s · slug %s"
+msgstr "%s par %s · slug %s"
+
+#: src/llmtile.c:511
+msgid ""
+"No provider configured.\n"
+"Settings → LLM → Providers"
+msgstr ""
+"Aucun fournisseur configuré.\n"
+"Réglages → Modèles → Fournisseurs"
+
+#: src/llmtile.c:701
+msgid "Cancel generation"
+msgstr "Annuler la génération"
+
+#: src/llmtile.c:702 src/llmtile.c:2316
+msgid "Send"
+msgstr "Envoyer"
+
+#: src/llmtile.c:973
+#, c-format
+msgid "image paste failed: %s"
+msgstr "collage image impossible : %s"
+
+#: src/llmtile.c:974
+msgid "unknown error"
+msgstr "erreur inconnue"
+
+#: src/llmtile.c:985
+msgid "image paste failed: PNG encoding."
+msgstr "collage image impossible : encodage PNG."
+
+#: src/llmtile.c:1126 src/llmtile.c:1195 src/llmtile.c:1745 src/main.c:1047
+#: src/main.c:1168 src/main.c:1478 src/main.c:1564 src/session.c:328
+msgid "Cancel"
+msgstr "Annuler"
+
+#: src/llmtile.c:1127
+msgid "OK"
+msgstr "Valider"
+
+#: src/llmtile.c:1243
+#, c-format
+msgid ""
+"/* invalid JSON: %s — raw: */\n"
+"%s"
+msgstr ""
+"/* JSON invalide : %s — brut : */\n"
+"%s"
+
+#: src/llmtile.c:1265
+msgid "Copy"
+msgstr "Copier"
+
+#: src/llmtile.c:1276
+msgid "modal limit reached (4): close one first."
+msgstr "limite de modales atteinte (4) : fermez-en une d'abord."
+
+#: src/llmtile.c:1279
+msgid "JSON — as sent"
+msgstr "JSON — tel qu'envoyé"
+
+#: src/llmtile.c:1294
+msgid "Save to a slot"
+msgstr "Sauvegarder dans un slot"
+
+#: src/llmtile.c:1295 src/llmtile.c:1344 src/llmtile.c:1597
+msgid "Slot number (0-999):"
+msgstr "Numéro de slot (0-999) :"
+
+#: src/llmtile.c:1299
+#, c-format
+msgid "Slot %d already exists. Overwrite?"
+msgstr "Le slot %d existe déjà. L'écraser ?"
+
+#: src/llmtile.c:1302 src/llmtile.c:1670
+msgid "Slot in use"
+msgstr "Slot occupé"
+
+#: src/llmtile.c:1302 src/llmtile.c:1670
+msgid "Overwrite"
+msgstr "Écraser"
+
+#: src/llmtile.c:1314
+#, c-format
+msgid "Slot %d saved."
+msgstr "Slot %d sauvegardé."
+
+#: src/llmtile.c:1317
+#, c-format
+msgid "Failed to save slot %d."
+msgstr "Échec de la sauvegarde du slot %d."
+
+#: src/llmtile.c:1340
+msgid "cannot load while a request is in progress."
+msgstr "chargement impossible pendant une requête en cours."
+
+#: src/llmtile.c:1343
+msgid "Load a slot"
+msgstr "Charger un slot"
+
+#: src/llmtile.c:1349
+#, c-format
+msgid "Slot %d is empty."
+msgstr "Slot %d vide."
+
+#: src/llmtile.c:1356
+#, c-format
+msgid "Slot %d: invalid JSON (%s)."
+msgstr "Slot %d : JSON invalide (%s)."
+
+#: src/llmtile.c:1371
+msgid "no \"messages\" array in this slot."
+msgstr "pas de tableau « messages » dans ce slot."
+
+#: src/llmtile.c:1509 src/llmtile.c:2135
+msgid "(no new content)"
+msgstr "(aucun contenu nouveau)"
+
+#: src/llmtile.c:1584
+#, c-format
+msgid "Slot %d loaded — the thread was replaced."
+msgstr "Slot %d chargé — le fil a été remplacé."
+
+#: src/llmtile.c:1596 src/llmtile.c:1607
+msgid "Clear a slot"
+msgstr "Vider un slot"
+
+#: src/llmtile.c:1601
+#, c-format
+msgid "Slot %d is already empty."
+msgstr "Slot %d déjà vide."
+
+#: src/llmtile.c:1606
+#, c-format
+msgid "Clear slot %d?"
+msgstr "Vider le slot %d ?"
+
+#: src/llmtile.c:1607 src/llmtile.c:1788
+msgid "Clear"
+msgstr "Vider"
+
+#: src/llmtile.c:1613
+#, c-format
+msgid "Slot %d cleared."
+msgstr "Slot %d vidé."
+
+#: src/llmtile.c:1647
+msgid "Three numbers 0-999 expected."
+msgstr "Trois nombres 0-999 attendus."
+
+#: src/llmtile.c:1651
+#, c-format
+msgid "Session %03d has no slots."
+msgstr "La session %03d n'a pas de slots."
+
+#: src/llmtile.c:1659
+#, c-format
+msgid "Slot %d is empty in session %03d."
+msgstr "Slot %d vide dans la session %03d."
+
+#: src/llmtile.c:1667
+#, c-format
+msgid "Target slot %d already exists. Overwrite?"
+msgstr "Le slot cible %d existe déjà. L'écraser ?"
+
+#: src/llmtile.c:1699
+msgid "Import from a session"
+msgstr "Importer d'une session"
+
+#: src/llmtile.c:1717
+msgid "Source session (000-999):"
+msgstr "Session source (000-999) :"
+
+#: src/llmtile.c:1718
+msgid "Source slot (0-999):"
+msgstr "Slot source (0-999) :"
+
+#: src/llmtile.c:1719
+msgid "Target slot (0-999):"
+msgstr "Slot cible (0-999) :"
+
+#: src/llmtile.c:1746
+msgid "Import"
+msgstr "Importer"
+
+#: src/llmtile.c:1765
+#, c-format
+msgid "Slot imported into slot %d."
+msgstr "Slot importé dans le slot %d."
+
+#: src/llmtile.c:1771
+msgid "import failed."
+msgstr "échec de l'import."
+
+#: src/llmtile.c:1783
+msgid "cannot clear while a request is in progress."
+msgstr "vidage impossible pendant une requête en cours."
+
+#: src/llmtile.c:1786
+msgid "Clear the current chat"
+msgstr "Vider le chat actuel"
+
+#: src/llmtile.c:1787
+msgid "Clear the current conversation?"
+msgstr "Vider la conversation actuelle ?"
+
+#: src/llmtile.c:1814
+msgid "current chat cleared."
+msgstr "chat actuel vidé."
+
+#: src/llmtile.c:1821
+#, c-format
+msgid "%zu B"
+msgstr "%zu o"
+
+#: src/llmtile.c:1823
+#, c-format
+msgid "%.1f KB"
+msgstr "%.1f Ko"
+
+#: src/llmtile.c:1824
+#, c-format
+msgid "%.1f MB"
+msgstr "%.1f Mo"
+
+#: src/llmtile.c:1851 src/llmtile.c:2348
+msgid "Not saved"
+msgstr "Non sauvegardé"
+
+#: src/llmtile.c:1854
+#, c-format
+msgid "Not saved — +%s · %d turn"
+msgid_plural "Not saved — +%s · %d turns"
+msgstr[0] "Non sauvegardé — +%s · %d tour"
+msgstr[1] "Non sauvegardé — +%s · %d tours"
+
+#: src/llmtile.c:1860
+#, c-format
+msgid "Slot %d — up to date"
+msgstr "Slot %d — à jour"
+
+#: src/llmtile.c:1863
+#, c-format
+msgid "Slot %d — +%s · %d turn"
+msgid_plural "Slot %d — +%s · %d turns"
+msgstr[0] "Slot %d — +%s · %d tour"
+msgstr[1] "Slot %d — +%s · %d tours"
+
+#: src/llmtile.c:1898
+#, c-format
+msgid "Tool profile: %s (Settings → LLM → Tools)"
+msgstr "Profil des outils : %s (Réglages → Modèles → Outils)"
+
+#: src/llmtile.c:1904
+#, c-format
+msgid "Active profile — %s"
+msgstr "Profil actif — %s"
+
+#: src/llmtile.c:1994
+msgid ""
+"no active model: choose one in the model menu (the \"?\" button) above the "
+"input."
+msgstr ""
+"aucun modèle actif : choisissez-en un dans le menu de modèle (bouton « ? ») "
+"au-dessus de la saisie."
+
+#: src/llmtile.c:2229
+msgid ""
+"LLM not configured.\n"
+"\n"
+"Settings → LLM → Providers: fill in a provider\n"
+"(API key), then choose a model in the menu\n"
+"below."
+msgstr ""
+"Modèles non configurés.\n"
+"\n"
+"Réglages → Modèles → Fournisseurs : renseignez un fournisseur\n"
+"(clé API), puis choisissez un modèle dans le menu\n"
+"ci-dessous."
+
+#: src/llmtile.c:2333
+msgid "View sent JSON…"
+msgstr "Voir le JSON envoyé…"
+
+#: src/llmtile.c:2334
+msgid "Save to a slot…"
+msgstr "Sauvegarder dans un slot…"
+
+#: src/llmtile.c:2335
+msgid "Load a slot…"
+msgstr "Charger un slot…"
+
+#: src/llmtile.c:2336
+msgid "Clear a slot…"
+msgstr "Vider un slot…"
+
+#: src/llmtile.c:2337
+msgid "Clear the current chat…"
+msgstr "Vider le chat actuel…"
+
+#: src/llmtile.c:2338
+msgid "Import from a session…"
+msgstr "Importer d'une session…"
+
+#: src/llmtile.c:2396
+msgid "Active profile"
+msgstr "Profil actif"
+
+#: src/llmtile.c:2445
+msgid "Select a model…"
+msgstr "Sélectionner un modèle…"
+
+#: src/llmtile.c:2466
+msgid "Configure…"
+msgstr "Configurer…"
+
+#: src/llmtile.c:2749
 msgid "(CDB action)"
 msgstr "(action CDB)"
 
-#: src/llmtile.c:2753
+#: src/llmtile.c:2755
 msgid "✔ allowed +"
 msgstr "✔ autorisé +"
 
-#: src/llmtile.c:2754
+#: src/llmtile.c:2756
 msgid "✔ allowed"
 msgstr "✔ autorisé"
 
@@ -265,11 +605,6 @@ msgstr ""
 #: src/main.c:1035
 msgid "project name"
 msgstr "nom du projet"
-
-#: src/main.c:1047 src/main.c:1168 src/main.c:1478 src/main.c:1564
-#: src/session.c:328
-msgid "Cancel"
-msgstr "Annuler"
 
 #: src/main.c:1048 src/main.c:1479
 msgid "Create"
@@ -487,6 +822,46 @@ msgstr "(vide : tous les modèles)"
 #: src/main.c:3703
 msgid "HyperCharm key…"
 msgstr "clé HyperCharm…"
+
+#: src/main.c:3776
+msgid "(to come: endpoint, model, API key…)"
+msgstr "(à venir : endpoint, modèle, clé API…)"
+
+#: src/main.c:3782
+msgid "Retry on error"
+msgstr "Réessayer en cas d'erreur"
+
+#: src/main.c:3783
+msgid "Init-Prompt"
+msgstr "Prompt initial"
+
+#: src/main.c:3786
+msgid "Harness"
+msgstr "Harnais"
+
+#: src/main.c:3787
+msgid "Tools"
+msgstr "Outils"
+
+#: src/main.c:3788
+msgid "Providers"
+msgstr "Fournisseurs"
+
+#: src/main.c:3791
+msgid "General"
+msgstr "Général"
+
+#: src/main.c:3791
+msgid "(to come: theme, font, indentation…)"
+msgstr "(à venir : thème, police, indentation…)"
+
+#: src/main.c:3792
+msgid "(to come: token, user, repo defaults…)"
+msgstr "(à venir : token, user, repo par défaut…)"
+
+#: src/main.c:3793
+msgid "LLM"
+msgstr "Modèles"
 
 #: src/main.c:3828
 msgid ""
