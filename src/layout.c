@@ -155,14 +155,23 @@ layout_save(Layout *root)
 static Layout *
 layout_from_json(JsonObject *obj)
 {
-    const char *type = json_object_get_string_member(obj, "type");
+    /* has_member avant tout get (convention de CLAUDE.md) : "type" et "id"
+     * manquant dans un fichier édité à la main écriraient une plainte sur le
+     * stderr au lieu de retomber silencieusement sur le layout par défaut —
+     * le piégement du "root" absent, juste en dessous, vient d'être corrigé
+     * pour la même raison. */
+    const char *type = json_object_has_member(obj, "type")
+                           ? json_object_get_string_member(obj, "type")
+                           : NULL;
     Layout     *n;
 
     if (type == NULL)
         return NULL;
 
     if (strcmp(type, "tile") == 0) {
-        const char *id = json_object_get_string_member(obj, "id");
+        const char *id = json_object_has_member(obj, "id")
+                             ? json_object_get_string_member(obj, "id")
+                             : NULL;
 
         if (id == NULL)
             return NULL;
@@ -216,7 +225,15 @@ layout_load(void)
     g_free(path);
 
     root = json_parser_get_root(parser);
-    if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
+    if (root != NULL && JSON_NODE_HOLDS_OBJECT(root) &&
+        json_object_has_member(json_node_get_object(root), "root")) {
+        /* Le garde-fou n'est pas décoratif : json_object_get_object_member
+         * termine sur g_return_val_if_fail(node != NULL), donc un layout.json
+         * SANS membre "root" crachait une Json-CRITICAL sur le stderr de
+         * l'utilisateur. Cas réel depuis le Jalon G : choisir sa langue sur une
+         * session neuve écrit un layout.json qui ne porte QUE "language", et le
+         * démarrage suivant retombait ici même. (Convention de CLAUDE.md :
+         * has_member avant tout get — les fils "a"/"b" la respectent déjà.) */
         obj = json_object_get_object_member(json_node_get_object(root), "root");
         if (obj != NULL)
             out = layout_from_json(obj);
