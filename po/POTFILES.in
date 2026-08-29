@@ -1,5 +1,5 @@
-# Liste des fichiers sources scannés par xgettext (chemins relatifs à po/).
-# Régénérée/manuellement tenue : tout .c contenant des chaînes à traduire.
+# Source files scanned by xgettext (paths relative to po/).
+# Kept by hand: every .c holding strings to translate must be listed here.
 ../src/bashpanel.c
 ../src/css.c
 ../src/diffbar.c

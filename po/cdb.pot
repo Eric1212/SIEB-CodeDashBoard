@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 18:14-0400\n"
+"POT-Creation-Date: 2026-08-29 19:16-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -83,7 +83,7 @@ msgstr ""
 msgid "Explorer"
 msgstr ""
 
-#: src/layout.c:361 src/main.c:4967
+#: src/layout.c:361 src/main.c:4963
 msgid "Settings"
 msgstr ""
 
@@ -1033,30 +1033,31 @@ msgstr ""
 msgid "✔ allowed"
 msgstr ""
 
-#. TRANSLATORS: nom du profil d'outils le plus strict (tout est refusé
-#. ou demandé). Mot identique en français : laisser le msgstr vide.
-#: src/llmtoolpref.c:22
+#. TRANSLATORS: name of the strictest tool profile (everything is either
+#. refused or asked about). The word is identical in French: leave the
+#. msgstr empty.
+#: src/llmtoolpref.c:23
 msgid "MINIMAL"
 msgstr ""
 
-#. TRANSLATORS: nom du profil d'outils par défaut (demande avant
-#. exécution). Mot identique en français : laisser le msgstr vide.
-#: src/llmtoolpref.c:25 src/llmtoolpref.c:72
+#. TRANSLATORS: name of the default tool profile (asks before running).
+#. The word is identical in French: leave the msgstr empty.
+#: src/llmtoolpref.c:26 src/llmtoolpref.c:73
 msgid "DEFAULT"
 msgstr ""
 
-#. TRANSLATORS: nom du profil d'outils le plus permissif (exécution
-#. directe). Sigle universel : laisser le msgstr vide.
-#: src/llmtoolpref.c:28
+#. TRANSLATORS: name of the most permissive tool profile (runs at once).
+#. A universal acronym: leave the msgstr empty.
+#: src/llmtoolpref.c:29
 msgid "YOLO"
 msgstr ""
 
-#: src/llmtoolpref.c:317
+#: src/llmtoolpref.c:318
 #, c-format
 msgid "CDB: failed to write tool prefs: %s\n"
 msgstr ""
 
-#: src/llmtoolpref.c:405
+#: src/llmtoolpref.c:406
 #, c-format
 msgid "CDB: failed to write active profile: %s\n"
 msgstr ""
@@ -1489,24 +1490,24 @@ msgstr ""
 msgid "CDB: failed to spawn the new session"
 msgstr ""
 
-#: src/main.c:4902
+#: src/main.c:4908
 #, c-format
 msgid "CDB: no locale installed for language %s\n"
 msgstr ""
 
-#: src/main.c:4966
+#: src/main.c:4962
 msgid "About CDB"
 msgstr ""
 
-#: src/main.c:4968
+#: src/main.c:4964
 msgid "Exit"
 msgstr ""
 
-#: src/main.c:4992
+#: src/main.c:4988
 msgid "New window"
 msgstr ""
 
-#: src/main.c:4993
+#: src/main.c:4989
 msgid "New session…"
 msgstr ""
 

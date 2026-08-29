@@ -1,11 +1,20 @@
-# CodeDashBoard translation template.
+# Traductions françaises de CodeDashBoard (CDB).
 # Copyright (C) 2025 SIEB.
+#
+# Les msgid sont en anglais : c'est la langue source, le pivot. Ce fichier
+# restitue le français parlé. Trois règles pour traduire ici :
+#   - une chaîne qui n'a pas de mot à traduire (un nom de profil comme
+#     MINIMAL, un symbole d'unité comme Kio) se laisse vide : le msgid
+#     s'affiche tel quel, et une traduction ne ferait que le répéter ;
+#   - conservez les marqueurs (%s, %d) et l'espacement avant « : » et « ; » ;
+#   - une entrée « fuzzy » est IGNOREE à l'exécution alors que msgfmt
+#     l'accepte : make i18n-check la refuse, laissez-la donc vide.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 18:04-0400\n"
+"POT-Creation-Date: 2026-08-29 19:14-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -80,7 +89,7 @@ msgstr "Éditeur"
 msgid "Explorer"
 msgstr "Explorateur"
 
-#: src/layout.c:361 src/main.c:4967
+#: src/layout.c:361 src/main.c:4963
 msgid "Settings"
 msgstr "Réglages"
 
@@ -1209,30 +1218,31 @@ msgstr "✔ autorisé +"
 msgid "✔ allowed"
 msgstr "✔ autorisé"
 
-#. TRANSLATORS: nom du profil d'outils le plus strict (tout est refusé
-#. ou demandé). Mot identique en français : laisser le msgstr vide.
-#: src/llmtoolpref.c:22
+#. TRANSLATORS: name of the strictest tool profile (everything is either
+#. refused or asked about). The word is identical in French: leave the
+#. msgstr empty.
+#: src/llmtoolpref.c:23
 msgid "MINIMAL"
 msgstr ""
 
-#. TRANSLATORS: nom du profil d'outils par défaut (demande avant
-#. exécution). Mot identique en français : laisser le msgstr vide.
-#: src/llmtoolpref.c:25 src/llmtoolpref.c:72
+#. TRANSLATORS: name of the default tool profile (asks before running).
+#. The word is identical in French: leave the msgstr empty.
+#: src/llmtoolpref.c:26 src/llmtoolpref.c:73
 msgid "DEFAULT"
 msgstr ""
 
-#. TRANSLATORS: nom du profil d'outils le plus permissif (exécution
-#. directe). Sigle universel : laisser le msgstr vide.
-#: src/llmtoolpref.c:28
+#. TRANSLATORS: name of the most permissive tool profile (runs at once).
+#. A universal acronym: leave the msgstr empty.
+#: src/llmtoolpref.c:29
 msgid "YOLO"
 msgstr ""
 
-#: src/llmtoolpref.c:317
+#: src/llmtoolpref.c:318
 #, c-format
 msgid "CDB: failed to write tool prefs: %s\n"
 msgstr "CDB: écriture préfs tools : %s\n"
 
-#: src/llmtoolpref.c:405
+#: src/llmtoolpref.c:406
 #, c-format
 msgid "CDB: failed to write active profile: %s\n"
 msgstr "CDB: écriture profil actif : %s\n"
@@ -1684,24 +1694,24 @@ msgstr "CDB: readlink /proc/self/exe échoué"
 msgid "CDB: failed to spawn the new session"
 msgstr "CDB: échec du spawn de la nouvelle session"
 
-#: src/main.c:4902
+#: src/main.c:4908
 #, c-format
 msgid "CDB: no locale installed for language %s\n"
 msgstr "CDB: aucune locale installée pour la langue %s\n"
 
-#: src/main.c:4966
+#: src/main.c:4962
 msgid "About CDB"
 msgstr "À propos de CDB"
 
-#: src/main.c:4968
+#: src/main.c:4964
 msgid "Exit"
 msgstr "Quitter"
 
-#: src/main.c:4992
+#: src/main.c:4988
 msgid "New window"
 msgstr "Nouvelle fenêtre"
 
-#: src/main.c:4993
+#: src/main.c:4989
 msgid "New session…"
 msgstr "Nouvelle session…"
 

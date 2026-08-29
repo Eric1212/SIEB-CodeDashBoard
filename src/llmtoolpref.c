@@ -17,14 +17,15 @@ const char *const LLM_PROFILE_NAMES[LLM_PROFILE_COUNT] = {
  * LLM_PROFILE_NAMES changerait la CLE relue dans llm.json au démarrage,
  * traduire ceux-ci ne change que l'écran. */
 const char *const LLM_PROFILE_LABELS[LLM_PROFILE_COUNT] = {
-    /* TRANSLATORS: nom du profil d'outils le plus strict (tout est refusé
-       ou demandé). Mot identique en français : laisser le msgstr vide. */
+    /* TRANSLATORS: name of the strictest tool profile (everything is either
+       refused or asked about). The word is identical in French: leave the
+       msgstr empty. */
     N_("MINIMAL"),
-    /* TRANSLATORS: nom du profil d'outils par défaut (demande avant
-       exécution). Mot identique en français : laisser le msgstr vide. */
+    /* TRANSLATORS: name of the default tool profile (asks before running).
+       The word is identical in French: leave the msgstr empty. */
     N_("DEFAULT"),
-    /* TRANSLATORS: nom du profil d'outils le plus permissif (exécution
-       directe). Sigle universel : laisser le msgstr vide. */
+    /* TRANSLATORS: name of the most permissive tool profile (runs at once).
+       A universal acronym: leave the msgstr empty. */
     N_("YOLO")
 };
 const char *const LLM_TOOL_MODE_NAMES[4] = {
