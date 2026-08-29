@@ -54,6 +54,83 @@ llm_config_path(void)
     return session_config_path("llm.json");
 }
 
+/* llm.json est relu et réécrit en entier par sept écritures distinctes — les
+ * cinq de ce fichier, les deux de llmtoolpref.c — qui toutes mutent la COPIE
+ * de l'objet relu : un membre qu'elles ne connaissent pas survit donc à leurs
+ * écritures. Ces deux accès sont ce qui permet à un autre module (les racines
+ * de l'explorateur) de loger ici sans réécrire le fichier à la main — et sans
+ * jamais toucher aux clés API. */
+
+/* Membre étranger (clé que le modèle LLM ignore) : COPIE à libérer par
+ * l'appelant, NULL si absente — le nœud prêté par le parser meurt avec lui. */
+JsonNode *
+llm_config_get_member(const char *key)
+{
+    char       *path   = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonNode   *out    = NULL;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        JsonObject *obj = json_node_get_object(json_parser_get_root(parser));
+
+        if (json_object_has_member(obj, key))
+            out = json_node_copy(json_object_get_member(obj, key));
+    }
+    g_object_unref(parser);
+    g_free(path);
+    return out;
+}
+
+/* Fusionne des membres au sommet de llm.json sans toucher aux autres.
+ * `members` n'est pas consommé. */
+void
+llm_config_merge_members(JsonObject *members)
+{
+    char       *path   = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonNode   *work   = NULL;
+    JsonObject *obj;
+    GError     *error = NULL;
+    gchar      *text;
+    GList      *keys;
+
+    if (members == NULL || json_object_get_size(members) == 0) {
+        g_object_unref(parser);
+        g_free(path);
+        return;                       /* rien à fusionner : rien à écrire */
+    }
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser)))
+        work = json_node_copy(json_parser_get_root(parser));
+    g_object_unref(parser);
+    if (work == NULL) {
+        work = json_node_new(JSON_NODE_OBJECT);
+        json_node_init_object(work, json_object_new());
+    }
+    obj = json_node_get_object(work);
+
+    keys = json_object_get_members(members);
+    for (GList *l = keys; l != NULL; l = l->next) {
+        const char *k = l->data;
+
+        json_object_set_member(obj, k,
+                               json_node_copy(json_object_get_member(members, k)));
+    }
+    g_list_free(keys);
+
+    text = json_to_string(work, TRUE);
+    if (!g_file_set_contents(path, text, -1, &error)) {
+        g_printerr(_("CDB: failed to write llm.json: %s\n"), error->message);
+        g_error_free(error);
+    }
+    g_free(text);
+    json_node_unref(work);
+    g_free(path);
+}
+
 /* URL de base d'un provider connu ; NULL si inconnu. */
 const char *
 llm_provider_default_url(const char *provider)

@@ -1,15 +1,20 @@
 /*
  * llm.h : tuile LLM — chat avec un provider OpenAI-compatible.
  *
- * Config par session : ~/.config/cdb/<NNN>/llm.json
+ * Config par session : ~/.config/cdb/<NNN>/llm.json. C'est le fichier d'état
+ * de la SESSION, pas seulement du LLM : sept écritures s'y partagent (cinq
+ * dans llmcore.c, deux dans llmtoolpref.c), toutes en
+ * lecture-modification-écriture, donc un membre survit à l'écriture d'un
+ * autre. Forme réelle, relevée sur un fichier vivant :
  *   {
- *     "providers": {
- *       "OpenRouter": {
- *         "api_url":      "https://openrouter.ai/api/v1",
- *         "api_key":      "sk-or-…"
- *       }
- *     },
- *     "active": { "provider": "OpenRouter", "model": "stealth/ox-alpha" }
+ *     "providers": { "OpenRouter": { "api_url", "api_key",
+ *                                    "allowed_models" }, … },
+ *     "active":    { "provider", "model", "profile" },
+ *     "harness":   { "retry_429", "max_retries_429", "delay_ms_429",
+ *                    "retry_5xx", "max_retries_5xx", "delay_ms_5xx" },
+ *     "tools":     [ { "name", "modes" }, … ],
+ *     "roots":     [ { "path", "kind" }, … ],   <- explorateur (roots.c)
+ *     "last_file": "…"                          <- explorateur (roots.c)
  *   }
  *
  * « active » est le SEUL couple provider/modèle utilisé pour le chat ;
@@ -21,6 +26,7 @@
 #define CDB_LLM_H
 
 #include <gtk/gtk.h>
+#include <json-glib/json-glib.h>   /* JsonNode / JsonObject : membres étrangers de llm.json */
 
 /* Configuration LLM chargée depuis llm.json (possédée par App).
  * model peut être NULL/vide : aucun modèle actif tant que l'utilisateur
@@ -42,6 +48,15 @@ void llm_config_free(LlmConfig *cfg);
  * les autres providers et « active » (posé seulement à la première
  * création). Crée le fichier s'il n'existe pas. */
 void llm_config_save_provider(const char *provider, const char *api_key);
+
+/* llm.json est aussi le fichier d'état de la SESSION, pas seulement du LLM :
+ * un autre module (l'explorateur, pour ses racines) y loge des membres que le
+ * modèle ignore. Ces deux accès sont le SEUL chemin autorisé pour cela — ils
+ * relisent, ne remplacent que ce qu'on leur donne, et laissent le reste
+ * (providers, api_key, active, harness, tools) intact. Les sept écritures
+ * existantes du fichier suivent déjà cette règle. */
+JsonNode *llm_config_get_member(const char *key);   /* copie, à libérer */
+void      llm_config_merge_members(JsonObject *members);
 
 /* Récupère la liste des modèles du provider (GET {api_url}/models).
  * Async : cb(ids, user_data) sur la boucle principale — ids = tableau

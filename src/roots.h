@@ -43,11 +43,15 @@ typedef struct _RootEntryClass {
 
 GType root_entry_get_type(void);
 
-/* Charge les roots depuis roots.json (appelé une fois au démarrage).
+/* Charge les racines depuis le membre "roots" de llm.json (appelé une fois au
+ * démarrage ; un ancien roots.json est migré, relu, puis supprimé).
  * Retourne un GListStore non-référencé de RootEntry. */
 GListStore *roots_load(void);
 
-/* Sauvegarde le store complet dans roots.json (à chaque modification). */
+/* Sauvegarde le store complet dans le membre "roots" de llm.json (à chaque
+ * modification). Fusion, et non réécriture : "last_file", providers et
+ * api_key survivent — ce que l'ancien roots.json, écrit en entier, ne
+ * garantissait pas. */
 void roots_save(GListStore *roots);
 
 /* Ajoute un root. parent = structure d'accueil, ou NULL pour la racine. */

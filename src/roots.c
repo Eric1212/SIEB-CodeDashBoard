@@ -6,16 +6,22 @@
  * Un Root de projet est un dossier de travail ouvert dans l'IDE
  * (ex: /home/eric/dev/alvalllm), comme dans Zed.
  *
- * Persistance : ~/.config/cdb/roots.json
+ * Persistance : membres "roots" et "last_file" de llm.json, par
+ * llm_config_merge_members() / llm_config_get_member() — le fichier est
+ * écrit par llmcore.c et llmtoolpref.c, qui préservent ce qu'ils ne
+ * connaissent pas. L'ancien roots.json est migré une fois, relu, puis
+ * supprimé.
  */
 
 #include "roots.h"
+#include "llm.h"
 #include "session.h"
 #include "i18n.h"
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
 #include <stdio.h>
 
+/* Ancien fichier des racines : nom conservé pour la migration une fois. */
 #define CDB_ROOTS_FILE  "roots.json"
 
 /* Prototypes internes (définies plus bas dans le fichier). */
@@ -77,8 +83,11 @@ root_entry_new(RootKind kind, const char *path)
     return e;
 }
 
+/* Chemin du fichier LEGACY (roots.json). Plus qu'un point de passage : depuis
+ * le Jalon G les racines vivent dans llm.json, et cette fonction ne sert
+ * qu'à la migration une fois. */
 static char *
-roots_config_path(void)
+roots_legacy_path(void)
 {
     return session_config_path(CDB_ROOTS_FILE);
 }
@@ -110,33 +119,32 @@ entry_to_json(RootEntry *e)
 void
 roots_save(GListStore *roots)
 {
-    JsonBuilder  *b = json_builder_new();
-    JsonGenerator *gen;
-    char         *path;
-    gsize         n = g_list_model_get_n_items(G_LIST_MODEL(roots));
+    JsonBuilder *b = json_builder_new();
+    JsonObject  *members;
+    JsonNode    *arr;
+    gsize        n = g_list_model_get_n_items(G_LIST_MODEL(roots));
 
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "roots");
     json_builder_begin_array(b);
     for (gsize i = 0; i < n; i++) {
         RootEntry *e = g_list_model_get_item(G_LIST_MODEL(roots), i);
+
         json_builder_add_value(b, entry_to_json(e));
         g_object_unref(e);
     }
     json_builder_end_array(b);
-    json_builder_end_object(b);
-
-    gen = json_generator_new();
-    json_generator_set_root(gen, json_builder_get_root(b));
-    json_generator_set_pretty(gen, TRUE);
-
-    path = roots_config_path();
-    if (g_mkdir_with_parents(g_path_get_dirname(path), 0700) == 0)
-        json_generator_to_file(gen, path, NULL);
-    g_free(path);
-
-    g_object_unref(gen);
+    arr = json_builder_get_root(b);
     g_object_unref(b);
+
+    /* Fusion, et non réécriture du fichier : les racines ne sont plus seules
+     * propriétaires de l'endroit où elles logent. L'ancien roots.json était
+     * écrit « en entier » ici même, ce qui effaçait la clé "last_file" à
+     * chaque ajout ou retrait de dossier — l'autre écriture du même fichier
+     * (roots_write_last_file) la reliait pourtant : deux règles, un fichier.
+     * Pas de mkdir : le dossier de session est créé par session_init(). */
+    members = json_object_new();
+    json_object_set_member(members, "roots", arr);   /* consomme arr */
+    llm_config_merge_members(members);
+    json_object_unref(members);
 }
 
 /* ------------------------------------------------------------------ */
@@ -158,113 +166,176 @@ json_to_entry(JsonObject *obj)
                           ? ROOT_STRUCTURE : ROOT_PROJECT, path);
 }
 
-GListStore *
-roots_load(void)
+/* Remplit le modèle depuis un tableau de racines. Partagé par les deux chemins
+ * de roots_load : le membre de llm.json, et le fichier legacy migré. */
+static void
+roots_fill_from_array(GListStore *roots, JsonArray *arr)
 {
-    GListStore *roots = g_list_store_new(ROOT_TYPE_ENTRY);
-    JsonParser *parser;
-    JsonNode   *node;
-    JsonObject *obj;
-    JsonArray  *arr;
-    char       *path;
-    GError     *error = NULL;
+    guint n;
 
-    path = roots_config_path();
-    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
-        g_free(path);
-        return roots;
+    if (arr == NULL)
+        return;
+    n = json_array_get_length(arr);
+    for (guint i = 0; i < n; i++) {
+        RootEntry *e = json_to_entry(json_array_get_object_element(arr, i));
+
+        if (e == NULL)
+            continue;
+        if (e->kind == ROOT_STRUCTURE) {
+            /* Structure : scanne ses sous-dossiers en projets,
+             * et absorbe les projets isolés déjà chargés. */
+            g_list_store_append(roots, e);
+            scan_project_dirs(roots, e, e->path);
+            g_object_unref(e);
+        } else {
+            /* Projet isolé : ignoré s'il est déjà couvert par une
+             * structure chargée précédemment (pas de doublon). */
+            if (root_in_any_children(roots, e->path))
+                g_object_unref(e);
+            else
+                g_list_store_append(roots, e);
+        }
     }
+}
 
-    parser = json_parser_new();
+/* Les clés qu'on vient d'écrire sont-elles relues dans llm.json ? C'est la
+ * condition de la suppression de l'original : on ne détruit pas un fichier
+ * d'utilisateur parce que la copie a échoué. */
+static gboolean
+llm_members_present(JsonObject *merged)
+{
+    GList    *keys = json_object_get_members(merged);
+    gboolean  ok   = TRUE;
+
+    for (GList *l = keys; l != NULL && ok; l = l->next) {
+        JsonNode *n = llm_config_get_member(l->data);
+
+        if (n == NULL)
+            ok = FALSE;
+        else
+            json_node_unref(n);
+    }
+    g_list_free(keys);
+    return ok;
+}
+
+/* Migration, une seule fois : roots.json rejoignait llm.json sous les membres
+ * "roots" et "last_file". Un legacy qui porterait une clé que je ne connais
+ * pas est CONSERVÉ : je ne supprime pas un fichier dont je n'ai pas tout lu. */
+static void
+roots_migrate_legacy(GListStore *roots)
+{
+    static const char *MIGRER[] = { "roots", "last_file" };
+    char       *path   = roots_legacy_path();
+    JsonParser *parser = json_parser_new();
+    GError     *error  = NULL;
+
+    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
+        g_object_unref(parser);
+        g_free(path);
+        return;
+    }
     if (!json_parser_load_from_file(parser, path, &error)) {
         g_printerr(_("CDB: failed to read roots.json: %s\n"), error->message);
         g_error_free(error);
         g_object_unref(parser);
         g_free(path);
-        return roots;
+        return;                      /* illisible : l'original ne bouge pas */
     }
-    g_free(path);
+    {
+        JsonObject *legacy = json_node_get_object(json_parser_get_root(parser));
+        JsonObject *merge  = json_object_new();
+        GList      *toutes;
+        guint       total;
+        int         connues = 0;
 
-    node = json_parser_get_root(parser);
-    obj = json_node_get_object(node);
-    arr = json_object_get_array_member(obj, "roots");
-    if (arr != NULL) {
-        guint n = json_array_get_length(arr);
-        for (guint i = 0; i < n; i++) {
-            RootEntry *e = json_to_entry(json_array_get_object_element(arr, i));
+        for (gsize i = 0; i < G_N_ELEMENTS(MIGRER); i++) {
+            const char *k = MIGRER[i];
 
-            if (e == NULL)
-                continue;
-            if (e->kind == ROOT_STRUCTURE) {
-                /* Structure : scanne ses sous-dossiers en projets,
-                 * et absorbe les projets isolés déjà chargés. */
-                g_list_store_append(roots, e);
-                scan_project_dirs(roots, e, e->path);
-                g_object_unref(e);
-            } else {
-                /* Projet isolé : ignoré s'il est déjà couvert par une
-                 * structure chargée précédemment (pas de doublon). */
-                if (root_in_any_children(roots, e->path))
-                    g_object_unref(e);
-                else
-                    g_list_store_append(roots, e);
+            if (json_object_has_member(legacy, k)) {
+                json_object_set_member(merge, k, json_node_copy(
+                                    json_object_get_member(legacy, k)));
+                connues++;
             }
         }
-    }
+        toutes = json_object_get_members(legacy);
+        total  = g_list_length(toutes);
+        g_list_free(toutes);
 
+        if (connues > 0 && (guint)connues == total) {
+            llm_config_merge_members(merge);
+            if (llm_members_present(merge)) {
+                JsonNode *arr = llm_config_get_member("roots");
+
+                if (arr != NULL) {
+                    if (JSON_NODE_HOLDS_ARRAY(arr))
+                        roots_fill_from_array(roots, json_node_get_array(arr));
+                    json_node_unref(arr);
+                }
+                if (g_unlink(path) == 0)
+                    g_printerr(_("CDB: roots.json merged into llm.json\n"));
+            }
+        }
+        json_object_unref(merge);
+    }
     g_object_unref(parser);
+    g_free(path);
+}
+
+GListStore *
+roots_load(void)
+{
+    GListStore *roots  = g_list_store_new(ROOT_TYPE_ENTRY);
+    JsonNode   *member = llm_config_get_member("roots");
+
+    if (member != NULL) {
+        if (JSON_NODE_HOLDS_ARRAY(member))
+            roots_fill_from_array(roots, json_node_get_array(member));
+        json_node_unref(member);
+        return roots;
+    }
+    /* Aucune clé "roots" dans llm.json : soit c'est le premier lancement après
+     * le déplacement (le legacy existe encore), soit la session est vierge.
+     * roots_migrate_legacy() distingue les deux et ne touche à rien si le
+     * legacy est absent. */
+    roots_migrate_legacy(roots);
     return roots;
 }
 
-/* Dernier fichier ouvert : lu depuis roots.json (clé "last_file"). */
+/* Dernier fichier ouvert : membre "last_file" de llm.json. Appelé après
+ * roots_load() dans on_activate(), donc toujours après la migration. */
 char *
 roots_read_last_file(void)
 {
-    JsonParser *parser;
-    JsonNode   *node;
-    JsonObject *obj;
-    char       *path = roots_config_path();
-    char       *last = NULL;
+    JsonNode *n    = llm_config_get_member("last_file");
+    char     *last = NULL;
 
-    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
-        g_free(path);
-        return NULL;
+    if (n != NULL) {
+        if (JSON_NODE_HOLDS_VALUE(n) &&
+            json_node_get_value_type(n) == G_TYPE_STRING) {
+            const char *s = json_node_get_string(n);
+
+            if (s != NULL && s[0] != '\0')
+                last = g_strdup(s);
+        }
+        json_node_unref(n);
     }
-    parser = json_parser_new();
-    if (json_parser_load_from_file(parser, path, NULL)) {
-        node = json_parser_get_root(parser);
-        obj = json_node_get_object(node);
-        if (json_object_has_member(obj, "last_file"))
-            last = g_strdup(json_object_get_string_member(obj, "last_file"));
-    }
-    g_object_unref(parser);
-    g_free(path);
     return last;
 }
 
-/* Met à jour le dernier fichier ouvert dans roots.json. */
+/* Écrire ici ne peut plus effacer les racines : la fusion ne remplace que la
+ * clé qu'on lui donne. L'ancien code, lui, n'écrivait RIEN quand le fichier
+ * manquait — un dernier fichier ouvert avant toute racine n'était jamais
+ * enregistré. */
 void
 roots_write_last_file(const char *last_path)
 {
-    JsonParser   *parser;
-    JsonNode     *node;
-    JsonObject   *obj;
-    JsonGenerator *gen;
-    char         *path = roots_config_path();
+    JsonObject *members = json_object_new();
 
-    parser = json_parser_new();
-    if (json_parser_load_from_file(parser, path, NULL)) {
-        node = json_parser_get_root(parser);
-        obj = json_node_get_object(node);
-        json_object_set_string_member(obj, "last_file", last_path);
-        gen = json_generator_new();
-        json_generator_set_root(gen, node);
-        json_generator_set_pretty(gen, TRUE);
-        json_generator_to_file(gen, path, NULL);
-        g_object_unref(gen);
-    }
-    g_object_unref(parser);
-    g_free(path);
+    json_object_set_string_member(members, "last_file",
+                                  last_path != NULL ? last_path : "");
+    llm_config_merge_members(members);
+    json_object_unref(members);
 }
 
 /* ------------------------------------------------------------------ */
