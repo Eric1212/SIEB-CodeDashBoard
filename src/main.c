@@ -3513,6 +3513,18 @@ language_form_mark(GtkWidget *grid)
             gtk_widget_add_css_class(w, "suggested-action");
         else
             gtk_widget_remove_css_class(w, "suggested-action");
+
+        /* Le crochet suit la même variable « on » que la classe : une seule
+         * source de vérité pour « est-ce la langue en vigueur », donc les deux
+         * marques ne peuvent pas se contredire. Les étiquettes de note et
+         * d'« à venir », attachées en colonne 0 sans lang-mark, rendent NULL
+         * et passent leur chemin. */
+        {
+            GtkWidget *mark = g_object_get_data(G_OBJECT(w), "lang-mark");
+
+            if (mark != NULL)
+                gtk_label_set_text(GTK_LABEL(mark), on ? "✓" : "");
+        }
     }
     g_free(pinned);
 }
@@ -3546,11 +3558,31 @@ static void
 language_add_row(GtkWidget *grid, int row, const char *code,
                  const char *label)
 {
-    GtkWidget *b = gtk_button_new_with_label(label);
+    GtkWidget *b    = gtk_button_new_with_label(label);
+    GtkWidget *mark = gtk_label_new("");
 
     gtk_widget_add_css_class(b, "flat");
     gtk_widget_set_halign(b, GTK_ALIGN_START);
     gtk_widget_set_tooltip_text(b, label);
+
+    /* Le crochet de la langue en vigueur, dans sa propre colonne.
+     *
+     * Le bouton actif portait déjà la classe « suggested-action » : elle est
+     * invisible sur un bouton flat dans ce thème, et le menu montrait donc
+     * deux langues strictement identiques — l'utilisateur ne savait pas dans
+     * laquelle il lisait. Peindre le libellé n'aurait rien réglé de plus, et
+     * griser les autres aurait été un mensonge : elles sont cliquables, c'est
+     * justement le menu. Un crochet par ligne, vide quand la langue n'est pas
+     * en vigueur, garde la colonne en place (sinon le « ✓ » ferait bouger les
+     * libellés d'un clic à l'autre) et se lit quel que soit le thème — c'est
+     * l'idiome du choix unique, celui de libadwaita. */
+    gtk_widget_add_css_class(mark, "success");
+    gtk_widget_set_halign(mark, GTK_ALIGN_START);
+    gtk_widget_set_valign(mark, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text(mark, _("current language"));
+    /* « ✓ » n'est pas marqué _() : c'est un signe, comme le « ● » de la barre
+     * d'état — une clé de traduction pour un symbole serait du bruit. */
+
     /* La ligne « système » porte le code "" : une chaîne, comme les autres
      * portent "fr" ou "en". C'est ce qui permet à language_form_mark de
      * comparer directement cette valeur au "" qu'il fabrique quand
@@ -3559,8 +3591,12 @@ language_add_row(GtkWidget *grid, int row, const char *code,
      * suivre l'environnement ne laisse donc pas une clé vide dans le fichier. */
     g_object_set_data_full(G_OBJECT(b), "lang-code",
                            g_strdup(code != NULL ? code : ""), g_free);
+    /* Le crochet est attache au bouton : language_form_mark, qui parcourt la
+     * colonne 0, le retrouve sans avoir a chercher dans la grille. */
+    g_object_set_data(G_OBJECT(b), "lang-mark", mark);
     g_signal_connect(b, "clicked", G_CALLBACK(on_language_clicked), grid);
-    gtk_grid_attach(GTK_GRID(grid), b, 0, row, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), b, 0, row, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), mark, 1, row, 1, 1);
 }
 
 static GtkWidget *

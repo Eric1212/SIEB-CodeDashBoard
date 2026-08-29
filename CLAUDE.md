@@ -72,7 +72,13 @@ l'explorateur : `roots`, `last_file`), `llm_live.json`, `llm_slots/`,
 - Éditions par numéros de ligne (get #→#, push #→#), pas de replace
   global par regex ; chk de garde avant écriture.
 - json-glib : `json_object_has_member()` avant tout get.
-
+- Un choix **marqué** sur un bouton `flat` ne se voit pas : `suggested-action`
+  n'y peint que le fond, et un bouton plat n'en a pas — le menu des langues
+  montrait ainsi deux lignes identiques. Marquer l'élément actif par un signe
+  dans sa propre colonne (`✓`, classe `success`, définie par libadwaita et
+  donc thème‑dépendante sans qu'on code une couleur), pas par la teinte du
+  libellé ; et jamais en grisant les inactifs, qui sont cliquables — un grisé
+  se lit « indisponible ».
 ## Internationalisation
 
 - **Pivot anglais** : le `msgid` est en anglais, `po/fr.po` restitue le
