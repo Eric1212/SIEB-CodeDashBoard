@@ -198,24 +198,48 @@ i18n_apply(const char *code)
     return got;
 }
 
-/* Langue réellement en vigueur, lue dans la locale INSTALLÉE et non dans la
- * variable d'environnement : i18n_apply() a pu trancher autrement, et c'est la
- * locale qui décide du catalogue. « fr_CA.UTF-8 » -> « fr », « C » -> « C ».
- * Tampon statique : une seule langue à la fois, l'appelant n'a rien à copier. */
+/* Extrait la langue d'un nom de locale : « fr_CA.UTF-8 » -> « fr »,
+ * « de_DE@euro » -> « de », « C » -> « C ». Une seule découpe pour les deux
+ * sources ci-dessous, qui doivent comparer des choses semblables. */
+static const char *
+langue_dans(const char *nom, char *tampon, size_t taille)
+{
+    size_t n = 0;
+
+    if (nom == NULL || nom[0] == '\0')
+        return "C";
+    while (nom[n] != '\0' && nom[n] != '_' && nom[n] != '.' && nom[n] != '@' &&
+           n + 1 < taille) {
+        tampon[n] = nom[n];
+        n++;
+    }
+    tampon[n] = '\0';
+    return (n > 0) ? tampon : "C";
+}
+
+/* Langue DEMANDÉE par l'environnement (LC_ALL puis LANG) : ce que l'utilisateur
+ * veut lire. C'est cette valeur que le sélecteur compare aux catalogues — pas
+ * ce que la libc a réussi à installer, qui peut être « C » pour une locale
+ * inconnue du système. Tampon statique : rien à copier côté appelant. */
+const char *
+i18n_environment_language(void)
+{
+    static char lang[16];
+    const char *env = g_getenv("LC_ALL");
+
+    if (env == NULL || env[0] == '\0')
+        env = g_getenv("LANG");
+    return langue_dans(env, lang, sizeof lang);
+}
+
+/* Langue RÉELLEMENT installée, telle que la libc l'a rendue. Elle diffère de la
+ * demandée quand une locale inconnue est retombée en « C » : c'est exactement
+ * ce écart qui dit au démarrage qu'il faut chercher une locale réelle de la
+ * langue demandée, sans quoi aucun catalogue ne se chargerait. */
 const char *
 i18n_current_language(void)
 {
     static char lang[16];
-    const char *loc = setlocale(LC_ALL, NULL);
-    size_t      n   = 0;
 
-    if (loc == NULL)
-        return "C";
-    while (loc[n] != '\0' && loc[n] != '_' && loc[n] != '.' && loc[n] != '@' &&
-           n + 1 < sizeof lang) {
-        lang[n] = loc[n];
-        n++;
-    }
-    lang[n] = '\0';
-    return lang;
+    return langue_dans(setlocale(LC_ALL, NULL), lang, sizeof lang);
 }

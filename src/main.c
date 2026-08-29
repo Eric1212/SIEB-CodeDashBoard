@@ -3462,12 +3462,20 @@ build_tools_form(void)
  * l'environnement (la ligne devient alors le seul chemin du retour).
  *
  * La ligne « système » se reconnaît à son code vide : pas besoin de la
- * mémoriser ailleurs dans la grille. */
+ * mémoriser ailleurs dans la grille.
+ *
+ * La langue comparée aux catalogues est celle que l'environnement DEMANDE, non
+ * celle que la libc a bien voulu installer. « LC_ALL=en_FR.UTF-8 » sur un poste
+ * où cette locale n'existe pas laisse une locale installée en « C » : prise
+ * pour une langue, « C » n'a pas de catalogue, et la ligne système s'affichait
+ * avec son slug — sur une machine qui demandait l'anglais, langue pourtant
+ * couverte. La demande est l'information utile à l'écran ; l'installation est
+ * une autre affaire (les formats), et le démarrage la répare à part. */
 static void
 language_form_mark(GtkWidget *grid)
 {
     char       *pinned = layout_pref_get("language");   /* NULL = environnement */
-    const char *env    = i18n_current_language();        /* "fr", "es", "C"...  */
+    const char *env    = i18n_environment_language();    /* "fr", "es", "C"...  */
     const char *effect = (pinned != NULL) ? pinned : env;
     gboolean    couvert = FALSE;
     int         row;
@@ -4858,6 +4866,17 @@ on_activate(GtkApplication *gtk_app, gpointer data)
                 g_printerr(_("CDB: no locale installed for language %s\n"),
                            lang);
             g_free(lang);
+        } else if (g_strcmp0(i18n_current_language(),
+                             i18n_environment_language()) != 0) {
+            /* Rien d'épinglé, mais la libc n'a pas su installer la locale
+             * demandée : « LC_ALL=en_FR.UTF-8 » sur un poste où elle n'existe
+             * pas retombe en « C ». Or « C » ne charge AUCUN catalogue — pas
+             * même celui de la langue qu'on vient de demander. Le français
+             * réclamé sur une machine sans fr_FR installé sortirait donc en
+             * anglais, en silence. On répare en cherchant une locale RÉELLE de
+             * la langue demandée : la langue reste celle de l'utilisateur,
+             * seuls les formats bougent. */
+            i18n_apply(i18n_environment_language());
         }
     }
     /* Tout ce qui depend du numero de session se construit ICI, une fois
