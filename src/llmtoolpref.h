@@ -18,7 +18,8 @@
 #include <glib.h>
 
 /* Tableaux de noms (index = LlmToolMode / LlmToolProfile). */
-const char *llm_profile_name(LlmToolProfile p);
+const char *llm_profile_name(LlmToolProfile p);   /* CLE persistée        */
+const char *llm_profile_label(LlmToolProfile p);  /* libellé traduisable  */
 const char *llm_tool_mode_name(LlmToolMode m);
 
 /* Mode d'un outil pour un profil donné ; OFF si l'outil est inconnu. */

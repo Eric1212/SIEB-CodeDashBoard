@@ -3381,7 +3381,7 @@ build_tools_form(void)
         gtk_grid_attach(GTK_GRID(grid), corner, 0, 0, 1, 1);
 
         for (guint p = 0; p < LLM_PROFILE_COUNT; p++) {
-            GtkWidget *h = gtk_label_new(LLM_PROFILE_NAMES[p]);
+            GtkWidget *h = gtk_label_new(llm_profile_label((LlmToolProfile)p));
             gtk_widget_set_halign(h, GTK_ALIGN_CENTER);
             gtk_widget_add_css_class(h, "heading");
             gtk_grid_attach(GTK_GRID(grid), h, (int)p + 1, 0, 1, 1);

@@ -671,10 +671,10 @@ ibox_set_output(GtkWidget *box, const char *text)
 
     gtk_widget_set_visible(b->out_box, TRUE);
     {
-        /* « 1 ligne » et « 2 lignes » : pas de pluriel plaqué sur le
-         * nombre un — le digest se lit comme une phrase. */
-        char *d = g_strdup_printf("%lu %s", (gulong)n,
-                                  n == 1 ? "ligne" : "lignes");
+        /* « 1 ligne » et « 2 lignes » : le pluriel vient de ngettext, pas
+         * d'un "s" plaqué sur le nombre. Le digest se lit comme une phrase. */
+        char *d = g_strdup_printf(ngettext("%lu line", "%lu lines",
+                                           (gulong)n), (gulong)n);
 
         gtk_label_set_text(GTK_LABEL(b->out_digest), d);
         g_free(d);

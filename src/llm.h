@@ -167,6 +167,9 @@ typedef enum {
 } LlmToolProfile;
 
 extern const char *const LLM_PROFILE_NAMES[LLM_PROFILE_COUNT];
+/* Libellés affichables : distincts des NOMS ci-dessus, qui sont des CLES
+ * persistées (llm.json active.profile) et comparées en code. */
+extern const char *const LLM_PROFILE_LABELS[LLM_PROFILE_COUNT];
 extern const char *const LLM_TOOL_MODE_NAMES[4];
 
 /* Préférence d'un outil natif : un mode PAR profil. */

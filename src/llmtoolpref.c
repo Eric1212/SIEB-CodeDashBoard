@@ -13,6 +13,20 @@
 const char *const LLM_PROFILE_NAMES[LLM_PROFILE_COUNT] = {
     "MINIMAL", "DEFAULT", "YOLO"
 };
+/* Libellés affichables, séparés des noms techniques ci-dessus : traduire
+ * LLM_PROFILE_NAMES changerait la CLE relue dans llm.json au démarrage,
+ * traduire ceux-ci ne change que l'écran. */
+const char *const LLM_PROFILE_LABELS[LLM_PROFILE_COUNT] = {
+    /* TRANSLATORS: nom du profil d'outils le plus strict (tout est refusé
+       ou demandé). Mot identique en français : laisser le msgstr vide. */
+    N_("MINIMAL"),
+    /* TRANSLATORS: nom du profil d'outils par défaut (demande avant
+       exécution). Mot identique en français : laisser le msgstr vide. */
+    N_("DEFAULT"),
+    /* TRANSLATORS: nom du profil d'outils le plus permissif (exécution
+       directe). Sigle universel : laisser le msgstr vide. */
+    N_("YOLO")
+};
 const char *const LLM_TOOL_MODE_NAMES[4] = {
     "off", "ask", "allow", "allowplus"
 };
@@ -52,12 +66,18 @@ llm_profile_name(LlmToolProfile p)
 }
 
 const char *
+llm_profile_label(LlmToolProfile p)
+{
+    return (p >= 0 && p < LLM_PROFILE_COUNT)
+               ? _(LLM_PROFILE_LABELS[p]) : _("DEFAULT");
+}
+
+const char *
 llm_tool_mode_name(LlmToolMode m)
 {
     return (m >= 0 && m <= LLM_TOOL_ALLOWPLUS)
                ? LLM_TOOL_MODE_NAMES[m] : "off";
 }
-
 LlmToolMode
 llm_tool_pref_mode(const LlmToolPref *pref, LlmToolProfile profile)
 {

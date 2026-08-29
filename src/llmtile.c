@@ -1814,16 +1814,22 @@ llm_chat_clear_dialog(LlmTile *t)
     core_cdb_announce(t->core, _("current chat cleared."));
 }
 
+/* Taille lisible d'un delta de slots. Le diviseur est 1024 : ce sont des
+ * multiples BINAIRES de l'octet (IEC 80000-13), donc les symboles sont
+ * Kio et Mio — jamais KB/MB ni Ko/Mo, qui valent 1000.
+ * Le symbole d'unité n'est pas de la prose : il ne passe PAS par gettext
+ * (décision Éric, Jalon F). Le séparateur décimal, lui, vient de
+ * LC_NUMERIC — posé par setlocale(LC_ALL,"") dans i18n_init — et se règle
+ * donc tout seul, sans chaîne à traduire. */
 char *
-llm_slots_size_str(gsize bytes)
+llm_slots_size_str(gsize octets)
 {
-    if (bytes < 1024)
-        return g_strdup_printf(_("%zu B"), bytes);
-    if (bytes < 1024 * 1024)
-        return g_strdup_printf(_("%.1f KB"), bytes / 1024.0);
-    return g_strdup_printf(_("%.1f MB"), bytes / (1024.0 * 1024.0));
+    if (octets < 1024)
+        return g_strdup_printf("%zu o", octets);
+    if (octets < 1024 * 1024)
+        return g_strdup_printf("%.1f Kio", octets / 1024.0);
+    return g_strdup_printf("%.1f Mio", octets / (1024.0 * 1024.0));
 }
-
 void
 llm_slots_title_update(LlmTile *t)
 {
@@ -1894,15 +1900,15 @@ llm_tile_profile_refresh(LlmTile *t)
         return;
     prof = llm_config_active_profile();
     gtk_menu_button_set_label(GTK_MENU_BUTTON(t->profile_btn),
-                              llm_profile_name(prof));
+                              llm_profile_label(prof));
     tip = g_strdup_printf(_("Tool profile: %s (Settings → LLM → Tools)"),
-                          llm_profile_name(prof));
+                          llm_profile_label(prof));
     gtk_widget_set_tooltip_text(t->profile_btn, tip);
     g_free(tip);
 
     if (t->profile_title != NULL) {
         char *head = g_strdup_printf(_("Active profile — %s"),
-                                     llm_profile_name(prof));
+                                     llm_profile_label(prof));
 
         gtk_label_set_text(GTK_LABEL(t->profile_title), head);
         g_free(head);
@@ -2399,7 +2405,7 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
         gtk_box_append(GTK_BOX(prof_box), t->profile_title);
 
         for (guint i = 0; i < LLM_PROFILE_COUNT; i++) {
-            GtkWidget *lbl = gtk_label_new(LLM_PROFILE_NAMES[i]);
+            GtkWidget *lbl = gtk_label_new(llm_profile_label((LlmToolProfile)i));
             GtkWidget *b   = gtk_button_new();
 
             gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
@@ -2408,6 +2414,8 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
             gtk_widget_add_css_class(b, "cdb-pop-item");
             gtk_widget_set_hexpand(b, TRUE);
             gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+            /* CLE technique, pas un libellé : comparee en
+             * on_profile_item_clicked. Ne pas traduire ici. */
             g_object_set_data_full(G_OBJECT(b), "profile-name",
                                    g_strdup(LLM_PROFILE_NAMES[i]),
                                    g_free);

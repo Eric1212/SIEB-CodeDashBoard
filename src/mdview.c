@@ -21,11 +21,12 @@
  */
 
 #include "mdview.h"
+#include "i18n.h"
 
 #include <string.h>
 
 #define THINK_CTX_KEY  "md-think-ctx"
-#define THINK_LABEL    "Thinking"
+#define THINK_LABEL    N_("Thinking")
 #define THINK_TAG_BODY "md-think-body"
 #define THINK_TAG_HIDE "md-think-hidden"
 #define THINK_TAG_CODE "md-think-codeblock"
@@ -359,7 +360,7 @@ think_header_new(ThinkBlock *blk)
     GtkWidget *btn = gtk_button_new();
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *img = gtk_image_new_from_icon_name("pan-down-symbolic");
-    GtkWidget *lbl = gtk_label_new(THINK_LABEL);
+    GtkWidget *lbl = gtk_label_new(_(THINK_LABEL));
 
     gtk_widget_add_css_class(btn, "flat");
     gtk_widget_add_css_class(lbl, "dim-label");
