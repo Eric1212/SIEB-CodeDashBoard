@@ -3655,6 +3655,12 @@ build_initprompt_editor(void)
     {
         GtkWidget *save_btn = gtk_button_new_with_label(_("Save"));
 
+        /* Le champ status était déclaré dans InitPromptCtx, jamais créé :
+           on_ip_save (3724) et le pied ci-dessous l'utilisaient a NULL —
+           trois Gtk-CRITICAL a chaque ouverture de Settings, et le
+           « Saved ✓ » jamais rendu. Créé ici, avant d'être ajouté. */
+        ctx->status = gtk_label_new(NULL);
+
         gtk_widget_add_css_class(save_btn, "flat");
         g_signal_connect(save_btn, "clicked",
                          G_CALLBACK(on_ip_save_clicked), ctx);
