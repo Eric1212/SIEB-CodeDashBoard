@@ -1,21 +1,23 @@
 # Plan i18n — CodeDashBoard (CDB)
 
-**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4, E, F, **G** livrés.
-Le plan est clos en tant que tel : tout ce qui était traduisable l'est, la
-langue se choisit dans l'interface et se relit au démarrage. Les deux ménages de
-config demandés par Éric sont faits (`window.json` → `layout.json`,
-`roots.json` → `llm.json`). Reste hors code la validation d'écran par Éric.
-**Date** : 2026-08-29 (rév. 9 — Jalon G livré : sélecteur de langue dans
-Réglages → Général, endonymes hors gettext, liste lue sur disque, `i18n_apply()`
-à escalier de candidats qui garde le territoire (§6.11), `layout.json` et
-`llm.json` régis par la même règle — une écriture ne détruit pas ce
-qu'elle ne connaît pas (§6.12) — avec rapatriement de `window.json` et des
-racines ; au passage, un widget jamais créé corrigé (§4 G.2), un écrasement de
-`last_file` corrigé avec le déplacement, et les formats réels de `session.h`,
-`llm.h` et `roots.h` rétablis. Catalogue à **303 msgids**, 300 traduits, 3 non
-traduits **vouloirs** (`MINIMAL`/`DEFAULT`/`YOLO`), `make i18n-check` vert sur
-les deux langues, zéro fuzzy, build à 0 warning. Le « 2025-08-28 » de la
-révision 8 était une année erronée : la machine et l'historique portent 2026).
+**Statut** : **PROJET CLOS** le 2026-08-29, sur décision d'Éric, après validation
+d'écran faite par lui. Phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4, E, F, G
+livrés ; tout ce qui était traduisable l'est, la langue se choisit dans
+l'interface et se relit au démarrage ; les deux ménages de config demandés
+(`window.json` → `layout.json`, `roots.json` → `llm.json`) sont faits. Le **§8**
+dit ce qui est laissé volontairement en l'état, y compris deux simplifications
+mesurées puis refusées — des choix, pas des dettes.
+**Date** : 2026-08-29 (rév. 10 — clôture. Récapitulatif du cycle G : sélecteur de
+langue dans Réglages → Général, endonymes hors gettext, liste lue sur disque,
+escalier de candidats qui garde le territoire de l'utilisateur (§6.11), règle de
+dégradation « chacun fait de son mieux » (§6.11 e), `layout.json` et `llm.json`
+régis par une même règle — une écriture ne détruit pas ce qu'elle ne connaît pas
+(§6.12) ; au passage, un widget jamais créé corrigé, un écrasement de `last_file`
+corrigé avec le déplacement, et les formats réels de `session.h`, `llm.h` et
+`roots.h` rétablis. Dernier état mesuré : catalogue à **304 msgids**, 301
+traduits, 3 non traduits **vouloirs** (`MINIMAL`/`DEFAULT`/`YOLO`),
+`make i18n-check` vert sur les deux langues, zéro fuzzy, build à 0 erreur
+0 warning).
 **Décideur** : Éric Boucher.
 
 ---
@@ -695,8 +697,65 @@ d'où de faux « 0/14 conformes » en D1.5. La preuve passe par `msgunfmt` sur l
 
 ---
 
-*Plan établi conjointement avec Claude (2025-08-27). Rév. 5 : Jalon D éclaté
-en D1/D1.5/D2/D3/D4 ; politique des diagnostics ajoutée (§5) ; règles de non-
-marquage portées de 2 à 5 catégories (§6.2) ; interdiction des phrases montées
-en morceaux (§6.4) ; garde-fou fuzzy et limites du contrôle CLI (§7).
+## 8. Clôture (rév. 10 — 2026-08-29)
+
+Éric a clos le projet après validation d'écran faite par lui : sélecteur de
+Réglages → Général, crochet vert sur la langue en vigueur, repli en anglais pivot
+sous `LC_ALL=es_ES.UTF-8`, et fenêtre « Nouvelle session » rendue en français
+depuis une locale que la libc refusait.
+
+**Deux simplifications proposées, mesurées, puis non retenues.** Écrites ici pour
+qu'on ne les redécouvre pas plus tard comme une dette : ce sont des choix refusés
+en connaissance de cause, pas des oublis.
+
+1. **Piloter la langue par `LANGUAGE=` au lieu de `setlocale`.** Vérifié
+   fonctionnel : un code langue nu suffit — `LC_ALL=fr_CA.UTF-8 LANGUAGE=en` rend
+   l'anglais en laissant les formats québécois intacts — et une langue sans locale
+   installée sur la machine deviendrait traduisable. Non retenu : « ce n'est pas
+   comme si on maintenait une table de pays », et le système en place fonctionne.
+   Coût connu de la voie actuelle, et de celle-là d'ailleurs : glibc ignore
+   `LANGUAGE` quand la locale est `C`.
+2. **Supprimer `po/LINGUAS`** au profit d'un `$(wildcard po/*.po)`. Vérifié :
+   `LINGUAS` est bien une whitelist de *construction* — un `ru.po` présent mais
+   non listé ne produit aucun `.mo` et reste invisible — et c'est lui qui permet
+   à `make po` de créer le `.po` d'une langue neuve. Gardé tel quel. Noté au
+   passage : le sélecteur, lui, lit `po/locale/` ; les deux ne concordent que
+   parce qu'un `.mo` n'existe que si `make` l'a construit.
+
+**Limitations acceptées, avec leur conséquence précise :**
+
+- L'escalier d'`i18n_apply()` ne connaît que huit territoires (US, GB, CA, AU,
+  FR, BE, CH, DE) après celui de l'utilisateur. Une langue dont le territoire
+  d'origine n'y figure pas ne peut donc pas être *choisie* depuis un poste d'un
+  autre territoire : `ru` reste introuvable sur ce poste `fr_CA`, alors même que
+  `ru_RU.utf8` est installée. À l'écran : message « aucune locale installée pour
+  cette langue » et **préférence non enregistrée** — pas de plantage, pas de
+  choix fantôme. Le cas ne se présente que si un `ru.po` est un jour ajouté.
+- Trois msgids laissés vides **voulus** : `MINIMAL`, `DEFAULT`, `YOLO` sont des
+  clés de `llm.json` avant d'être des mots ; les traduire changerait la valeur
+  relue au démarrage.
+- Une chaîne française nue subsiste dans le code, non marquée : le journal du
+  harnais `CDB_TEST_*` (§5 la classe « gardée »). Elle est invisible dans le
+  `.pot` pour la raison même rappelée en §6.8 : un compte de msgids ne prouve
+  jamais l'exhaustivité du marquage.
+- Changer de langue en cours de conversation laisse l'historique **déjà envoyé**
+  au modèle dans sa langue d'origine. Décision d'Éric : « à l'utilisateur de
+  gérer ça ». Aucun mécanisme de renouvellement n'a été construit, volontairement.
+
+**Dernier état mesuré** : 304 msgids, 301 traduits, 3 voulu, 0 fuzzy,
+`make i18n-check` vert sur `fr` et `en`, build à 0 erreur 0 warning.
+
+---
+
+*Plan établi conjointement avec Claude (2026-08-27, premier commit `2c7c1e3` — la
+date « 2025 » portée par ce pied pendant plusieurs révisions était une année
+erronée, vérifiée contre l'historique). Rév. 3 : phase 0 livrée. Rév. 4 : jalons
+A et B. Rév. 5 : politique des diagnostics (§5), non-marquage porté de 2 à 5
+catégories (§6.2), interdiction des phrases montées en morceaux (§6.4), garde-fou
+fuzzy et limites du contrôle CLI (§7). Rév. 6 : Jalon D bouclé (D3+D4), msgmerge
+sans fusion floue. Rév. 7 : Jalon E, §6.7 (N_() des tables statiques). Rév. 8 :
+Jalon F, §6.9 (étiquette de protocole) et §6.10 (unités hors gettext). Rév. 9 :
+Jalon G — sélecteur de langue, §6.11 et §6.12 ; dans le même cycle, le
+déplacement des racines dans `llm.json`, la règle « chacun fait de son mieux »
+(§6.11 e) et la langue demandée lue dans l'environnement. Rév. 10 : clôture (§8).
 Toute modification passe par une révision de ce document.*
