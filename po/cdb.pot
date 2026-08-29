@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 17:04-0400\n"
+"POT-Creation-Date: 2026-08-29 17:13-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -65,29 +65,29 @@ msgid_plural "%lu lines"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/layout.c:142 src/layout.c:411 src/layout.c:484
+#: src/layout.c:142 src/layout.c:428 src/layout.c:501
 #, c-format
 msgid "CDB: failed to write layout.json: %s\n"
 msgstr ""
 
-#: src/layout.c:210
+#: src/layout.c:219
 #, c-format
 msgid "CDB: failed to read layout.json: %s\n"
 msgstr ""
 
-#: src/layout.c:336
+#: src/layout.c:353
 msgid "Editor"
 msgstr ""
 
-#: src/layout.c:338 src/main.c:1812
+#: src/layout.c:355 src/main.c:1812
 msgid "Explorer"
 msgstr ""
 
-#: src/layout.c:344 src/main.c:4875
+#: src/layout.c:361 src/main.c:4875
 msgid "Settings"
 msgstr ""
 
-#: src/layout.c:346
+#: src/layout.c:363
 msgid "Empty"
 msgstr ""
 
