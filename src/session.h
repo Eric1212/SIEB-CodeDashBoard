@@ -3,7 +3,18 @@
  *
  * Chaque session est un processus CDB indépendant avec son dossier de
  * config complet : ~/.config/cdb/<NNN>/
- * (roots.json, dirty.json, layout.json, window.json, session.json).
+ *   roots.json      dossiers ouverts de l'explorateur + dernier fichier
+ *   dirty.json      contenus non enregistrés, par chemin
+ *   layout.json     arbre des tuiles ("root") + état de l'interface
+ *                   ("language", "window")
+ *   llm.json        providers, clé API, actif, harness, outils
+ *   llm_live.json   conversation en cours (reprise après crash)
+ *   llm_slots/      slots nommés, <n>.json + last.json
+ *   prompts/        persona éditée par l'utilisateur (default.txt)
+ *
+ * Il n'y a plus de window.json : la taille et les états de la fenêtre sont
+ * des membres de layout.json depuis le Jalon G (window_state_load les migre
+ * une fois, puis supprime l'ancien fichier).
  *
  * Le lancement direct du binaire ouvre 000 s'il n'existe aucune autre
  * instance ; sinon un dialogue demande le numéro. CDB_SESSION=<NNN>

@@ -12,6 +12,7 @@
 #define CDB_LAYOUT_H
 
 #include <glib.h>
+#include <json-glib/json-glib.h>   /* JsonNode / JsonObject : prefs de layout.json */
 
 typedef enum {
     LAYOUT_TILE,
@@ -45,6 +46,20 @@ Layout *layout_load(void);
 
 /* Sauvegarde le modèle. */
 void layout_save(Layout *root);
+
+/* Préférences d'interface stockées dans layout.json, à côté de l'arbre :
+ * langue choisie, état de la fenêtre. Get : chaîne à libérer, NULL si absente.
+ * Set : value NULL retire la clé. Merge : fusionne des membres au sommet sans
+ * toucher aux autres (ni à "root", ni à "language") ; `members` n'est pas
+ * consommé. Get_node : COPIE à libérer par l'appelant (json_node_unref), NULL
+ * si absent — le nœud prêté par le parser meurt avec lui, c'est pour cela que
+ * cette fonction copie.
+ * Règle du fichier à propriétaire unique : aucune de ces écritures ne détruit
+ * ce qu'elle ne comprend pas. */
+char     *layout_pref_get(const char *key);
+void      layout_pref_set(const char *key, const char *value);
+JsonNode *layout_pref_get_node(const char *key);
+void      layout_merge_members(JsonObject *members);
 
 /* ------------------------------------------------ */
 /* Opérations (rendent le (nouveau) root)            */

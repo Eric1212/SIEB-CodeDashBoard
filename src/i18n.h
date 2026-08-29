@@ -31,4 +31,12 @@
  * permet à `make run` de fonctionner sans rien installer sur le système. */
 void i18n_init(void);
 
+/* Langues : le sélecteur propose les CATALOGUES présents à côté du binaire
+ * (pas une liste compilée), chaque langue s'affiche sous son propre nom
+ * (endonyme, jamais traduit — cf. i18n.c) et i18n_apply() change la locale
+ * en cours de session. Code NULL ou vide = langue de l'environnement. */
+GList      *i18n_languages(void);        /* codes triés, à libérer (g_free)  */
+const char *i18n_language_name(const char *code);
+const char *i18n_apply(const char *code);
+
 #endif /* CDB_I18N_H */

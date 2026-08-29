@@ -100,33 +100,52 @@ layout_to_json(Layout *node)
     return out;
 }
 
+/* Écriture « read-modify-write ». layout.json ne porte plus seulement
+ * l'arbre : il porte aussi l'état de l'interface (langue, et demain thème,
+ * police…). Une sauvegarde du tiling ne doit JAMAIS perdre un membre qu'elle
+ * ne comprend pas — on relit le fichier, on remplace « root » seulement, on
+ * réécrit. Le propriétaire d'un fichier préserve ce qu'il ne connaît pas. */
 void
 layout_save(Layout *root)
 {
-    JsonBuilder *builder;
-    JsonNode    *root_node;
-    gchar       *text;
-    GError      *error = NULL;
+    JsonNode  *file_node = NULL;
+    JsonNode  *tree;
+    JsonObject *obj;
+    gchar     *text;
+    GError    *error = NULL;
+    char      *path = layout_config_path();
 
-    if (root == NULL)
+    if (root == NULL) {
+        g_free(path);
         return;
+    }
+    tree = layout_to_json(root);
 
-    builder = json_builder_new();
-    json_builder_begin_object(builder);
-    json_builder_set_member_name(builder, "root");
-    json_builder_add_value(builder, layout_to_json(root));
-    json_builder_end_object(builder);
+    {
+        JsonParser *parser = json_parser_new();
 
-    root_node = json_builder_get_root(builder);
-    text = json_to_string(root_node, TRUE);
-    if (!g_file_set_contents(layout_config_path(), text, -1, &error)) {
+        if (json_parser_load_from_file(parser, path, NULL) &&
+            json_parser_get_root(parser) != NULL &&
+            JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser)))
+            file_node = json_node_copy(json_parser_get_root(parser));
+        g_object_unref(parser);
+    }
+    if (file_node == NULL) {
+        file_node = json_node_new(JSON_NODE_OBJECT);
+        json_node_init_object(file_node, json_object_new());
+    }
+    obj = json_node_get_object(file_node);
+    json_object_set_member(obj, "root", tree);   /* consomme tree */
+
+    text = json_to_string(file_node, TRUE);
+    if (!g_file_set_contents(path, text, -1, &error)) {
         g_printerr(_("CDB: failed to write layout.json: %s\n"),
                    error->message);
         g_error_free(error);
     }
     g_free(text);
-    json_node_unref(root_node);
-    g_object_unref(builder);
+    json_node_unref(file_node);
+    g_free(path);
 }
 
 /* ------------------------------------------------ */
@@ -326,4 +345,146 @@ layout_name(const char *id)
     if (strcmp(id, "empty") == 0)
         return _("Empty");
     return id;
+}
+/* ------------------------------------------------ */
+/* Préférences d'interface (mêmes membres que l'arbre) */
+/* ------------------------------------------------ */
+
+/* Chaîne à libérer ; NULL si absent, non-chaîne ou fichier illisible. */
+char *
+layout_pref_get(const char *key)
+{
+    char       *path = layout_config_path();
+    JsonParser *parser = json_parser_new();
+    char       *out = NULL;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        JsonObject *obj = json_node_get_object(json_parser_get_root(parser));
+        JsonNode   *m = json_object_has_member(obj, key)
+                            ? json_object_get_member(obj, key) : NULL;
+
+        if (m != NULL && JSON_NODE_HOLDS_VALUE(m) &&
+            json_node_get_value_type(m) == G_TYPE_STRING) {
+            const char *v = json_object_get_string_member(obj, key);
+
+            if (v != NULL && v[0] != '\0')
+                out = g_strdup(v);
+        }
+    }
+    g_object_unref(parser);
+    g_free(path);
+    return out;
+}
+
+/* Lit le fichier, remplace seulement « key », réécrit. value NULL retire la
+ * clé. Ne connaît pas les autres membres et n'y touche pas — même règle que
+ * layout_save. */
+void
+layout_pref_set(const char *key, const char *value)
+{
+    char       *path = layout_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonNode   *file_node = NULL;
+    JsonObject *obj;
+    GError     *error = NULL;
+    gchar      *text;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser)))
+        file_node = json_node_copy(json_parser_get_root(parser));
+    g_object_unref(parser);
+    if (file_node == NULL) {
+        file_node = json_node_new(JSON_NODE_OBJECT);
+        json_node_init_object(file_node, json_object_new());
+    }
+    obj = json_node_get_object(file_node);
+    if (value != NULL)
+        json_object_set_string_member(obj, key, value);
+    else
+        json_object_remove_member(obj, key);
+
+    text = json_to_string(file_node, TRUE);
+    if (!g_file_set_contents(path, text, -1, &error)) {
+        g_printerr(_("CDB: failed to write layout.json: %s\n"), error->message);
+        g_error_free(error);
+    }
+    g_free(text);
+    json_node_unref(file_node);
+    g_free(path);
+}
+
+/* Copie du membre (à libérer par l'appelant) ; NULL si absent. La copie est
+ * ce qui rend l'API sûre : le nœud du parser meurt avec lui. */
+JsonNode *
+layout_pref_get_node(const char *key)
+{
+    char       *path = layout_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonNode   *out = NULL;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        JsonObject *obj = json_node_get_object(json_parser_get_root(parser));
+
+        if (json_object_has_member(obj, key))
+            out = json_node_copy(json_object_get_member(obj, key));
+    }
+    g_object_unref(parser);
+    g_free(path);
+    return out;
+}
+
+/* Fusionne des membres au sommet de layout.json sans toucher aux autres —
+ * y compris l'arbre "root" et la clé "language". C'est par là que window.json
+ * est rapatrié ici sans qu'un module tiers n'ait à apprendre le chemin.
+ * `members` n'est pas consommé. */
+void
+layout_merge_members(JsonObject *members)
+{
+    char       *path = layout_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonNode   *file_node = NULL;
+    JsonObject *obj;
+    GError     *error = NULL;
+    gchar      *text;
+    GList      *keys;
+
+    if (members == NULL) {
+        g_object_unref(parser);
+        g_free(path);
+        return;
+    }
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser)))
+        file_node = json_node_copy(json_parser_get_root(parser));
+    g_object_unref(parser);
+    if (file_node == NULL) {
+        file_node = json_node_new(JSON_NODE_OBJECT);
+        json_node_init_object(file_node, json_object_new());
+    }
+    obj = json_node_get_object(file_node);
+
+    keys = json_object_get_members(members);
+    for (GList *l = keys; l != NULL; l = l->next) {
+        const char *k = l->data;
+
+        json_object_set_member(obj, k,
+                               json_node_copy(json_object_get_member(members,
+                                                                     k)));
+    }
+    g_list_free(keys);
+
+    text = json_to_string(file_node, TRUE);
+    if (!g_file_set_contents(path, text, -1, &error)) {
+        g_printerr(_("CDB: failed to write layout.json: %s\n"), error->message);
+        g_error_free(error);
+    }
+    g_free(text);
+    json_node_unref(file_node);
+    g_free(path);
 }

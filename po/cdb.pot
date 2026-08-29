@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 06:35-0400\n"
+"POT-Creation-Date: 2026-08-29 16:07-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -65,29 +65,29 @@ msgid_plural "%lu lines"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/layout.c:123
+#: src/layout.c:142 src/layout.c:411 src/layout.c:484
 #, c-format
 msgid "CDB: failed to write layout.json: %s\n"
 msgstr ""
 
-#: src/layout.c:191
+#: src/layout.c:210
 #, c-format
 msgid "CDB: failed to read layout.json: %s\n"
 msgstr ""
 
-#: src/layout.c:317
+#: src/layout.c:336
 msgid "Editor"
 msgstr ""
 
-#: src/layout.c:319 src/main.c:1812
+#: src/layout.c:338 src/main.c:1812
 msgid "Explorer"
 msgstr ""
 
-#: src/layout.c:325 src/main.c:4644
+#: src/layout.c:344 src/main.c:4875
 msgid "Settings"
 msgstr ""
 
-#: src/layout.c:327
+#: src/layout.c:346
 msgid "Empty"
 msgstr ""
 
@@ -1312,172 +1312,197 @@ msgstr ""
 msgid "CDB: style scheme = %s (dark=%d)\n"
 msgstr ""
 
-#: src/main.c:2927 src/main.c:3562
+#: src/main.c:2933 src/main.c:3724
 msgid "Saved ✓"
 msgstr ""
 
-#: src/main.c:3378
+#: src/main.c:3384
 msgid "Tool"
 msgstr ""
 
-#: src/main.c:3426
+#: src/main.c:3449
+msgid ""
+"Applied at once to everything created from now on: new tiles, dialogs, and "
+"what CDB sends to the model. Screens already open keep their language."
+msgstr ""
+
+#: src/main.c:3489
+msgid ""
+"No locale is installed for this language. Install it (locale-gen), then "
+"restart CDB."
+msgstr ""
+
+#: src/main.c:3525
+msgid "Language:"
+msgstr ""
+
+#: src/main.c:3546
+#, c-format
+msgid "%s (system)"
+msgstr ""
+
+#: src/main.c:3588
 msgid "Retry on HTTP 429:"
 msgstr ""
 
-#: src/main.c:3428 src/main.c:3436
+#: src/main.c:3590 src/main.c:3598
 msgid "Retries (0 = infinite):"
 msgstr ""
 
-#: src/main.c:3429 src/main.c:3437
+#: src/main.c:3591 src/main.c:3599
 msgid "Delay between attempts (ms):"
 msgstr ""
 
-#: src/main.c:3434
+#: src/main.c:3596
 msgid "Retry on HTTP 5xx:"
 msgstr ""
 
-#: src/main.c:3611
+#: src/main.c:3773
 #, c-format
 msgid "CDB: Init-Prompt scheme=%s found=%d\n"
 msgstr ""
 
-#: src/main.c:3656 src/main.c:3686
+#: src/main.c:3818 src/main.c:3854
 msgid "Save"
 msgstr ""
 
-#: src/main.c:3682
+#: src/main.c:3850
 msgid "API key:"
 msgstr ""
 
-#: src/main.c:3684
+#: src/main.c:3852
 msgid "Allowed models:"
 msgstr ""
 
-#: src/main.c:3698
+#: src/main.c:3866
 msgid "(optional)"
 msgstr ""
 
-#: src/main.c:3700 src/main.c:3705 src/main.c:3709
+#: src/main.c:3868 src/main.c:3873 src/main.c:3877
 msgid "(empty: all models)"
 msgstr ""
 
-#: src/main.c:3703
+#: src/main.c:3871
 msgid "HyperCharm key…"
 msgstr ""
 
-#: src/main.c:3776
+#: src/main.c:3944
 msgid "(to come: endpoint, model, API key…)"
 msgstr ""
 
-#: src/main.c:3782
+#: src/main.c:3950
 msgid "Retry on error"
 msgstr ""
 
-#: src/main.c:3783
+#: src/main.c:3951
 msgid "Init-Prompt"
 msgstr ""
 
-#: src/main.c:3786
+#: src/main.c:3954
 msgid "Harness"
 msgstr ""
 
-#: src/main.c:3787
+#: src/main.c:3955
 msgid "Tools"
 msgstr ""
 
-#: src/main.c:3788
+#: src/main.c:3956
 msgid "Providers"
 msgstr ""
 
-#: src/main.c:3791
+#: src/main.c:3959
 msgid "General"
 msgstr ""
 
-#: src/main.c:3791
+#: src/main.c:3959
 msgid "(to come: theme, font, indentation…)"
 msgstr ""
 
-#: src/main.c:3792
+#: src/main.c:3960
 msgid "(to come: token, user, repo defaults…)"
 msgstr ""
 
-#: src/main.c:3793
+#: src/main.c:3961
 msgid "LLM"
 msgstr ""
 
-#: src/main.c:3828
+#: src/main.c:3996
 msgid ""
 "Empty\n"
 "(reserved slot)"
 msgstr ""
 
-#: src/main.c:3923
+#: src/main.c:4091
 msgid "Split horizontally"
 msgstr ""
 
-#: src/main.c:3924
+#: src/main.c:4092
 msgid "Split vertically"
 msgstr ""
 
-#: src/main.c:3960
+#: src/main.c:4128
 msgid "Remove this tile"
 msgstr ""
 
-#: src/main.c:3970
+#: src/main.c:4138
 msgid "Group"
 msgstr ""
 
-#: src/main.c:3980
+#: src/main.c:4148
 msgid "Split group horizontally"
 msgstr ""
 
-#: src/main.c:3981
+#: src/main.c:4149
 msgid "Split group vertically"
 msgstr ""
 
-#: src/main.c:3995
+#: src/main.c:4163
 msgid "Collapse group to this piece"
 msgstr ""
 
-#: src/main.c:4005
+#: src/main.c:4173
 msgid "Remove group"
 msgstr ""
 
-#: src/main.c:4291
-#, c-format
-msgid "CDB: failed to write window.json: %s\n"
+#: src/main.c:4460
+msgid "CDB: window.json merged into layout.json\n"
 msgstr ""
 
-#: src/main.c:4377
+#: src/main.c:4591
 #, c-format
 msgid "CDB: modal limit of %d reached"
 msgstr ""
 
-#: src/main.c:4411
+#: src/main.c:4625
 msgid "Settings — CodeDashBoard"
 msgstr ""
 
-#: src/main.c:4455
+#: src/main.c:4669
 msgid "CDB: readlink /proc/self/exe failed"
 msgstr ""
 
-#: src/main.c:4488
+#: src/main.c:4702
 msgid "CDB: failed to spawn the new session"
 msgstr ""
 
-#: src/main.c:4643
+#: src/main.c:4821
+#, c-format
+msgid "CDB: no locale installed for language %s\n"
+msgstr ""
+
+#: src/main.c:4874
 msgid "About CDB"
 msgstr ""
 
-#: src/main.c:4645
+#: src/main.c:4876
 msgid "Exit"
 msgstr ""
 
-#: src/main.c:4669
+#: src/main.c:4900
 msgid "New window"
 msgstr ""
 
-#: src/main.c:4670
+#: src/main.c:4901
 msgid "New session…"
 msgstr ""
 

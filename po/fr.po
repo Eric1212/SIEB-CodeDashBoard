@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 06:35-0400\n"
+"POT-Creation-Date: 2026-08-29 15:49-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -62,29 +62,29 @@ msgid_plural "%lu lines"
 msgstr[0] "%lu ligne"
 msgstr[1] "%lu lignes"
 
-#: src/layout.c:123
+#: src/layout.c:142 src/layout.c:411 src/layout.c:484
 #, c-format
 msgid "CDB: failed to write layout.json: %s\n"
 msgstr "CDB: écriture layout.json : %s\n"
 
-#: src/layout.c:191
+#: src/layout.c:210
 #, c-format
 msgid "CDB: failed to read layout.json: %s\n"
 msgstr "CDB: layout.json : %s\n"
 
-#: src/layout.c:317
+#: src/layout.c:336
 msgid "Editor"
 msgstr "Éditeur"
 
-#: src/layout.c:319 src/main.c:1812
+#: src/layout.c:338 src/main.c:1812
 msgid "Explorer"
 msgstr "Explorateur"
 
-#: src/layout.c:325 src/main.c:4644
+#: src/layout.c:344 src/main.c:4875
 msgid "Settings"
 msgstr "Réglages"
 
-#: src/layout.c:327
+#: src/layout.c:346
 msgid "Empty"
 msgstr "Vide"
 
@@ -436,8 +436,8 @@ msgstr ""
 "octets: %lu\n"
 "binary: %s\n"
 "file_hash: %s\n"
-"note: relance cdb_delete(path, file_hash) pour détruire. Si le fichier change "
-"entre les deux appels, la seconde passe sera refusée.\n"
+"note: relance cdb_delete(path, file_hash) pour détruire. Si le fichier "
+"change entre les deux appels, la seconde passe sera refusée.\n"
 
 #: src/llmcore.c:2723
 msgid ""
@@ -633,7 +633,11 @@ msgid ""
 "from_line/to_line are 1-based, inclusive. Returns the lines and a short hash "
 "(4 base36 chars) of the exact octets of the range, to replay in cdb_insert/"
 "cdb_replace."
-msgstr "Lit une plage exacte de lignes d'un fichier texte depuis le disque (chemin absolu). from_line/to_line 1-based inclusifs. Retourne les lignes et un hash court (4 caractères base36) des octets exacts de la plage, à rejouer dans cdb_insert/cdb_replace."
+msgstr ""
+"Lit une plage exacte de lignes d'un fichier texte depuis le disque (chemin "
+"absolu). from_line/to_line 1-based inclusifs. Retourne les lignes et un hash "
+"court (4 caractères base36) des octets exacts de la plage, à rejouer dans "
+"cdb_insert/cdb_replace."
 
 #: src/llmcore.c:4295
 msgid ""
@@ -800,7 +804,54 @@ msgid ""
 "still the right one. That hash is not proof of reading: it certifies that "
 "the file did not change between your discovery and its destruction. folder "
 "and symlink = refusal.\n"
-msgstr "\n\n# Outils CDB natifs\n\nUtilise exclusivement les outils natifs pour agir.\nUn résultat tool avec content:null signifie qu'il n'y a aucun contenu nouveau par rapport aux résultats précédents du même terminal.\n\n## cdb_bash\nExécute une commande shell dans un terminal CDB (0-9).\n\n## cdb_read\nLit une plage exacte de lignes (chemin absolu, 1-based inclusif). Retourne les lignes + un hash court (4 caractères base36) couvrant les octets exacts de la plage lue. Ce hash prouve que tu as lu la zone et devra être rejoué par les outils d'écriture. Pour obtenir le hash d'UNE ligne, lis exactement cette ligne (from_line==to_line).\n\n## cdb_insert\nInsère du texte entre deux lignes adjacentes d'un fichier du disque. Tu DOIS avoir lu la ligne avant et la ligne après, chacune par son propre cdb_read(N,N), et rejouer leurs deux hashes. before_line=0 ou after_line=0 désigne une borne du fichier : là, aucun hash. Le texte est inséré verbatim, comme cat : les sauts de ligne t'appartiennent, et un texte qui ne finit pas par un saut de ligne fusionne avec la ligne suivante. CDB te rend le range RÉEL et ne frappe un hash que sur les lignes entièrement fournies par toi (authored_range) : une ligne mêlant ton texte à du contenu existant reste sans hash, donc sans droit d'écriture immédiate.\n\n## cdb_replace\nRemplace les lignes from_line..to_line (inclus, 1-based) par ton texte verbatim. block_hash est OBLIGATOIRE et doit venir d'un cdb_read de cette plage exacte : sans lui, ou s'il ne correspond plus, refus. La plage remplacée inclut le saut de ligne terminal de to_line. text vide supprime les lignes. Un refus ne te donnera jamais le hash courant : relis.\n\n## cdb_create\nCrée un fichier NEUF (chemin absolu) avec content verbatim. Refuse si le fichier existe ou si le parent manque ; ne crée jamais de répertoire. Tout le contenu venant de toi, authored_range couvre le fichier entier.\n\n## cdb_delete\nDEUX PASSES, obligatoires : cdb_delete(path) ne supprime rien et te rend file_hash ; cdb_delete(path, file_hash) supprime seulement si l'empreinte est encore la bonne. Ce hash-là n'est pas une preuve de lecture : il certifie que le fichier n'a pas changé entre ta découverte et ta destruction. répertoire et lien symbolique = refus.\n"
+msgstr ""
+"\n"
+"\n"
+"# Outils CDB natifs\n"
+"\n"
+"Utilise exclusivement les outils natifs pour agir.\n"
+"Un résultat tool avec content:null signifie qu'il n'y a aucun contenu "
+"nouveau par rapport aux résultats précédents du même terminal.\n"
+"\n"
+"## cdb_bash\n"
+"Exécute une commande shell dans un terminal CDB (0-9).\n"
+"\n"
+"## cdb_read\n"
+"Lit une plage exacte de lignes (chemin absolu, 1-based inclusif). Retourne "
+"les lignes + un hash court (4 caractères base36) couvrant les octets exacts "
+"de la plage lue. Ce hash prouve que tu as lu la zone et devra être rejoué "
+"par les outils d'écriture. Pour obtenir le hash d'UNE ligne, lis exactement "
+"cette ligne (from_line==to_line).\n"
+"\n"
+"## cdb_insert\n"
+"Insère du texte entre deux lignes adjacentes d'un fichier du disque. Tu DOIS "
+"avoir lu la ligne avant et la ligne après, chacune par son propre "
+"cdb_read(N,N), et rejouer leurs deux hashes. before_line=0 ou after_line=0 "
+"désigne une borne du fichier : là, aucun hash. Le texte est inséré verbatim, "
+"comme cat : les sauts de ligne t'appartiennent, et un texte qui ne finit pas "
+"par un saut de ligne fusionne avec la ligne suivante. CDB te rend le range "
+"RÉEL et ne frappe un hash que sur les lignes entièrement fournies par toi "
+"(authored_range) : une ligne mêlant ton texte à du contenu existant reste "
+"sans hash, donc sans droit d'écriture immédiate.\n"
+"\n"
+"## cdb_replace\n"
+"Remplace les lignes from_line..to_line (inclus, 1-based) par ton texte "
+"verbatim. block_hash est OBLIGATOIRE et doit venir d'un cdb_read de cette "
+"plage exacte : sans lui, ou s'il ne correspond plus, refus. La plage "
+"remplacée inclut le saut de ligne terminal de to_line. text vide supprime "
+"les lignes. Un refus ne te donnera jamais le hash courant : relis.\n"
+"\n"
+"## cdb_create\n"
+"Crée un fichier NEUF (chemin absolu) avec content verbatim. Refuse si le "
+"fichier existe ou si le parent manque ; ne crée jamais de répertoire. Tout "
+"le contenu venant de toi, authored_range couvre le fichier entier.\n"
+"\n"
+"## cdb_delete\n"
+"DEUX PASSES, obligatoires : cdb_delete(path) ne supprime rien et te rend "
+"file_hash ; cdb_delete(path, file_hash) supprime seulement si l'empreinte "
+"est encore la bonne. Ce hash-là n'est pas une preuve de lecture : il "
+"certifie que le fichier n'a pas changé entre ta découverte et ta "
+"destruction. répertoire et lien symbolique = refus.\n"
 
 #: src/llmlive.c:173
 msgid "Interrupted by the CDB restart."
@@ -1449,100 +1500,126 @@ msgstr "CDB: rebuild_explorer vue créée (n_items=%u)\n"
 msgid "CDB: style scheme = %s (dark=%d)\n"
 msgstr "CDB: schéma = %s (dark=%d)\n"
 
-#: src/main.c:2927 src/main.c:3562
+#: src/main.c:2933 src/main.c:3724
 msgid "Saved ✓"
 msgstr "Enregistré ✓"
 
-#: src/main.c:3378
+#: src/main.c:3384
 msgid "Tool"
 msgstr "Outil"
 
-#: src/main.c:3426
+#: src/main.c:3449
+msgid ""
+"Applied at once to everything created from now on: new tiles, dialogs, and "
+"what CDB sends to the model. Screens already open keep their language."
+msgstr ""
+"Appliqué aussitôt à tout ce qui est créé désormais : nouvelles tuiles, "
+"dialogues, et ce que CDB envoie au modèle. Les écrans déjà ouverts gardent "
+"leur langue."
+
+#: src/main.c:3489
+msgid ""
+"No locale is installed for this language. Install it (locale-gen), then "
+"restart CDB."
+msgstr ""
+"Aucune locale n'est installée pour cette langue. Installez-la (locale-gen), "
+"puis relancez CDB."
+
+#: src/main.c:3525
+msgid "Language:"
+msgstr "Langue :"
+
+#: src/main.c:3546
+#, c-format
+msgid "%s (system)"
+msgstr "%s (système)"
+
+#: src/main.c:3588
 msgid "Retry on HTTP 429:"
 msgstr "Retry sur HTTP 429 :"
 
-#: src/main.c:3428 src/main.c:3436
+#: src/main.c:3590 src/main.c:3598
 msgid "Retries (0 = infinite):"
 msgstr "Répétitions (0 = infini) :"
 
-#: src/main.c:3429 src/main.c:3437
+#: src/main.c:3591 src/main.c:3599
 msgid "Delay between attempts (ms):"
 msgstr "Délai entre essais (ms) :"
 
-#: src/main.c:3434
+#: src/main.c:3596
 msgid "Retry on HTTP 5xx:"
 msgstr "Retry sur HTTP 5xx :"
 
-#: src/main.c:3611
+#: src/main.c:3773
 #, c-format
 msgid "CDB: Init-Prompt scheme=%s found=%d\n"
 msgstr "CDB: Init-Prompt schéma=%s trouvé=%d\n"
 
-#: src/main.c:3656 src/main.c:3686
+#: src/main.c:3818 src/main.c:3854
 msgid "Save"
 msgstr "Enregistrer"
 
-#: src/main.c:3682
+#: src/main.c:3850
 msgid "API key:"
 msgstr "Clé API :"
 
-#: src/main.c:3684
+#: src/main.c:3852
 msgid "Allowed models:"
 msgstr "Modèles autorisés :"
 
-#: src/main.c:3698
+#: src/main.c:3866
 msgid "(optional)"
 msgstr "(optionnelle)"
 
-#: src/main.c:3700 src/main.c:3705 src/main.c:3709
+#: src/main.c:3868 src/main.c:3873 src/main.c:3877
 msgid "(empty: all models)"
 msgstr "(vide : tous les modèles)"
 
-#: src/main.c:3703
+#: src/main.c:3871
 msgid "HyperCharm key…"
 msgstr "clé HyperCharm…"
 
-#: src/main.c:3776
+#: src/main.c:3944
 msgid "(to come: endpoint, model, API key…)"
 msgstr "(à venir : endpoint, modèle, clé API…)"
 
-#: src/main.c:3782
+#: src/main.c:3950
 msgid "Retry on error"
 msgstr "Réessayer en cas d'erreur"
 
-#: src/main.c:3783
+#: src/main.c:3951
 msgid "Init-Prompt"
 msgstr "Prompt initial"
 
-#: src/main.c:3786
+#: src/main.c:3954
 msgid "Harness"
 msgstr "Harnais"
 
-#: src/main.c:3787
+#: src/main.c:3955
 msgid "Tools"
 msgstr "Outils"
 
-#: src/main.c:3788
+#: src/main.c:3956
 msgid "Providers"
 msgstr "Fournisseurs"
 
-#: src/main.c:3791
+#: src/main.c:3959
 msgid "General"
 msgstr "Général"
 
-#: src/main.c:3791
+#: src/main.c:3959
 msgid "(to come: theme, font, indentation…)"
 msgstr "(à venir : thème, police, indentation…)"
 
-#: src/main.c:3792
+#: src/main.c:3960
 msgid "(to come: token, user, repo defaults…)"
 msgstr "(à venir : token, user, repo par défaut…)"
 
-#: src/main.c:3793
+#: src/main.c:3961
 msgid "LLM"
 msgstr "Modèles"
 
-#: src/main.c:3828
+#: src/main.c:3996
 msgid ""
 "Empty\n"
 "(reserved slot)"
@@ -1550,73 +1627,77 @@ msgstr ""
 "Vide\n"
 "(emplacement réservé)"
 
-#: src/main.c:3923
+#: src/main.c:4091
 msgid "Split horizontally"
 msgstr "Diviser horizontalement"
 
-#: src/main.c:3924
+#: src/main.c:4092
 msgid "Split vertically"
 msgstr "Diviser verticalement"
 
-#: src/main.c:3960
+#: src/main.c:4128
 msgid "Remove this tile"
 msgstr "Retirer cette tuile"
 
-#: src/main.c:3970
+#: src/main.c:4138
 msgid "Group"
 msgstr "Groupe"
 
-#: src/main.c:3980
+#: src/main.c:4148
 msgid "Split group horizontally"
 msgstr "Diviser le groupe horizontalement"
 
-#: src/main.c:3981
+#: src/main.c:4149
 msgid "Split group vertically"
 msgstr "Diviser le groupe verticalement"
 
-#: src/main.c:3995
+#: src/main.c:4163
 msgid "Collapse group to this piece"
 msgstr "Réduire le groupe à cette pièce"
 
-#: src/main.c:4005
+#: src/main.c:4173
 msgid "Remove group"
 msgstr "Retirer le groupe"
 
-#: src/main.c:4291
-#, c-format
-msgid "CDB: failed to write window.json: %s\n"
-msgstr "CDB: écriture window.json : %s\n"
+#: src/main.c:4460
+msgid "CDB: window.json merged into layout.json\n"
+msgstr "CDB: window.json fusionné dans layout.json\n"
 
-#: src/main.c:4377
+#: src/main.c:4591
 #, c-format
 msgid "CDB: modal limit of %d reached"
 msgstr "CDB: limite de %d modales atteinte"
 
-#: src/main.c:4411
+#: src/main.c:4625
 msgid "Settings — CodeDashBoard"
 msgstr "Réglages — CodeDashBoard"
 
-#: src/main.c:4455
+#: src/main.c:4669
 msgid "CDB: readlink /proc/self/exe failed"
 msgstr "CDB: readlink /proc/self/exe échoué"
 
-#: src/main.c:4488
+#: src/main.c:4702
 msgid "CDB: failed to spawn the new session"
 msgstr "CDB: échec du spawn de la nouvelle session"
 
-#: src/main.c:4643
+#: src/main.c:4821
+#, c-format
+msgid "CDB: no locale installed for language %s\n"
+msgstr "CDB: aucune locale installée pour la langue %s\n"
+
+#: src/main.c:4874
 msgid "About CDB"
 msgstr "À propos de CDB"
 
-#: src/main.c:4645
+#: src/main.c:4876
 msgid "Exit"
 msgstr "Quitter"
 
-#: src/main.c:4669
+#: src/main.c:4900
 msgid "New window"
 msgstr "Nouvelle fenêtre"
 
-#: src/main.c:4670
+#: src/main.c:4901
 msgid "New session…"
 msgstr "Nouvelle session…"
 
@@ -1645,6 +1726,10 @@ msgstr "Numéro de session (000-999) :"
 #: src/session.c:329
 msgid "Open"
 msgstr "Ouvrir"
+
+#, c-format
+#~ msgid "CDB: failed to write window.json: %s\n"
+#~ msgstr "CDB: écriture window.json : %s\n"
 
 #, c-format
 #~ msgid ""

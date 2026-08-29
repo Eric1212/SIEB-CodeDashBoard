@@ -2827,6 +2827,7 @@ static GtkWidget *build_harness_form(void);
 static GtkWidget *build_tools_form(void);
 static void on_tool_mode_clicked(GtkButton *btn, gpointer data);
 static GtkWidget *build_initprompt_editor(void);
+static GtkWidget *build_general_form(const char *rest);
 
 static GtkWidget *
 build_settings_section(const SettingsSection *sec)
@@ -2877,6 +2878,11 @@ build_settings_section(const SettingsSection *sec)
         body = build_initprompt_editor();
     else if (g_strcmp0(sec->id, "Tools") == 0)
         body = build_tools_form();
+    else if (g_strcmp0(sec->id, "General") == 0)
+        /* La section n'a pas de sous-section : ce branchement doit bien
+         * précéder celui des subs, sinon « General » retombe dans le
+         * placeholder « à venir » qu'il remplace. */
+        body = build_general_form(sec->placeholder);
     else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_widget_set_margin_start(body, 16);
@@ -3416,6 +3422,162 @@ build_tools_form(void)
     }
 
     llm_tools_prefs_free(prefs);
+    return grid;
+}
+
+
+/* ------------------------------------------------ */
+/* Général : langue de l'interface                   */
+/* ------------------------------------------------ */
+
+/* Le choix est appliqué séance tenante. Tout ce qui se construit après en
+ * bénéficie : nouvelle tuile, dialogue, fenêtre Réglages rouverte, et surtout
+ * le prompt et les schémas d'outils, reconstitués à CHAQUE requête — donc la
+ * langue que reçoit le modèle bascule immédiatement.
+ *
+ * Les widgets déjà montés, eux, gardent leurs étiquettes. Les recoller aurait
+ * demandé de tracer chaque label du programme ; un écran à moitié retraduit
+ * ment plus qu'un redémarrage, et le texte ci-dessous le dit plutôt que de
+ * le taire.
+ *
+ * Les noms de langues sont des ENDEMONES (« English », « Français ») et ne
+ * passent volontairement par AUCUN _() : un utilisateur qui ne lit pas la
+ * langue courante de l'interface doit retrouver le mot qu'il connaît. Les
+ * autres chaînes de ce formulaire, elles, sont de la prose et se traduisent. */
+
+#define LANG_NOTE \
+    _("Applied at once to everything created from now on: new tiles, " \
+      "dialogs, and what CDB sends to the model. Screens already open " \
+      "keep their language.")
+
+static void
+language_form_mark(GtkWidget *grid)
+{
+    char        *cur  = layout_pref_get("language");   /* NULL = environnement */
+    const char  *want = (cur != NULL) ? cur : "";
+    int          row;
+
+    for (row = 1; row < 40; row++) {
+        GtkWidget  *w = gtk_grid_get_child_at(GTK_GRID(grid), 0, row);
+        const char *code;
+
+        if (w == NULL)
+            break;
+        code = g_object_get_data(G_OBJECT(w), "lang-code");
+        if (g_strcmp0(code, want) == 0)
+            gtk_widget_add_css_class(w, "suggested-action");
+        else
+            gtk_widget_remove_css_class(w, "suggested-action");
+    }
+    g_free(cur);
+}
+
+static void
+on_language_clicked(GtkButton *btn, gpointer grid)
+{
+    const char  *code = g_object_get_data(G_OBJECT(btn), "lang-code");
+    const char  *want = (code != NULL && code[0] != '\0') ? code : NULL;
+    GtkWidget   *note = g_object_get_data(G_OBJECT(grid), "lang-note");
+
+    /* Appliquer AVANT d'enregistrer : si aucune locale du système ne porte
+     * cette langue, on n'écrit pas une préférence qui ne marchera pas au
+     * prochain démarrage — et on le dit, au lieu de laisser l'utilisateur
+     * croire que le clic n'a rien fait. */
+    if (i18n_apply(want) == NULL) {
+        if (note != NULL)
+            gtk_label_set_text(GTK_LABEL(note),
+                _("No locale is installed for this language. Install it "
+                  "(locale-gen), then restart CDB."));
+        language_form_mark(GTK_WIDGET(grid));   /* revêt le choix réel */
+        return;
+    }
+    layout_pref_set("language", want);
+    if (note != NULL)
+        gtk_label_set_text(GTK_LABEL(note), LANG_NOTE);
+    language_form_mark(GTK_WIDGET(grid));
+}
+
+static void
+language_add_row(GtkWidget *grid, int row, const char *code,
+                 const char *label)
+{
+    GtkWidget *b = gtk_button_new_with_label(label);
+
+    gtk_widget_add_css_class(b, "flat");
+    gtk_widget_set_halign(b, GTK_ALIGN_START);
+    gtk_widget_set_tooltip_text(b, label);
+    /* La ligne « système » porte le code "" : une chaîne, comme les autres
+     * portent "fr" ou "en". C'est ce qui permet à language_form_mark de
+     * comparer directement cette valeur au "" qu'il fabrique quand
+     * layout.json ne contient aucune clé "language". La reconversion de ""
+     * en absence de clé ne se fait qu'à l'écriture, dans on_language_clicked :
+     * suivre l'environnement ne laisse donc pas une clé vide dans le fichier. */
+    g_object_set_data_full(G_OBJECT(b), "lang-code",
+                           g_strdup(code != NULL ? code : ""), g_free);
+    g_signal_connect(b, "clicked", G_CALLBACK(on_language_clicked), grid);
+    gtk_grid_attach(GTK_GRID(grid), b, 0, row, 2, 1);
+}
+
+static GtkWidget *
+build_general_form(const char *rest)
+{
+    GtkWidget  *grid = gtk_grid_new();
+    GtkWidget  *head = gtk_label_new(_("Language:"));
+    GtkWidget  *note;
+    GList      *langs, *l;
+    const char *sys = g_getenv("LC_ALL");
+    char       *sys_lbl;
+    int         row = 1;
+
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 4);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+    gtk_widget_set_margin_start(grid, 24);
+    gtk_widget_set_margin_top(grid, 12);
+    gtk_widget_set_margin_bottom(grid, 12);
+
+    gtk_widget_add_css_class(head, "heading");
+    gtk_widget_set_halign(head, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(grid), head, 0, 0, 2, 1);
+
+    if (sys == NULL || sys[0] == '\0')
+        sys = g_getenv("LANG");
+    if (sys == NULL || sys[0] == '\0')
+        sys = "C";
+    sys_lbl = g_strdup_printf(_("%s (system)"), sys);
+    language_add_row(grid, row++, NULL, sys_lbl);
+    g_free(sys_lbl);
+
+    /* Une ligne par catalogue RÉELLEMENT présent à côté du binaire :
+     * déposer une nouvelle langue = `make po && make mo`, sans toucher ici. */
+    langs = i18n_languages();
+    for (l = langs; l != NULL; l = l->next) {
+        const char *code = l->data;
+
+        language_add_row(grid, row++, code, i18n_language_name(code));
+    }
+    g_list_free_full(langs, g_free);
+
+    note = gtk_label_new(LANG_NOTE);
+    gtk_label_set_wrap(GTK_LABEL(note), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(note), 0.0);
+    gtk_widget_add_css_class(note, "dim-label");
+    gtk_grid_attach(GTK_GRID(grid), note, 0, row, 2, 1);
+    g_object_set_data(G_OBJECT(grid), "lang-note", note);
+
+    /* La table porte encore N_("(to come: …)") pour cette section : c'est la
+     * seule trace de ce qui reste à faire dans Général. On l'affiche sous les
+     * langues plutôt que de la laisser devenir un msgid mort au catalogue.
+     * Patrons §6.7 : N_() à la définition, _() à l'usage. */
+    if (rest != NULL) {
+        GtkWidget *more = gtk_label_new(_(rest));
+
+        gtk_label_set_wrap(GTK_LABEL(more), TRUE);
+        gtk_label_set_xalign(GTK_LABEL(more), 0.0);
+        gtk_widget_add_css_class(more, "dim-label");
+        gtk_grid_attach(GTK_GRID(grid), more, 0, row + 1, 2, 1);
+    }
+
+    language_form_mark(grid);
     return grid;
 }
 
@@ -4216,47 +4378,98 @@ window_state_path(void)
     return session_config_path("window.json");
 }
 
+/* Applique un objet d'état de fenêtre (width/height/maximized/fullscreen).
+ * Sépare du chargement parce que deux chemins l'appellent : la lecture de
+ * layout.json et la migration de l'ancien window.json. */
+static void
+window_state_apply(App *app, JsonObject *obj)
+{
+    if (obj == NULL)
+        return;
+    if (json_object_has_member(obj, "width") &&
+        json_object_has_member(obj, "height")) {
+        int w = (int)json_object_get_int_member(obj, "width");
+        int h = (int)json_object_get_int_member(obj, "height");
+
+        if (w > 0 && h > 0)
+            gtk_window_set_default_size(app->win, w, h);
+    }
+    /* Les états s'appliquent au map de la fenêtre. */
+    if (json_object_has_member(obj, "fullscreen") &&
+        json_object_get_boolean_member(obj, "fullscreen"))
+        gtk_window_fullscreen(app->win);
+    else if (json_object_has_member(obj, "maximized") &&
+             json_object_get_boolean_member(obj, "maximized"))
+        gtk_window_maximize(app->win);
+}
+
 static void
 window_state_load(App *app)
 {
-    char       *path = window_state_path();
-    JsonParser *parser;
-    JsonObject *obj;
+    JsonNode *node = layout_pref_get_node("window");
 
-    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
-        g_free(path);
+    if (node != NULL) {
+        if (JSON_NODE_HOLDS_OBJECT(node))
+            window_state_apply(app, json_node_get_object(node));
+        json_node_unref(node);
         return;
     }
-    parser = json_parser_new();
-    if (json_parser_load_from_file(parser, path, NULL) &&
-        (obj = json_node_get_object(json_parser_get_root(parser))) != NULL) {
-        if (json_object_has_member(obj, "width") &&
-            json_object_has_member(obj, "height")) {
-            int w = (int)json_object_get_int_member(obj, "width");
-            int h = (int)json_object_get_int_member(obj, "height");
 
-            if (w > 0 && h > 0)
-                gtk_window_set_default_size(app->win, w, h);
+    /* Migration, une seule fois : window.json était un fichier né sans
+     * décision, son état rejoint le membre "window" de layout.json.
+     * Ordre important — on écrit AVANT de supprimer, et on ne supprime que
+     * si l'écriture a été relue ailleurs : un fichier d'utilisateur détruit
+     * parce que la copie a échoué n'est pas un ménage, c'est une perte. */
+    {
+        char       *path   = window_state_path();
+        JsonParser *parser = json_parser_new();
+
+        if (g_file_test(path, G_FILE_TEST_EXISTS) &&
+            json_parser_load_from_file(parser, path, NULL) &&
+            json_parser_get_root(parser) != NULL &&
+            JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+            JsonObject  *legacy =
+                json_node_get_object(json_parser_get_root(parser));
+            JsonBuilder *b   = json_builder_new();
+            JsonNode    *top;
+
+            json_builder_begin_object(b);
+            json_builder_set_member_name(b, "window");
+            /* Le NOEUD de la source, pas l'objet : `legacy` est un
+             * JsonObject * (il sert à window_state_apply), et json_node_copy
+             * attend un JsonNode *. Confusion facile, deux lignes plus haut. */
+            json_builder_add_value(b,
+                                   json_node_copy(json_parser_get_root(parser)));
+            json_builder_end_object(b);
+            top = json_builder_get_root(b);
+            layout_merge_members(json_node_get_object(top));
+            json_node_unref(top);
+            g_object_unref(b);
+
+            window_state_apply(app, legacy);
+
+            /* Relu par layout_pref_get_node : la copie existe, l'original
+             * peut partir. */
+            {
+                JsonNode *check = layout_pref_get_node("window");
+                gboolean  ok    = (check != NULL);
+
+                if (ok)
+                    json_node_unref(check);
+                if (ok && g_unlink(path) == 0)
+                    g_printerr(_("CDB: window.json merged into layout.json\n"));
+            }
         }
-        /* Les états s'appliquent au map de la fenêtre. */
-        if (json_object_has_member(obj, "fullscreen") &&
-            json_object_get_boolean_member(obj, "fullscreen"))
-            gtk_window_fullscreen(app->win);
-        else if (json_object_has_member(obj, "maximized") &&
-                 json_object_get_boolean_member(obj, "maximized"))
-            gtk_window_maximize(app->win);
+        g_object_unref(parser);
+        g_free(path);
     }
-    g_object_unref(parser);
-    g_free(path);
 }
 
 static void
 window_state_save(App *app)
 {
     JsonBuilder *builder;
-    JsonNode    *root_node;
-    gchar       *text;
-    char        *dir;
+    JsonNode    *top_node;
     int          w, h;
 
     /* Taille réelle allouée (Wayland : pas de position à sauver). */
@@ -4269,7 +4482,17 @@ window_state_save(App *app)
         w < 200 || h < 200)
         return;
 
+    /* L'état de la fenêtre est un MEMBRE de layout.json, plus un fichier à
+     * part entière : window.json était né sans décision, et deux fichiers
+     * d'interface (l'un pour l'arbre, l'autre pour la taille) n'avaient
+     * aucune raison d'exister. layout_merge_members relit le fichier, ne
+     * remplace que "window" et laisse donc "root" et "language" intacts —
+     * c'est layout.c qui reste le seul à écrire ce fichier.
+     * Pas de mkdir ici : le répertoire de session est créé par session_init,
+     * et layout_save l'écrit déjà sans le créer. */
     builder = json_builder_new();
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "window");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "width");
     json_builder_add_int_value(builder, w);
@@ -4282,26 +4505,11 @@ window_state_save(App *app)
     json_builder_add_boolean_value(builder,
                                    gtk_window_is_fullscreen(app->win));
     json_builder_end_object(builder);
+    json_builder_end_object(builder);
 
-    dir = g_path_get_dirname(window_state_path());
-    g_mkdir_with_parents(dir, 0755);
-    g_free(dir);
-
-    root_node = json_builder_get_root(builder);
-    text = json_to_string(root_node, TRUE);
-    {
-        char     *path = window_state_path();
-        GError   *error = NULL;
-
-        if (!g_file_set_contents(path, text, -1, &error)) {
-            g_printerr(_("CDB: failed to write window.json: %s\n"),
-                       error->message);
-            g_error_free(error);
-        }
-        g_free(path);
-    }
-    g_free(text);
-    json_node_unref(root_node);
+    top_node = json_builder_get_root(builder);
+    layout_merge_members(json_node_get_object(top_node));
+    json_node_unref(top_node);
     g_object_unref(builder);
 }
 
@@ -4598,6 +4806,23 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     if (!session_init())
         return;
 
+
+    /* Langue choisie par l'utilisateur (membre "language" de layout.json).
+     * À placer ICI et pas dans i18n_init() : ce fichier vit dans le dossier de
+     * la session, que session_init() vient seulement de résoudre — et il faut
+     * trancher AVANT la première chaîne affichée (titre, CSS, config).
+     * Une langue sans locale installée ne fait pas disparaître le choix de
+     * l'utilisateur : on garde l'environnement et on le journalise. */
+    {
+        char *lang = layout_pref_get("language");
+
+        if (lang != NULL) {
+            if (i18n_apply(lang) == NULL)
+                g_printerr(_("CDB: no locale installed for language %s\n"),
+                           lang);
+            g_free(lang);
+        }
+    }
     /* Tout ce qui depend du numero de session se construit ICI, une fois
      * session_init() passee. Avant, cdb_session vaut encore sa valeur
      * statique 0 : dirty_store_new() et llm_config_load() figeraient alors
