@@ -1,14 +1,20 @@
 # Plan i18n — CodeDashBoard (CDB)
 
-**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4, E, F livrés — **le
-Jalon F est bouclé**, tout ce qui était traduisable dans le projet l'est ;
-**prochaine étape : Jalon G** (sélecteur de langue dans l'UI + docs).
-**Date** : 2025-08-28 (rév. 8 — Jalon F livré : `llmcore.c` lu en entier et
-marqué, +90 msgids, persona et policy passées en msgid anglais avec un `msgstr`
-contrôlé fidèle au caractère près, unités de mesure sorties de gettext (§6.10),
-clé/libellé des profils séparés (patron D3.5) ; catalogue à **297 msgids**,
-294 traduits et 3 non traduits **vouloirs** (`MINIMAL`/`DEFAULT`/`YOLO`),
-`make i18n-check` vert sur les deux langues, zéro fuzzy, build à 0 warning).
+**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4, E, F, **G** livrés.
+Le plan est clos en tant que tel : tout ce qui était traduisable l'est, la
+langue se choisit dans l'interface et se relit au démarrage. Reste hors code la
+validation d'écran par Éric, et une question de ménage non exécutée (`roots.json`,
+§4 Jalon G).
+**Date** : 2026-08-29 (rév. 9 — Jalon G livré : sélecteur de langue dans
+Réglages → Général, endonymes hors gettext, liste lue sur disque, `i18n_apply()`
+à escalier de candidats qui garde le territoire (§6.11), `layout.json`
+propriétaire unique de l'état d'affichage avec préservation des membres inconnus
+(§6.12) et rapatriement de `window.json` ; au passage, un widget jamais créé
+corrigé (§4 G.2) et le format réel de `session.h` rétabli. Catalogue à **302
+msgids**, 299 traduits, 3 non traduits **vouloirs**
+(`MINIMAL`/`DEFAULT`/`YOLO`), `make i18n-check` vert sur les deux langues, zéro
+fuzzy, build à 0 warning. Le « 2025-08-28 » de la révision 8 était une année
+erronée : la machine et l'historique portent 2026).
 **Décideur** : Éric Boucher.
 
 ---
@@ -346,10 +352,60 @@ user.` **3**. Vingt-six phrases physiques sont devenues quatre entrées.
   échappé ainsi (`llmcore.c:1937-1959`, `2791-2830`, et `ibox.c` que le Jalon C
   croyait traité) et seule la relecture les a trouvées. **Un compte n'est pas un
   inventaire** — cf. §6.8.
-### Jalon G — Sélecteur de langue et docs
-- Sélecteur de langue dans l'UI + persistance config.
-- Section « Internationalisation » dans `CLAUDE.md` (règles de marquage,
-  procédure d'ajout d'une langue).
+### Jalon G — Sélecteur de langue et docs — ✅ livré
+
+**Réponses préalables d'Éric** (elles ont fixé le design, pas moi) : 1) le
+sélecteur va dans **Réglages → Général**, et l'état de `window.json` rentre
+aussi dans `layout.json` — « window.json s'est créé sans mon autorisation,
+c'est aussi dans layout.json » ; 2) les noms de langues **dans leur propre
+langue uniquement** ; 3) application live souhaitée, « si trop complexe, au
+prochaine démarrage » ; un fil qui change de langue en cours de route regarde
+l'utilisateur le gérer — aucun mécanisme de renouvellement n'a été construit.
+
+**Mesuré**, après `make clean` et `po/locale/` supprimé (tout rebâti) :
+
+| | |
+|---|---|
+| build | 0 erreur, 0 warning |
+| catalogue | **302 msgids** (297 + 5 de G), 299 traduits, 3 voulu, 0 fuzzy |
+| `i18n-check` | ok fr, ok en |
+| cohabitation dans `layout.json` | 6 écritures croisées : l'arbre ne perd plus la langue, la langue ne perd plus l'arbre (sonde hors UI, `session_config_path` fourni localement — le `~/.config/cdb` réel ne sert pas de banc d'essai) |
+| migration | `window.json` absorbé sous `"window"`, **relu**, puis supprimé ; l'avis de fusion est sorti **en français**, ce qui prouve en un seul témoin que la langue du fichier est appliquée avant la première chaîne |
+| changement de langue | même processus : `en` → `en_CA.UTF-8`, `fr` → `fr_CA.UTF-8`, catalogues ET formats différents |
+| Réglages sous Xvfb (`CDB_TEST_SETTINGS`) | 0 `Gtk-CRITICAL` |
+
+**Trois choses trouvées en route**, aucune de celles que je cherchais :
+
+1. **`setlocale` ne connaît ni « en » ni « fr »** sur ce poste : les deux
+   renvoient `ECHEC`, comme `fr.UTF-8`. Seules les formes complètes passent.
+   Sans l'escalier de candidats (§6.11 c), le bouton « English » aurait été
+   parfaitement décoratif — et « Français » n'aurait marché que par accident,
+   parce que `LANG` est déjà `fr_CA.UTF-8`.
+2. **Un widget déclaré et jamais créé** : `InitPromptCtx.status` (`main.c`) est
+   lu à quatre endroits — ajouté au pied de l'éditeur, aligné, étiré, et servi
+   par le retour « Saved ✓ » — sans qu'aucune ligne ne l'assigne ; `g_new0` le
+   laissait à `NULL`. Trois `Gtk-CRITICAL` **à chaque ouverture de Réglages**,
+   depuis `8f57e230` (2026-08-23), et la confirmation d'enregistrement jamais
+   visible. Corrigé, vérifié au même harnais, **commit séparé** : il est
+   antérieur à G et doit pouvoir être annulé indépendamment.
+3. **`session.h` documentait un format faux** : il promettait un `session.json`
+   qui n'a jamais existé et ignorait `llm.json`, `llm_live.json`, `llm_slots/`,
+   `prompts/`. Un commentaire d'en-tête sur le format des données se lit comme
+   une spécification — corrigé contre le répertoire réellement listé.
+
+**Dettes nommées** : trois blocs de lecture‑modification‑écriture se
+ressemblent dans `layout.c`. Je les ai laissés plutôt que de refactorer du code
+écrit, compilé et sondé dans le même mouvement ; le jour où un quatrième
+membre arrive, c'est `file_update(mutate, u)` qu'il faudra écrire.
+
+**Refusé d'exécuter, en attente** : Éric a dit « `roots.json` devrait être dans
+`llm.json` ». Les faits contredisent la prémisse — `roots.json` porte `roots` +
+`last_file` (dossiers ouverts de l'explorateur, dernier fichier édité),
+`llm.json` porte `providers`, `active`, `harness`, `tools`, donc des **clés
+API**. Y loger l'état de l'explorateur reviendrait à ce qu'un changement de
+projet touche au fichier des secrets. **Rien n'a été bougé.** Le voisin cohérent
+de `roots.json` semble être `layout.json` ; à trancher par Éric.
+
 - ~~`make test` étendu à `msgfmt --check`~~ : **frappé.** Les tests unitaires
   `tests/agent_state` ont été retirés du projet (`19805d8`), sur décision
   d'Éric. Le garde-fou i18n vit désormais dans `make i18n-check` — voir §7.
@@ -493,6 +549,63 @@ msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier
     Aucun des msgids concernés ne porte de mot à traduire en plus : le fait que
     « octet » s'écrive identiquement en français et en anglais rend la clé
     inutile, ce qui rejoint le point 3 ci-dessus.
+
+11. **Le sélecteur de langue — quatre règles qui ne sont pas du goût mais de
+    l'honnêteté** (Jalon G).
+
+    a) **Les noms de langues ne se traduisent pas.** « English », « Français »,
+       « Español » s'affichent dans leur propre langue (*endonymes*), hors
+       gettext. Décision d'Éric : « Je vois "English" dans mon interface même si
+       je suis français. C'est un principe de secours pour l'utilisateur final
+       qui cherche "English" ou le mot naturel dans sa langue. » Traduire ces
+       noms les rend inutiles précisément dans le cas où ils servent. Un code
+       hors table affiche son code ISO — jamais une devinette.
+
+    b) **La liste vient du disque, pas du code.** Le sélecteur énumère
+       `<dir du binaire>/po/locale/<code>/LC_MESSAGES/cdb.mo` : ajouter une
+       langue = `make po && make mo`, aucun `if` à écrire.
+
+    c) **Une langue sans locale installable ne se propose pas au silence.**
+       `setlocale` refuse « en » et « fr » sur ce poste (vérifié : `ECHEC` ;
+       seules les formes complètes `en_US.UTF-8`, `fr_CA.UTF-8` passent, et
+       `fr.UTF-8` échoue aussi). D'où l'escalier de candidats de `i18n_apply()`
+       et, si aucun ne passe : un message à l'écran **au lieu d'un
+       enregistrement** — on n'écrit pas une préférence qui ne marchera pas.
+
+    d) **Le territoire survit au changement de langue.** `fr_CA.UTF-8` + choix
+       « English » ⇒ `en_CA.UTF-8` **avant** `en_US.UTF-8`. On change de langue,
+       pas de pays : dates, heures et devises restent celles du poste. Mesuré à
+       la sonde : `locale=en_CA.UTF-8`, date `Wed 31 Dec 1969 07:00:00 PM`.
+
+    **Étendue de l'application live** : le changement prend effet aussitôt sur
+    tout ce qui se construit après — tuile nouvelle, dialogue, Réglages
+    rouverte, et surtout le prompt et les schémas d'outils reconstitués **à
+    chaque requête**, donc la langue que reçoit le modèle bascule
+    immédiatement. Les widgets déjà montés gardent leurs étiquettes et le texte
+    d'aide le dit : un écran à moitié retraduit ment plus qu'un redémarrage. Ce
+    n'est pas une paresse de catalogue, c'est la nature d'un label GTK, créé
+    une fois.
+
+    **Persistance** : membre `"language"` de `layout.json`, et **pas un fichier
+    de plus** (décision d'Éric, §6.12). L'absence de clé vaut « suivre
+    l'environnement » — ce qui est différent d'une valeur vide, et c'est pour
+    cela que la ligne « Système » écrit une clé absente et non `"language": ""`.
+
+12. **Le propriétaire d'un fichier préserve ce qu'il ne comprend pas.**
+    `layout.json` est réécrit en entier par `layout_save()` depuis l'arbre des
+    tuiles : y déposer une langue sans corriger l'écriture, c'était la voir
+    effacée à la première division de tuile, sans un message. Les écritures sont
+    donc passées en lecture-modification-écriture, `layout_merge_members()` a
+    été ajouté pour qu'un seul module sache écrire ce fichier — et la règle est
+    vérifiée dans les deux sens par une sonde (l'arbre ne perd plus la langue,
+    la langue ne perd plus l'arbre).
+
+    Consignée au passage, la source du litige : `window.json` est né du commit
+    `11feed6` **sans marque de décision**, dans un dépôt où les choix validés
+    sont écrits. Son état (taille, maximisé, fullscreen) est de l'affichage, il
+    vit maintenant sous le membre `"window"` de `layout.json`, migré une fois
+    puis l'ancien fichier supprimé — supprimé seulement après relecture de la
+    copie.
 
 ---
 ## 7. Commandes et garde-fous

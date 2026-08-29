@@ -70,6 +70,53 @@ llm_live.json, llm_slots/.
   global par regex ; chk de garde avant écriture.
 - json-glib : `json_object_has_member()` avant tout get.
 
+## Internationalisation
+
+- **Pivot anglais** : le `msgid` est en anglais, `po/fr.po` restitue le
+  français parlé. Langue source déclarée dans `po/README.md`.
+- Marquer `_()` tout ce qui est **vu par un humain** : labels, dialogues,
+  annonces CDB, journaux `CDB_DEBUG`, et les prompts / schémas d'outils
+  envoyés au modèle — décision assumée : la langue de l'agent suit celle de
+  l'écran.
+- **Ne pas marquer** : clés JSON, identifiants d'action (`win.new-window`),
+  CSS, noms d'icônes, jetons comparés en code, commandes shell, et toute
+  chaîne sans mot à traduire. Attention aux faux amis : `MINIMAL`/`DEFAULT`/
+  `YOLO` s'affichent mais sont aussi des **clés** de `llm.json` — les traduire
+  changerait la valeur relue au démarrage.
+- **Un script ne décide pas** ce qui se traduit. La qualification se fait à la
+  lecture ; un scan peut situer (numéro de ligne, compte de msgids) et rien de
+  plus. Trois classificateurs successifs se sont contredits (34, 7, 67) : la
+  méthode a été abandonnée au profit de la lecture (§5 du plan).
+- Pluriels : `ngettext(singulier, pluriel, n)`, jamais de `? "s" : ""`.
+- Tables statiques : `N_()` à la définition, `_()` à l'usage. Une
+  initialisation `static const` refuse un appel de fonction, et `xgettext` ne
+  prétraite pas : sans `N_()`, la chaîne n'entre pas au catalogue **sans la
+  moindre erreur**.
+- Unités de mesure : **hors gettext**. Un symbole est une norme, pas une
+  phrase ; `1024` ⇒ multiple binaire ⇒ `Kio`/`Mio` (jamais `Ko`/`KB`, qui
+  valent 1000). Le séparateur décimal vient de `LC_NUMERIC` (`setlocale` dans
+  `i18n_init`), pas d'une chaîne à traduire.
+- Noms de langues du sélecteur : **endonymes** (« English », « Français »),
+  volontairement non traduits — un utilisateur qui ne lit pas la langue
+  courante de l'interface doit retrouver le mot qu'il connaît.
+- La langue se choisit dans **Réglages → Général** et vit dans le membre
+  `"language"` de `layout.json`. Elle prend effet aussitôt pour tout ce qui est
+  créé après (nouvelles tuiles, dialogues, et le prompt reconstruit à chaque
+  requête) ; les écrans déjà montés gardent leurs étiquettes.
+
+### Ajouter une langue
+
+1. Ajouter le code à `po/LINGUAS`, puis `make po` (initialise le `.po`).
+2. Traduire `po/<lang>.po` — Poedit ou éditeur.
+3. `make mo`. Le sélecteur propose toute langue dont le catalogue existe à
+   côté du binaire : **rien à coder**, la liste est lue sur disque.
+4. `make i18n-check` refuse la syntaxe invalide **et** les entrées `fuzzy` :
+   `msgmerge` marie des msgid qui se ressemblent et a déjà produit des
+   traductions inversées, que `msgfmt --check` accepte sans un mot.
+5. Il faut aussi que la **locale système** existe (`locale -a | grep <code>`) :
+   sinon CDB le dit à l'écran et garde la langue précédente, au lieu de faire
+   semblant de traduire.
+
 ## Jalons
 
 - [x] **0/0b** — UI GTK4 + panneaux dossiers.
@@ -85,6 +132,11 @@ make        # compilation (binaire : ./cdb)
 make run    # compile puis lance
 make asan   # build AddressSanitizer + UBSan
 make clean
+
+make pot          # régénère po/cdb.pot depuis les sources marquées
+make po           # msgmerge des .po (--no-fuzzy-matching, voir plus bas)
+make mo           # compile po/locale/<lang>/LC_MESSAGES/cdb.mo
+make i18n-check   # syntaxe valide ET zéro entrée fuzzy
 ```
 
 ## Debug
