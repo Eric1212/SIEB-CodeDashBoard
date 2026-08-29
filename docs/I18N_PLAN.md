@@ -1,11 +1,14 @@
 # Plan i18n — CodeDashBoard (CDB)
 
-**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4, E livrés — **le
-Jalon E est bouclé** ; **prochaine étape : Jalon F** (`llmcore.c`).
-**Date** : 2025-08-28 (rév. 7 — Jalon E livré : 71 msgids de `llmtile.c`,
-premier pluriel de la tuile via `ngettext`, patron `N_()` pour les tables
-statiques (§6.7) ; catalogue à 196 msgids, `fr.po` 196/196 traduits,
-`make i18n-check` vert sur les deux langues, zéro entrée fuzzy).
+**Statut** : phase 0 et jalons A, B, C, D1, D1.5, D2, D3, D4, E, F livrés — **le
+Jalon F est bouclé**, tout ce qui était traduisable dans le projet l'est ;
+**prochaine étape : Jalon G** (sélecteur de langue dans l'UI + docs).
+**Date** : 2025-08-28 (rév. 8 — Jalon F livré : `llmcore.c` lu en entier et
+marqué, +90 msgids, persona et policy passées en msgid anglais avec un `msgstr`
+contrôlé fidèle au caractère près, unités de mesure sorties de gettext (§6.10),
+clé/libellé des profils séparés (patron D3.5) ; catalogue à **297 msgids**,
+294 traduits et 3 non traduits **vouloirs** (`MINIMAL`/`DEFAULT`/`YOLO`),
+`make i18n-check` vert sur les deux langues, zéro fuzzy, build à 0 warning).
 **Décideur** : Éric Boucher.
 
 ---
@@ -162,7 +165,7 @@ Autres points de E :
   `_(NULL)` : toléré sur cette machine (sondé, catalogue chargé et absent),
   mais non documenté par `dgettext` → garde explicite à `2887`. Bilan :
   +10 msgids, catalogue à 206, 0 trou, 0 fuzzy.
-### Jalon F — `llmcore.c` (UI + prompts système)
+### Jalon F — `llmcore.c` — ✅ `7be9bdb` (90 msgids ; prompt en msgid anglais)
 Tri entre chaînes UI/prompts (à marquer) et clés JSON (à exclure).
 **Simplifié par la phase 0** : plus de tri `/CDB::` à faire.
 ⚠ ~20 `g_strdup_printf("lecture impossible : %s", …)` y sont des **résultats
@@ -174,6 +177,175 @@ définition et `_()` à l'usage — règle §6.7. La paire `"[CDB] "` (posée à
 `llmcore.c:4761`, testée par `g_str_has_prefix` à `llmtile.c:1539`) est une
 convention de transport : **ne pas la marquer**, elle casse le rendu de la
 voix CDB si elle devient traduite.
+
+**Journal de la passe shell de F** — `llmcore.c` est lu en entier (4 985
+lignes) et marqué ; `fr.po` a été rempli à la main, sans `msgmerge`.
+
+1. **Une ligne non marquée, bloquée par le garde-fou de CDB lui-même** :
+   `llmcore.c:2789`, le message de refus de la séquence d'échappement NUL
+   (un antislash suivi des cinq caractères `u0000`). Le détecteur travaille
+   sur le *texte* de l'argument — c'est son rôle, `json-glib` ne donnant pas
+   les longueurs — donc il ne distingue pas un vrai NUL d'un document qui
+   nomme ce NUL. Claude ne peut pas réécrire cette ligne, ni même la citer
+   en documentation. À marquer au `sed` en passe shell, ou à assumer non
+   marquée (§6.2 y suffirait : le msgid ne porte qu'un jeton).
+2. **Le contrôle décisif est le COMPTE, pas la syntaxe.** `fr.po` porte
+   ~85 msgids recopiés à la main : une virgule d'écart entre ma copie et le
+   code ne provoque aucune erreur, elle crée une entrée muette. Donc
+   `make pot && make po` doit rendre **zéro trou** (`msgattrib
+   --untranslated`) et le compte : attendu 286, **mesuré 297** (§ F). Tout
+   msgid que je n'aurais pas su recopier apparaîtra là, vide, et se corrigera
+   en une passe.
+3. **`msgfmt --check` : fait, 0 erreur.** Build propre (0 warning) sur les
+   ~90 écritures de F posées sans compilation — le risque était pris, il est
+   payé : rien n'était cassé.
+4. **Contrôle de fidélité des deux blocs de prompt (mesuré, et il a mordu)** :
+   le `msgstr` français de la persona et de la policy a été comparé au texte **du
+   commit précédent** (`git show HEAD:src/llmcore.c`), en reconstituant les
+   littérales C, en les dé‑échappant, et en relisant la traduction **dans le `.mo`
+   compilé** par `gettext` lui‑même — pas en parsant le `.po` à la main.
+
+   | bloc | longueur | écarts | nature |
+   |---|---|---|---|
+   | persona (`LLM_INITPROMPT_DEFAULT`) | 1 162 = 1 162 | **0** | identique atome pour atome |
+   | policy (`tools_policy`) | 2 231 = 2 231 | **20** | tous des accents (`e`→`è`, `a`→`à`, `E`→`É`, `e`→`ê`) |
+
+   La décision d'Éric du point 1 (« obsolete » → « obsolète ») valait pour les
+   messages d'erreur ; elle est **étendue ici** aux accents de la policy, et le
+   contrôle dit qu'elle est la seule chose qui ait bougé : ta session francophone
+   lit le prompt d'hier, accents en place.
+
+   ⚠ **Ce que le contrôle a attrapé, et qui serait passé inaperçu** : une première
+   version du test s'arrêtait aux quatre premières différences. La vingtième était
+   un `t` devenu `s` — j'avais changé « entre ta découverte et **ta** destruction »
+   en « … et **sa** destruction » dans le prompt que le modèle reçoit. Corrigé
+   (« sa » est probablement un meilleur français, et c'est ce que dit le msgid
+   anglais *its destruction*, mais ce n'est pas ma ligne éditoriale : pour le
+   remettre, un seul mot sur la ligne 803 de `fr.po`). **Un contrôle qui
+   échantillonne ne prouve rien** : la comparaison doit être intégrale, caractère
+   par caractère.
+   Deux bogues de mon propre contrôleur, consignés pour la même raison :
+   `enumerate(L, a)` renumérote toute la liste depuis `a` (mes plages ressortaient
+   gonflées de `a-1`, et je comparais 4 967 caractères à 5 283 sans le voir), et
+   mes marqueurs de fin de plage étaient français dans un fichier devenu anglais
+   (`StopIteration`). Les deux venaient de l'outil, pas du texte — le moment
+   d'accuser son mètre avant d'innocenter sa mesure.
+5. **RÉSOLU — et j'avais écrit l'inverse.** `LLM_PROFILE_NAMES` n'est pas à
+   marquer telle quelle : défini `llmtoolpref.c:14` (`MINIMAL`, `DEFAULT`,
+   `YOLO`), il sert **de clé persistée** — `llmtoolpref.c:334` compare la
+   valeur relue de `active.profile` dans `llm.json` avec `g_strcmp0` — **et**
+   de libellé affiché (`main.c:3384`, `llmtile.c:2402`, `2412`). C'est le cas
+   D3.5/D4 en pleine face : traduire sans séparer casse la relecture de la
+   config au démarrage. Les trois noms restent donc nus. **Si on veut les
+   traduire, c'est le patron D3.5** : une clé technique d'un côté, un libellé
+   `N_()` de l'autre — un refactor de `llmtoolpref.c` et 3 sites, pas une
+   ligne de `.po`. Décision Éric.
+6. **RÉSOLU — l'hypothèse tenait** : `xgettext` extrait bien les littérales
+   du corps d'un `#define`. La persona et la policy sont au catalogue,
+   confirmé par le compte (287 msgids alors) et non par une lecture du `.pot`. Le
+   repli (sortir la persona de sa macro) n'a pas servi. `N_(String)` est bien
+   `(String)` (`gi18n.h:30`), sans cast : l'initialiseur de tableau compile.
+7. `en.po` ne demande rien : msgids déjà anglais, `msgstr` vide = identité.
+8. **Décision d'Éric requise** sur les résumés de la barre d'approbation
+   (`llmcore.c` : replace, create, delete, insert) : ils portent le plural
+   hack avec DEUX pluriels dans la même phrase (« -3 lignes / +5 lignes »),
+   qu'un seul `ngettext` ne peut pas rendre. Laissés non marqués. Trois
+   issues : deux msgids (`removed:` / `added:`), un format sans mot
+   (« -3 / +5 »), ou phrase unique par opération.
+9. **Un mot choisi par Claude, à valider** : l'étiquette du bloc de
+   raisonnement, `mdview.c:29` — `Thinking` → « Raisonnement ».
+
+### Deux chaînes trouvées HORS `llmcore.c`, après F
+
+En balayant pour « couvrir tout ce qui manque », deux littérales françaises
+nues ont été trouvées **dans des fichiers déjà jalonnés** :
+
+- `ibox.c:677` — `n == 1 ? "ligne" : "lignes"`, le §6.3 en pleine face, dans
+  un « petit fichier » supposé traité au **Jalon C**. Corrigé en
+  `ngettext("%lu line", "%lu lines", n)` : 3ᵉ pluriel réel du projet.
+- `mdview.c:29` — `#define THINK_LABEL "Thinking"`, étiquette posée à
+  `mdview.c:363`. Marque en `N_()`/`_()`. Et le fichier **n'incluait pas
+  `i18n.h`** : la marque y aurait été une erreur de compilation, détectée en
+  lisant les `#include`, pas en écrivant.
+
+Leçon de méthode, qui rejoint §6.8 par l'autre bout : mes deux localisateurs
+ont raté **chacun une chose différente**. Celui à dictionnaire de mots a trouvé
+`ibox.c` mais pas `session.c` ; celui « toute littérale avec un espace » a
+trouvé `session.c` mais **a laissé passer `ligne`/`lignes`** — ces mots n'ont
+pas d'espace. Aucun des deux n'aurait dû trancher, et aucun n'a tranché : ils
+ont situés, la décision est venue de la lecture des sites.
+
+### État de F (mesuré, pas déclaré)
+
+**297 msgids** au catalogue, build à 0 warning, `msgmerge` sans erreur,
+`i18n-check` vert sur fr et en, **0 fuzzy**. Les trous sont au nombre de trois
+et sont **vouloirs** : `MINIMAL`, `DEFAULT`, `YOLO`, mots communs aux deux
+langues, malgré tout extraits sur la décision d'Éric (« au cas où », parce que
+toutes les langues ne sont pas aussi proches que fr et en). Leur `msgstr` reste
+vide exprès — `gettext` retombe sur le msgid, l'écran français ne change pas —
+et un commentaire `TRANSLATORS` le dit dans le `.po` (vérifié présent).
+
+Preuve que le tri à la main a fonctionné, en références lues dans le `.po` :
+`invalid JSON arguments for %s.` **7 sites**, `missing path.` **6**,
+`absolute path required.` **6**, `cannot read: %s` **4**, `Cancelled by the
+user.` **3**. Vingt-six phrases physiques sont devenues quatre entrées.
+
+### Fermé depuis la première version de ce journal
+
+- **Unités de taille : la clé a été supprimée, pas traduite** (décision
+  d'Éric). `llm_slots_size_str` rend `%zu o`, `%.1f Kio`, `%.1f Mio` en dur, et
+  les trois msgids sont sortis du `.pot` et du `fr.po` (300 → 297). Trois
+  faits, tous vérifiés : le diviseur est 1024, donc le multiple est **binaire**
+  — `Ko`/`Mo` et `KB`/`MB` valent 1000, et cette imprécision était dans le code
+  **avant** moi, en français comme en anglais ; le séparateur décimal vient de
+  `LC_NUMERIC` (`i18n.c:44`, sonde compilée : `[1.5]` en `C`, `[1,5]` en fr) ;
+  et ce qui restait à « traduire » — `B` contre `o` — n'était pas une
+  divergence de langue mais de racine de mot. **Un symbole d'unité n'est pas de
+  la prose** ; le consigner ici pour qu'aucun jalon futur ne remette une unité
+  derrière gettext. Au passage, `LANG=fr_CA.UTF-8` est la locale réelle du
+  poste et `fr_CA.utf8` est générée : la virgule fonctionne, et le Jalon B
+  (« pas besoin de catalogue `fr_CA` distinct ») s'en trouve confirmé.
+- **`llmcore.c:2789` marqué**, via shell, en construisant les antislashs avec
+  `printf` pour que la séquence n'apparaisse jamais dans le texte de ma commande
+  — le garde-fou de CDB la refuserait, et il a raison. **Piège consigné parce
+  qu'il mord** : en remplacement `sed`, chaque antislash du fichier coûte deux
+  antislashs dans la commande. Ma première tentative n'en a rendu qu'un, donc un
+  antislash unique devant `u0000` dans une littérale C — ce que C lit comme un
+  nom de caractère universel désignant le NUL lui-même, c'est-à-dire
+  précisément le défaut que ce code existe pour refuser, avec troncature à
+  `strlen`. Détecté à `cat -A`, corrigé, revérifié aux octets (`od -c`) et
+  contrôlé dans le `.mo` : **zéro octet NUL** dans le msgstr compilé.
+- **Point 5 (clés de profils) : fait, et j'avais écrit l'inverse.**
+  `LLM_PROFILE_NAMES` est bien une clé persistée (`llmtoolpref.c:348` compare la
+  valeur relue de `llm.json`, `:59` l'écrit, `llmtile.c:2414` la promeut dans le
+  `g_object_set_data` comparé en `:1922`). Patron D3.5 appliqué : table de clés
+  nue et inchangée, plus `LLM_PROFILE_LABELS` en `N_()` et `llm_profile_label()`
+  pour les cinq sites d'affichage (`llmtile.c:1897`, `1899`, `1905`, `2402`,
+  `main.c:3384`). Vérifié par l'usage : `llm_profile_name()` n'a plus qu'un
+  appelant, celui qui écrit la clé.
+- **Point 8 (double pluriel de la barre d'approbation) : résolu sans arbitre**,
+  la contrainte étant technique et non éditoriale. Un seul des quatre sites avait
+  deux compteurs ; les trois autres portent la **ligne entière** dans un
+  `ngettext`, donc l'ordre des mots reste libre par langue. Pour `replace`, deux
+  `ngettext` composés de part et d'autre du `/` (un symbole, pas de la prose),
+  temporaires libérés sur le chemin unique. Rendu contrôlé au `.mo`.
+
+### Ce qui reste ouvert
+
+- **Un mot à valider** : `Thinking` → « Raisonnement » (choisi par moi).
+- **Dernier mot « byte » du projet** : l'étiquette `bytes:` du résultat de
+  `cdb_delete`. C'est un label du canal machine (règle 9), pas de la prose, donc
+  laissé tel quel — mais si la cohérence avec « octet » doit aller jusque-là,
+  c'est une ligne, et elle est à toi.
+- **Dette assumée** : `main.c:5028` (`CDB: réouverture settings`), dernière
+  littérale française nue du projet, appartient au harnais `CDB_TEST_*` — le §5
+  la classe « gardée, non marquée ».
+- **La leçon de contrôle, à ne pas perdre** : l'invariant « 0 trou » ne prouve
+  **que** mes recopies retombent sur le code. Une chaîne que je n'ai pas marquée
+  n'entre pas dans le `.pot`, donc rien ne manque jamais. Trois plages m'ont
+  échappé ainsi (`llmcore.c:1937-1959`, `2791-2830`, et `ibox.c` que le Jalon C
+  croyait traité) et seule la relecture les a trouvées. **Un compte n'est pas un
+  inventaire** — cf. §6.8.
 ### Jalon G — Sélecteur de langue et docs
 - Sélecteur de langue dans l'UI + persistance config.
 - Section « Internationalisation » dans `CLAUDE.md` (règles de marquage,
@@ -261,8 +433,68 @@ msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier
    `msgstr ""` suivi de ses lignes de continuation. **Le Jalon F se lira en
    entier**, `llmcore.c` compris, sans arbitre automatique.
 
----
+9. **Étiquette de protocole dans une phrase (décision d'Éric, F)** : quand une
+   chaîne contient un **champ de protocole que le modèle doit réécrire atome
+   pour atome** (`path:`, `line_count:`, `authored_range:`, `hash_block:`,
+   `file_hash:`, `from_line`, `block_hash`…), l'étiquette garde sa forme
+   technique — la traduire casserait l'appel — mais **la phrase qui la porte
+   se met à la langue du client**. Deux cas réels du fichier :
+   `"\n[CDB] HTTP %u — nouvelles tentatives en cours…\n"` (3711) ne bouge ni
+   `[CDB] ` ni `HTTP`, et sa prose se traduit ; `"file_hash obsolete : le
+   fichier n'est plus celui qui a ete confirme…"` (2722) garde `file_hash`
+   dans le msgid anglais et rend « hash de fichier obsolète » en français.
+   **Limite assumée du « tout se traduit » de F** : le *nom* d'un champ se
+   francise dans la phrase (`path manquant.` → « chemin manquant. »,
+   `block_hash requis` → « hash de bloc requis »), le **protocole** (libellés
+   `clé: valeur`, noms passés en argument, `binary: yes`) reste en anglais.
+   Les quatre hash se distinguent à l'écrit — « hash de bloc », « d'avant »,
+   « d'après », « de fichier » — sinon quatre erreurs différentes portent le
+   même mot. Cette frontière ne se décide pas au motif mais à la lecture :
+   il faut savoir si la chaîne est **écrite** par le modèle ou seulement
+   **lue** par lui.
+10. **Les unités de mesure ne sont pas de la prose — pas de clé de traduction.**
+    Décision d'Éric, Jalon F, à propos de `llm_slots_size_str` (`o`, `Kio`,
+    `Mio`). Le réflexe à interdire est celui qui m'a fait commettre la faute :
+    « la chaîne est affichée, donc `_()` ». Un symbole d'unité est une norme, pas
+    une phrase. Trois contrôles, dans cet ordre, avant qu'une taille soit
+    traduisible :
 
+    1. **Le diviseur dit le préfixe.** `1024` ⇒ multiple **binaire** : `Ki`/`Mi`
+       (kibi, mébi). `1000` ⇒ `k`/`M`. En français l'unité racine est l'**octet**,
+       donc les symboles sont `o`, `Kio`, `Mio`, `Gio` — **jamais** `Ko`/`Mo` ni
+       `KB`/`MB`, qui valent 1000. Confondre les deux n'est pas une faute de
+       langue mais une **erreur d'information d'un facteur 1,024** ; le code la
+       portait avant ce jalon, dans les deux langues.
+    2. **Le séparateur décimal n'est pas une chaîne.** Il vient de `LC_NUMERIC`,
+       posé par `setlocale(LC_ALL, "")` dans `i18n_init` (`i18n.c:44`). Sonde
+       compilée sur ce poste : `[1.5]` en `LANG=C`, `[1,5]` en `fr_CA.UTF-8`.
+       Une clé de traduction ne peut rien pour lui, et n'a rien à y faire.
+    3. **Ce qui reste après 1 et 2 n'est pas une langue.** La seule divergence
+       entre `%zu B` et `%zu o` était la racine du mot — *byte* contre *octet* —
+       donc un choix de métrologie, tranché par Éric : l'octet. Une clé dont le
+       seul travail est d'écrire « byte » là où l'on écrit « octet » ne traduit
+       rien : elle inscrit une préférence dans le catalogue.
+
+    Application : les msgids `%zu B`, `%.1f KB`, `%.1f MB` ont été **retirés** du
+    `.pot` et du `fr.po` (300 → 297 msgids) et le code rend les symboles en dur.
+    Limite de la règle, pour qu'elle ne devienne pas un interdit bête : une unité
+    qui changerait de **nom** et non de symbole selon la langue — « octet » écrit
+    en toutes lettres face à « byte » — reste de la prose et se marque. C'est le
+    **symbole** qui est hors périmètre, pas le mot quand il est du texte.
+
+    **Prolongement décidé par Éric (Jalon F)** : le mot retenu est **octet**, y
+    compris dans les msgids **anglais** — « byte » est écarté partout. Trois sites
+    touchés : `llmcore.c:4240` et `:4589` (les descriptions de `cdb_read` et de la
+    policy disent « exact octets of the range ») et l'étiquette de protocole
+    `bytes:` du résultat de `cdb_delete`, devenue `octets:`. Ce dernier changement
+    est permis parce que la règle 9 distingue les deux sortes d'étiquettes :
+    `bytes:` est seulement **lue** par le modèle, alors que `file_hash:` est
+    **rejouée** atome pour atome dans les appels — les secondes restent en anglais.
+    Aucun des msgids concernés ne porte de mot à traduire en plus : le fait que
+    « octet » s'écrive identiquement en français et en anglais rend la clé
+    inutile, ce qui rejoint le point 3 ci-dessus.
+
+---
 ## 7. Commandes et garde-fous
 
 ```sh
