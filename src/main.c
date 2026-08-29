@@ -4888,10 +4888,16 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         return;
 
 
-    /* Langue choisie par l'utilisateur (membre "language" de layout.json).
+    /* Langue ÉPINGLÉE par l'utilisateur (membre "language" de layout.json).
      * À placer ICI et pas dans i18n_init() : ce fichier vit dans le dossier de
-     * la session, que session_init() vient seulement de résoudre — et il faut
-     * trancher AVANT la première chaîne affichée (titre, CSS, config).
+     * la session, que session_init() vient seulement de résoudre.
+     *
+     * La langue DEMANDÉE par l'environnement, elle, se répare plus tôt — dans
+     * i18n_init() — justement parce qu'elle n'attend pas le numéro de session.
+     * C'est ce qui fait que le dialogue « Nouvelle session », né dans
+     * session_init(), est déjà dans la bonne langue : une langue épinglée ne le
+     * pouvait pas, c'est ce dialogue qui choisit la session qui la contient.
+     *
      * Une langue sans locale installée ne fait pas disparaître le choix de
      * l'utilisateur : on garde l'environnement et on le journalise. */
     {
@@ -4902,19 +4908,9 @@ on_activate(GtkApplication *gtk_app, gpointer data)
                 g_printerr(_("CDB: no locale installed for language %s\n"),
                            lang);
             g_free(lang);
-        } else if (g_strcmp0(i18n_current_language(),
-                             i18n_environment_language()) != 0) {
-            /* Rien d'épinglé, mais la libc n'a pas su installer la locale
-             * demandée : « LC_ALL=en_FR.UTF-8 » sur un poste où elle n'existe
-             * pas retombe en « C ». Or « C » ne charge AUCUN catalogue — pas
-             * même celui de la langue qu'on vient de demander. Le français
-             * réclamé sur une machine sans fr_FR installé sortirait donc en
-             * anglais, en silence. On répare en cherchant une locale RÉELLE de
-             * la langue demandée : la langue reste celle de l'utilisateur,
-             * seuls les formats bougent. */
-            i18n_apply(i18n_environment_language());
         }
     }
+
     /* Tout ce qui depend du numero de session se construit ICI, une fois
      * session_init() passee. Avant, cdb_session vaut encore sa valeur
      * statique 0 : dirty_store_new() et llm_config_load() figeraient alors

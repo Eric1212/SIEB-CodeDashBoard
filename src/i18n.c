@@ -48,6 +48,27 @@ i18n_init(void)
     bindtextdomain(GETTEXT_PACKAGE, i18n_localedir());
     bind_textdomain_codeset(GETTEXT_PACKAGE, "UTF-8");
     textdomain(GETTEXT_PACKAGE);
+
+    /* La libc ne connaît pas toutes les locales qu'on lui demande :
+     * « fr_ES.UTF-8 » sur un poste qui n'a que fr_BE, fr_CA, fr_CH, fr_FR et
+     * fr_LU la refuse et retombe en « C ». Or « C » ne charge AUCUN catalogue —
+     * pas même celui de la langue qu'on venait de demander — et l'écran part en
+     * anglais pivot avec des chaînes pourtant traduites. Vérifié sur la fenêtre
+     * de session : « Nouvelle session » est au catalogue, elle sortait en
+     * anglais.
+     *
+     * La réparation est ici, et non plus bas dans le démarrage, parce qu'elle
+     * n'attend personne : la langue demandée est dans LC_ALL/LANG dès la
+     * première ligne exécutée. Ce qui doit attendre, c'est la langue ÉPINGLÉE —
+     * elle vit dans le dossier de la session, et c'est précisément le dialogue
+     * « Nouvelle session » qui choisit cette session. Réparer avant est le seul
+     * moyen que cette fenêtre parle la langue de l'utilisateur. */
+    {
+        const char *demandee = i18n_environment_language();
+
+        if (g_strcmp0(i18n_current_language(), demandee) != 0)
+            i18n_apply(demandee);
+    }
 }
 
 /* ------------------------------------------------ */
