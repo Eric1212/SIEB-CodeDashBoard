@@ -38,5 +38,8 @@ void i18n_init(void);
 GList      *i18n_languages(void);        /* codes triés, à libérer (g_free)  */
 const char *i18n_language_name(const char *code);
 const char *i18n_apply(const char *code);
+/* Langue en vigueur, lue dans la locale installée (« fr_CA.UTF-8 » -> « fr ») :
+ * c'est la locale qui choisit le catalogue, pas LANG. Tampon statique. */
+const char *i18n_current_language(void);
 
 #endif /* CDB_I18N_H */

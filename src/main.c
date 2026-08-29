@@ -3450,26 +3450,63 @@ build_tools_form(void)
       "dialogs, and what CDB sends to the model. Screens already open " \
       "keep their language.")
 
+/* Marque la langue réellement en vigueur, et ne montre la ligne « système »
+ * que quand son slug explique quelque chose.
+ *
+ * Sur un poste français, le slug « fr_CA.UTF-8 (système) » n'apprenait rien à
+ * l'utilisateur — et il volait surtout à la ligne « Français » son marquage,
+ * alors que le français EST bien la langue en vigueur (reproche d'Éric, capture
+ * d'écran à l'appui). Le slug ne vaut que dans deux cas : la langue du poste
+ * n'a pas de catalogue (il explique alors pourquoi l'écran est en anglais —
+ * vérifié avec LC_ALL=es_ES.UTF-8), ou une langue est épinglée ailleurs que
+ * l'environnement (la ligne devient alors le seul chemin du retour).
+ *
+ * La ligne « système » se reconnaît à son code vide : pas besoin de la
+ * mémoriser ailleurs dans la grille. */
 static void
 language_form_mark(GtkWidget *grid)
 {
-    char        *cur  = layout_pref_get("language");   /* NULL = environnement */
-    const char  *want = (cur != NULL) ? cur : "";
-    int          row;
+    char       *pinned = layout_pref_get("language");   /* NULL = environnement */
+    const char *env    = i18n_current_language();        /* "fr", "es", "C"...  */
+    const char *effect = (pinned != NULL) ? pinned : env;
+    gboolean    couvert = FALSE;
+    int         row;
+
+    {
+        GList *langs = i18n_languages(), *l;
+
+        for (l = langs; l != NULL; l = l->next)
+            if (g_strcmp0(l->data, env) == 0)
+                couvert = TRUE;
+        g_list_free_full(langs, g_free);
+    }
 
     for (row = 1; row < 40; row++) {
         GtkWidget  *w = gtk_grid_get_child_at(GTK_GRID(grid), 0, row);
         const char *code;
+        gboolean    sys, on;
 
         if (w == NULL)
             break;
         code = g_object_get_data(G_OBJECT(w), "lang-code");
-        if (g_strcmp0(code, want) == 0)
+        sys  = (code != NULL && code[0] == '\0');
+
+        if (sys)
+            gtk_widget_set_visible(w, !couvert ||
+                                     (pinned != NULL &&
+                                      g_strcmp0(pinned, env) != 0));
+
+        /* La ligne système n'est « active » que si l'environnement est bel et
+         * bien ce qui sert — donc quand aucun catalogue ne le couvre. Sinon
+         * (fr_CA sans clé), c'est la ligne « Français » qui porte la marque. */
+        on = sys ? (!couvert && pinned == NULL)
+                 : (code != NULL && g_strcmp0(code, effect) == 0);
+        if (on)
             gtk_widget_add_css_class(w, "suggested-action");
         else
             gtk_widget_remove_css_class(w, "suggested-action");
     }
-    g_free(cur);
+    g_free(pinned);
 }
 
 static void

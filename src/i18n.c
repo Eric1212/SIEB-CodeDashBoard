@@ -197,3 +197,25 @@ i18n_apply(const char *code)
 
     return got;
 }
+
+/* Langue réellement en vigueur, lue dans la locale INSTALLÉE et non dans la
+ * variable d'environnement : i18n_apply() a pu trancher autrement, et c'est la
+ * locale qui décide du catalogue. « fr_CA.UTF-8 » -> « fr », « C » -> « C ».
+ * Tampon statique : une seule langue à la fois, l'appelant n'a rien à copier. */
+const char *
+i18n_current_language(void)
+{
+    static char lang[16];
+    const char *loc = setlocale(LC_ALL, NULL);
+    size_t      n   = 0;
+
+    if (loc == NULL)
+        return "C";
+    while (loc[n] != '\0' && loc[n] != '_' && loc[n] != '.' && loc[n] != '@' &&
+           n + 1 < sizeof lang) {
+        lang[n] = loc[n];
+        n++;
+    }
+    lang[n] = '\0';
+    return lang;
+}
