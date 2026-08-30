@@ -40,7 +40,7 @@
  *   HTTP-Referer             = URL, identifiant unique de l'app ;
  *   X-OpenRouter-Title       = nom affiche dans les rankings ;
  *   X-OpenRouter-Categories  = marketplace (comme Zed/Cursor). */
-#define LLM_APP_REFERER    "https://github.com/SIEB/SIEB-CodeDashBoard"
+#define LLM_APP_REFERER    "https://github.com/Eric1212/SIEB-CodeDashBoard"
 #define LLM_APP_TITLE      "CodeDashBoard"
 #define LLM_APP_CATEGORIES "programming-app"
 
