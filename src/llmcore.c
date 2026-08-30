@@ -445,6 +445,7 @@ md_deliver(ModelsFetch *f, LlmModelInfo *models)
     f->cb(models, f->user_data);
     llm_models_free(models);
     g_free(f->provider);
+    g_clear_object (&f->msg);
     g_object_unref(f->soup);
     g_free(f);
     /* Liste livrée, DOM rendu, copies libérées : le tas vient de redescendre
@@ -550,11 +551,12 @@ llm_models_fetch(const char *provider, LlmModelsCallback cb,
     }
     /* Règle mesurée au weak pointer, voir llm_send_attempt : send_async ne
      * vole pas la référence de l'appelant — la session tient la sienne et la
-     * rend à la fin, c'est donc à nous de rendre la nôtre. Ce site ne le
-     * fait pas encore : un message survit par fetch (GET sans corps,
-     * quelques Ko, contre 2,7 Mo par tour côté chat).
+     * rend à la fin, c'est donc à nous de rendre la nôtre. Ici elle ne
+     * pouvait pas l'être : msg est une locale. Le tenir dans f->msg le rend
+     * justiciable de md_deliver, l'unique route de mort de ModelsFetch.
      * Variante « read » : tout le corps en mémoire (les /models sont
      * petits) — le finish correspondant est send_and_read_finish. */
+    f->msg = msg;
     soup_session_send_and_read_async(f->soup, msg, G_PRIORITY_DEFAULT,
                                      NULL, models_fetch_done, f);
 }
@@ -799,6 +801,7 @@ credits_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
               f->user_data);
 
     g_free(f->provider);
+    g_clear_object (&f->msg);
     g_object_unref(f->soup);
     g_free(f);
 }
@@ -865,9 +868,12 @@ llm_credits_fetch(const char *provider, LlmCreditsCallback cb,
     g_free(auth);
 
     /* Règle mesurée au weak pointer, voir llm_send_attempt : send_async ne
-     * vole pas la référence de l'appelant, la session rend seulement la
-     * sienne. Elle n'est donc pas rendue ici : un message survit par poll
-     * (GET sans corps, quelques Ko — contre 2,7 Mo par tour côté chat). */
+     * vole pas la référence de l'appelant. Sans tenue dans le struct, la
+     * nôtre ne pouvait être rendue nulle part : msg est une locale, morte à
+     * la sortie de cette fonction — un message survuvait donc par poll, et
+     * le poll de solde tourne toutes les 60 s. f->msg est rendu à
+     * credits_fetch_done, l'unique route de mort de CreditsFetch. */
+    f->msg = msg;
     soup_session_send_and_read_async(f->soup, msg, G_PRIORITY_DEFAULT,
                                      NULL, credits_fetch_done, f);
     return TRUE;
@@ -3466,17 +3472,20 @@ llm_request_free(LlmRequest *req)
     g_free(req->body);
     g_free(req->auth);
     /* Le message du dernier tour, lui, n'a pas de tentative suivante pour le
-     * deloger : c'est ici qu'il doit partir. Place avant le garde `done` pour
-     * qu'aucun chemin d'erreur — annulation, HTTP, fin de flux — ne l'oublie.
-     * Sur une conversation de 2,7 Mo, c'etait 2,7 Mo par tour qui restaient. */
+     * deloger : c'est ici qu'il doit partir. Sur une conversation de 2,7 Mo
+     * c'etait 2,7 Mo par tour qui restaient (mesure : +2053 Ko/tour). */
     g_clear_object (&req->msg);
     if (req->pending != NULL)
         g_string_free(req->pending, TRUE);
-    if (req->done)
-        return;
-    req->done = 1;
-    if (req->stream != NULL)
-        g_object_unref(req->stream);
+    g_clear_object (&req->stream);
+    /* Une seule liberation, et ce n'est pas un drapeau plante dans req qui
+     * la garantit : req est rendue juste en dessous, donc une seconde entree
+     * ici lirait de la memoire deja rendue AVANT meme de pouvoir tester
+     * quoi que ce soit. L'ancien « if (req->done) return; » etait
+     * decoratif — un lecteur, un scripteur, dans le meme appel. L'invariant
+     * reel tient ailleurs et tient bien : chaque operation asynchrone ne
+     * livre QU'UN callback (garantie GAsyncReadyCallback) et core->cur_req
+     * est remis a NULL en tete de cette fonction, avant toute liberation. */
     g_free(req);
 }
 

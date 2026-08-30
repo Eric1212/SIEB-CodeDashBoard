@@ -225,6 +225,7 @@ typedef struct {
     gpointer          user_data;
     SoupSession      *soup;
     char             *provider;
+    SoupMessage      *msg;    /* notre référence, rendue à md_deliver */
 } ModelsFetch;
 
 /* Solde : même mécanique que ModelsFetch. cp pointe dans une table
@@ -235,6 +236,7 @@ typedef struct {
     SoupSession           *soup;
     char                  *provider;
     const CreditsProvider *cp;
+    SoupMessage           *msg; /* notre référence, rendue au callback */
 } CreditsFetch;
 
 /* ------------------------------------------------ */
@@ -487,13 +489,16 @@ typedef struct {
 
 struct LlmRequest {
     LlmCore    *core;   /* état partagé — survit aux vues */
-    SoupMessage  *msg;
+    SoupMessage  *msg;  /* NOTRE référence : rendue à llm_send_attempt (essai
+                         * suivant) et à llm_request_free (dernier essai) */
     GInputStream *stream;
     char          scratch[4096]; /* buffer du read en cours */
     GString      *pending;      /* lignes SSE partielles (dynamique :
                                   * une ligne data: peut dépasser 8 Ko
                                   * quand le serveur agrège les deltas) */
-    int           done;         /* garde anti double-libération */
+    /* Pas de drapeau « une seule libération » ici : req est rendue en bas
+     * de llm_request_free, donc toute seconde entrée lirait une mémoire
+     * déjà rendue avant même de pouvoir tester quoi que ce soit. */
     char         *url;          /* pour reconstruire les essais 429 */
     char         *body;         /* corps JSON de la requête */
     char         *auth;         /* header Authorization ou NULL */
