@@ -15,6 +15,7 @@
 #include "roots.h"
 #include "llmlive.h"
 #include "i18n.h"
+#include "mem.h"
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 #include <glib/gstdio.h>
@@ -471,6 +472,15 @@ llm_model_pop_mapped(GtkWidget G_GNUC_UNUSED *w, gpointer data)
     llm_model_pop_width_sync(t);
     /* Recherche réinitialisée à chaque ouverture. */
     gtk_editable_set_text(GTK_EDITABLE(t->model_search), "");
+}
+
+/* Le popover vient de se fermer : ses rangées de modèles viennent d'être
+ * dé-réalisées, et c'est le plus gros ballot d'objets d'un kilo que la tuile
+ * produise. free() ne rend pas les pages au noyau — voir mem.c. */
+static void
+llm_model_pop_unmapped(GtkWidget G_GNUC_UNUSED *w, gpointer G_GNUC_UNUSED data)
+{
+    cdb_mem_trim();
 }
 
 void
@@ -2522,6 +2532,10 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
                          G_CALLBACK(llm_model_chevron_update), t);
         g_signal_connect(model_pop, "unmap",
                          G_CALLBACK(llm_model_chevron_update), t);
+        /* Second handler sur « unmap » : le chevron garde le premier, ici on
+         * rend les pages que le menu vient de libérer en se fermant. */
+        g_signal_connect(model_pop, "unmap",
+                         G_CALLBACK(llm_model_pop_unmapped), t);
 
         /* Barre de composition : bloc plein légèrement plus sombre que
          * la tuile (classe .llm-compose), deux rangées — saisie au-dessus,

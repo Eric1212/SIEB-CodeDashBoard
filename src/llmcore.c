@@ -19,6 +19,7 @@
 #include "session.h"
 #include "mdview.h"
 #include "i18n.h"
+#include "mem.h"
 #include "bashpanel.h"
 #include "modal.h"
 #include "llmslots.h"
@@ -423,6 +424,8 @@ md_lookup(const char *slug)
 void
 md_enrich(LlmModelInfo *models)
 {
+    if (models == NULL)
+        return;               /* le /models a échoué : rien à nommer */
     for (guint i = 0; models[i].id != NULL; i++) {
         if (models[i].name != NULL)
             continue;
@@ -444,6 +447,10 @@ md_deliver(ModelsFetch *f, LlmModelInfo *models)
     g_free(f->provider);
     g_object_unref(f->soup);
     g_free(f);
+    /* Liste livrée, DOM rendu, copies libérées : le tas vient de redescendre
+     * en objets sans redescendre en pages. Un gateway à 354 modèles laisse
+     * là plusieurs méga-octets de trous. */
+    cdb_mem_trim();
 }
 
 void
@@ -530,8 +537,18 @@ llm_models_fetch(const char *provider, LlmModelsCallback cb,
     url = g_strdup_printf("%s/models", base);
     msg = soup_message_new("GET", url);
     g_free(url);
-    /* La session possède msg après l'appel : NE PAS unref ici.
-     * Variante « read » : tout le corps en mémoire (les /models sont
+    /* Garde même famille que celle du chat et que celle, déjà écrite, de
+     * llm_credits_fetch : msg == NULL ne déclenche AUCUN rappel chez
+     * libsoup. Sans elle, f, sa session et le contexte de l'appelant
+     * partent, et le sélecteur attend une réponse qui ne viendra jamais.
+     * Livrer NULL par le chemin normal, c'est ce qui libère tout — et
+     * md_enrich accepte NULL depuis ce commit, sans quoi on se planterait
+     * ailleurs pour avoir bouché un trou. */
+    if (msg == NULL) {
+        md_deliver(f, NULL);
+        return;
+    }
+    /* La session possède msg après l'appel : NE PAS unref ici.     * Variante « read » : tout le corps en mémoire (les /models sont
      * petits) — le finish correspondant est send_and_read_finish. */
     soup_session_send_and_read_async(f->soup, msg, G_PRIORITY_DEFAULT,
                                      NULL, models_fetch_done, f);
@@ -3951,6 +3968,23 @@ llm_send_attempt(LlmRequest *req)
 {
     SoupMessage *msg = soup_message_new("POST", req->url);
 
+    /* Une URL de provider malformée (un api_url saisi à la main) donne ici
+     * msg == NULL, et libsoup se contente d'un g_return_if_fail dans
+     * send_async : le callback ne vient JAMAIS. Sans cette garde, la
+     * requête partait avec ses vues marquées busy plus bas — bouton pause
+     * éternel sur une boucle morte, et ta loi « play/pause = état de la
+     * boucle » mentirait à l'écran. On reprend l'idiome de l'échec d'envoi :
+     * on annonce, on rend la main sur chaque vue, on libère. */
+    if (msg == NULL) {
+        LlmCore *c = req->core;
+
+        core_cdb_announce(c, _("\n[error: invalid provider URL]\n"));
+        for (guint vi = 0; vi < c->views->len; vi++)
+            llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
+        llm_request_free(req);
+        return;
+    }
+
     if (req->auth != NULL)
         soup_message_headers_append(soup_message_get_request_headers(msg),
                                     "Authorization", req->auth);
@@ -5181,4 +5215,9 @@ llm_core_free(LlmCore *c)
     if (c->views != NULL)
         g_ptr_array_unref(c->views);
     g_free(c);
+    /* La conversation vient de rendre son historique, ses buffers et ses
+     * vues — le plus gros lot de petits objets que CDB libère. Ces pages ne
+     * reviennent pas au noyau d'elles-mêmes : sans ce trim, le pic de la
+     * session dernière resterait l'empreinte de la session suivante. */
+    cdb_mem_trim();
 }
