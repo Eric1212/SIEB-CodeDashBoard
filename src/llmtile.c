@@ -2444,8 +2444,9 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
 
         /* Sélecteur multi-provider : recherche + sections + Configurer.
          * Peuplement AU DÉMARRAGE de la tuile (pas au premier map du
-         * popover) : les noms longs models.dev arrivent en tâche de fond
-         * et le label phrasique est complet sans ouvrir le menu. */
+         * popover) : le label phrasique est complet sans ouvrir le menu, et
+         * les noms models.dev sont déjà là — ils viennent des TOML vendorés à
+         * la livraison de /models, plus d'aller-réseau différé à attendre. */
         t->sections = g_ptr_array_new_with_free_func(model_section_free);
 
         t->model_search = gtk_search_entry_new();

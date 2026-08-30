@@ -177,46 +177,260 @@ llm_models_free(LlmModelInfo *models)
     g_free(models);
 }
 
-/* ------------------------------------------------ */
-/* models.dev : noms lisibles par provider           */
-/*                                                   */
-/* Certains providers (OpenCode Zen) ne renvoient    */
-/* aucun nom dans /models. Leur client puise les     */
-/* métadonnées dans models.dev/api.json : clé        */
-/* provider → { models : { slug : { name } } }.      */
-/* On charge ce JSON une fois, puis on enrichit les  */
-/* listes avant de livrer les callbacks.             */
-/* ------------------------------------------------ */
+/* --------------------------------------------------------------- */
+/* models.dev : noms lisibles des modèles                          */
+/*                                                                 */
+/* Certains providers (OpenCode Zen) ne renvoient aucun nom dans   */
+/* /models. Les métadonnées viennent du tree models.dev vendoré    */
+/* sous third_party/models-dev/models : un fichier .toml par       */
+/* modèle, 295 Kio pour les 363.                                   */
+/*                                                                 */
+/* Ça remplace le GET de models.dev/api.json — 4,3 Mio de texte    */
+/* qu'il fallait tenir en un DOM json-glib résident (~20 Mio) pour */
+/* finir par n'en lire que quelques noms. Plus rien ne se charge   */
+/* au départ : on ouvre le seul fichier qu'on cherche, quand on    */
+/* le cherche.                                                     */
+/*                                                                 */
+/* Règles de résolution (Éric) :                                   */
+/*  1. Seuls comptent les slugs SANS nom fourni.                   */
+/*  2. Tout ce qui précède le dernier « / » saute : le fournisseur */
+/*     n'est pas la clef. C'est ce qui fait marcher un gateway     */
+/*     (opencode) absent de models/ —                            */
+/*     « michel/anthropic/claude-opus-4-8 » est le modèle         */
+/*     d'anthropic.                                               */
+/*  3. Le suffixe « -free » se retire de la recherche.             */
+/*  4. La comparaison ignore la casse.                             */
+/*  5. On cherche dans models/ ENTIER, mais ANCRÉ sur le nom du    */
+/*     fichier : « gpt-4o » doit répondre gpt-4o, pas              */
+/*     « gpt-4o-mini ». 363 slugs, 0 collision, 0 ambiguïté.       */
+/*  6. Le nom vient de la PREMIÈRE ligne commençant par `name` —   */
+/*     souvent la ligne 1, jamais garantie (jusqu'à la 21 sous un  */
+/*     bloc de sources) ; jamais après une section TOML, donc      */
+/*     jamais le `name` d'un [[benchmark]].                        */
+/*  7. Entre les deux premiers guillemets.                         */
+/*  8. « -free » greffe un tag traduit.                            */
+/* --------------------------------------------------------------- */
 
-static gboolean    md_started = FALSE;
-GHashTable *md_names = NULL;
-GSList     *md_pending = NULL;
+typedef struct {
+    char *path;   /* le .toml, tel que trouvé sur disque */
+    char *name;   /* lu à la demande, puis gardé         */
+} MdEntry;
 
+static GHashTable *md_index = NULL;   /* slug minuscule → MdEntry * */
+static gboolean    md_warned = FALSE;       /* arbre vendoré introuvable   */
+static gboolean    md_warned_name = FALSE;  /* un .toml sans ligne `name`  */
 
-
-/* Complète les noms manquants depuis le cache models.dev. */
-void
-md_enrich(LlmModelInfo *models, const char *provider)
+static void
+md_entry_free(gpointer p)
 {
-    char       *key;
-    GHashTable *inner;
+    MdEntry *e = p;
 
-    if (md_names == NULL || provider == NULL)
+    g_free(e->path);
+    g_free(e->name);
+    g_free(e);
+}
+
+/* <dir du binaire>/third_party/models-dev/models, exactement comme
+ * i18n_localedir() le fait pour po/locale : CDB se lance depuis la racine du
+ * projet, il n'y a pas d'installation à cibler. Repli relatif au cwd si
+ * /proc/self/exe est illisible. */
+static const char *
+md_modelsdir(void)
+{
+    static char dir[4096];
+
+    if (dir[0] != '\0')
+        return dir;
+
+    gchar *exe = g_file_read_link("/proc/self/exe", NULL);
+
+    if (exe == NULL) {
+        g_strlcpy(dir, "third_party/models-dev/models", sizeof dir);
+        return dir;
+    }
+    gchar *base = g_path_get_dirname(exe);
+
+    g_snprintf(dir, sizeof dir, "%s/third_party/models-dev/models", base);
+    g_free(base);
+    g_free(exe);
+    return dir;
+}
+
+/* Balaie models/ et retient le NOM de chaque fichier .toml — jamais un
+ * morceau de ce nom : c'est l'ancrage qui interdit à « gpt-4o » de répondre
+ * « gpt-4o-mini ». Règle 5. */
+static void
+md_scan(const char *dir, int depth)
+{
+    GDir *d = g_dir_open(dir, 0, NULL);
+
+    if (d == NULL)
         return;
-    key = g_ascii_strdown(provider, -1);
-    inner = g_hash_table_lookup(md_names, key);
+
+    const char *name;
+
+    while ((name = g_dir_read_name(d)) != NULL) {
+        char *path = g_build_filename(dir, name, NULL);
+
+        if (g_file_test(path, G_FILE_TEST_IS_DIR)) {
+            if (depth > 0)
+                md_scan(path, depth - 1);
+            g_free(path);
+            continue;
+        }
+        if (!g_str_has_suffix(name, ".toml")) {
+            g_free(path);
+            continue;
+        }
+
+        char *stem = g_strndup(name, strlen(name) - 5);
+        char *key  = g_ascii_strdown(stem, -1);
+
+        if (g_hash_table_contains(md_index, key)) {
+            /* Deux fournisseurs portant le même nom de modèle donneraient
+             * deux fichiers du même nom : le premier garde la place, mais ça
+             * se dit. Un choix silencieux se lirait plus tard comme un bug de
+             * nom, alors que c'est un conflit dans les données amont. */
+            g_printerr(_("CDB: models.dev: duplicate slug '%s', keeping the first (%s)\n"),
+                       key, path);
+        } else {
+            MdEntry *e = g_new0(MdEntry, 1);
+
+            e->path = path;               /* la table devient propriétaire */
+            g_hash_table_insert(md_index, key, e);
+            key  = NULL;
+            path = NULL;
+        }
+        g_free(stem);
+        g_free(key);
+        g_free(path);
+    }
+    g_dir_close(d);
+}
+
+/* L'index ne se construit qu'au premier slug sans nom : un CDB qui ne
+ * interroge aucun modèle anonyme ne paie rien du tout. */
+static void
+md_index_ensure(void)
+{
+    if (md_index != NULL)
+        return;
+
+    md_index = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+                                     md_entry_free);
+    md_scan(md_modelsdir(), 2);       /* models/<fournisseur>/<modèle>.toml */
+
+    if (g_hash_table_size(md_index) == 0 && !md_warned) {
+        /* Arbre absent = plus aucun nom, et surtout aucun symptôme : le
+         * sélecteur de modèles affiche juste des slugs. On le dit une fois. */
+        md_warned = TRUE;
+        g_printerr(_("CDB: models.dev: no model found under %s —"
+                     " `make tools && tools/refresh_third_party --bump"
+                     " models-dev` ?\n"), md_modelsdir());
+    }
+}
+
+/* Règles 6 et 7 : la première ligne qui COMMENCE par `name`, puis le texte
+ * entre ses deux premiers guillemets. */
+static char *
+md_read_name(const char *path)
+{
+    char *text = NULL;
+    char *out  = NULL;
+
+    if (!g_file_get_contents(path, &text, NULL, NULL))
+        return NULL;
+
+    char **lines = g_strsplit(text, "\n", 0);
+
+    for (int i = 0; lines[i] != NULL; i++) {
+        const char *l = lines[i];
+        const char *p, *open, *close;
+
+        if (strncmp(l, "name", 4) != 0)
+            continue;
+        p = l + 4;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p != '=')            /* namespace =, name_x = : ce n'est pas lui */
+            continue;
+        p++;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        open = strchr(p, '"');
+        if (open == NULL)
+            break;
+        close = strchr(open + 1, '"');
+        if (close == NULL)
+            break;
+        out = g_strndup(open + 1, (gsize)(close - open - 1));
+        break;                    /* la première ligne name est la bonne */
+    }
+    g_strfreev(lines);
+    g_free(text);
+
+    /* Un fichier sans nom exploitable se lit comme un nom manquant, pas comme
+     * un modèle inexistant : on le dit une fois, sinon le trou est muet. */
+    if (out == NULL && !md_warned_name) {
+        md_warned_name = TRUE;
+        g_printerr(_("CDB: models.dev: no `name` line in %s\n"), path);
+    }
+
+    return out;
+}
+
+/* Applique les règles 2, 3 et 4 au slug brut, et rend le nom prêt à afficher
+ * (règle 8). Alloué : le caller le donne à LlmModelInfo. */
+static char *
+md_lookup(const char *slug)
+{
+    const char *tail;
+    MdEntry    *e;
+    char       *key;
+    gboolean    free_variant = FALSE;
+    gsize       n;
+
+    md_index_ensure();
+
+    tail = strrchr(slug, '/');
+    tail = (tail != NULL) ? tail + 1 : slug;
+    if (*tail == '\0')
+        return NULL;
+
+    n = strlen(tail);
+    if (n > 5 && g_ascii_strcasecmp(tail + n - 5, "-free") == 0) {
+        free_variant = TRUE;
+        n -= 5;
+    }
+
+    key = g_ascii_strdown(tail, (gssize)n);
+    e   = g_hash_table_lookup(md_index, key);
     g_free(key);
-    if (inner == NULL)
-        return;
+    if (e == NULL)
+        return NULL;
+
+    if (e->name == NULL)
+        e->name = md_read_name(e->path);
+    if (e->name == NULL)
+        return NULL;
+
+    if (free_variant)
+        return g_strdup_printf("%s %s", e->name, _("Free"));
+    return g_strdup(e->name);
+}
+
+/* Règle 1 : ne touche que les modèles que le provider n'a pas nommés. */
+void
+md_enrich(LlmModelInfo *models)
+{
     for (guint i = 0; models[i].id != NULL; i++) {
         if (models[i].name != NULL)
             continue;
         {
-            const char *nm = g_hash_table_lookup(inner,
-                                                 models[i].id);
+            char *nm = md_lookup(models[i].id);
 
             if (nm != NULL)
-                models[i].name = g_strdup(nm);
+                models[i].name = nm;
         }
     }
 }
@@ -224,123 +438,12 @@ md_enrich(LlmModelInfo *models, const char *provider)
 void
 md_deliver(ModelsFetch *f, LlmModelInfo *models)
 {
-    md_enrich(models, f->provider);
+    md_enrich(models);
     f->cb(models, f->user_data);
     llm_models_free(models);
     g_free(f->provider);
     g_object_unref(f->soup);
     g_free(f);
-}
-
-MdPending *
-md_deferred_new(ModelsFetch *f, LlmModelInfo *models)
-{
-    MdPending *p = g_new0(MdPending, 1);
-
-    p->f = f;
-    p->models = models;
-    return p;
-}
-
-/* Réception de api.json : construit le cache <provider, slug→name>. */
-void
-md_load_done(GObject *source, GAsyncResult *res,
-             gpointer G_GNUC_UNUSED data)
-{
-    GBytes *bytes;
-    GError *err = NULL;
-
-    bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), res,
-                                              &err);
-    if (bytes != NULL) {
-        JsonParser *parser = json_parser_new();
-        gsize       len = g_bytes_get_size(bytes);
-
-        if (json_parser_load_from_data(parser, g_bytes_get_data(bytes, NULL),
-                                       (gssize)len, NULL)) {
-            JsonObject *root =
-                json_node_get_object(json_parser_get_root(parser));
-
-            if (root != NULL) {
-                GList *pm = json_object_get_members(root);
-
-                md_names = g_hash_table_new_full(
-                    g_str_hash, g_str_equal, g_free,
-                    (GDestroyNotify)g_hash_table_unref);
-                for (GList *l = pm; l != NULL; l = l->next) {
-                    const char *pkey = l->data;
-                    JsonNode   *pn = json_object_get_member(root, pkey);
-                    JsonObject *po, *mo;
-                    char       *lk;
-                    GHashTable *inner;
-                    GList      *sm;
-
-                    if (pn == NULL || !JSON_NODE_HOLDS_OBJECT(pn))
-                        continue;
-                    po = json_node_get_object(pn);
-                    if (!json_object_has_member(po, "models"))
-                        continue;
-                    mo = json_object_get_object_member(po, "models");
-                    if (mo == NULL)
-                        continue;
-
-                    lk = g_ascii_strdown(pkey, -1);
-                    inner = g_hash_table_new_full(
-                        g_str_hash, g_str_equal, g_free, g_free);
-                    g_hash_table_replace(md_names, lk, inner);
-
-                    sm = json_object_get_members(mo);
-                    for (GList *s = sm; s != NULL; s = s->next) {
-                        const char *slug = s->data;
-                        JsonNode   *sn = json_object_get_member(mo,
-                                                                slug);
-                        JsonObject *so;
-
-                        if (sn == NULL || !JSON_NODE_HOLDS_OBJECT(sn))
-                            continue;
-                        so = json_node_get_object(sn);
-                        if (json_object_has_member(so, "name")) {
-                            const char *nm =
-                                json_object_get_string_member(so,
-                                                              "name");
-
-                            if (nm != NULL && nm[0] != '\0')
-                                g_hash_table_insert(inner,
-                                                    g_strdup(slug),
-                                                    g_strdup(nm));
-                        }
-                    }
-                }
-            }
-        }
-        g_object_unref(parser);
-        g_bytes_unref(bytes);
-    } else {
-        g_printerr(_("CDB: models.dev failed: %s\n"), err->message);
-        g_error_free(err);
-    }
-
-    /* Livre tout ce qui attendait (avec ou sans enrichment). */
-    for (GSList *l = md_pending; l != NULL; l = l->next) {
-        MdPending *p = l->data;
-
-        md_deliver(p->f, p->models);
-        g_free(p);
-    }
-    g_slist_free(md_pending);
-    md_pending = NULL;
-}
-
-void
-md_load_start(void)
-{
-    SoupSession *soup = soup_session_new();
-    SoupMessage *msg =
-        soup_message_new("GET", "https://models.dev/api.json");
-
-    /* Le message appartient à la session après l'appel. */
-    soup_session_send_and_read_async(soup, msg, G_PRIORITY_DEFAULT,
-                                     NULL, md_load_done, NULL);
 }
 
 void
@@ -400,17 +503,10 @@ models_fetch_done(GObject *source, GAsyncResult *res, gpointer data)
         g_error_free(err);
     }
 
-    /* Livraison différée : enrichir d'abord depuis models.dev
-     * (certains providers — OpenCode Zen — ne renvoient aucun nom). */
-    if (!md_started) {
-        md_started = TRUE;
-        md_load_start();
-    }
-    if (md_names != NULL)
-        md_deliver(f, models);
-    else
-        md_pending = g_slist_append(md_pending,
-                                    md_deferred_new(f, models));
+    /* L'enrichissement est local et synchrone : les noms viennent des TOML
+     * vendorés, il n'y a plus rien à attendre d'un aller-réseau. La liste part
+     * donc dès ici — plus de file d'attente, plus de callback différé. */
+    md_deliver(f, models);
 }
 
 void
@@ -1039,6 +1135,11 @@ llm_config_provider_names(void)
                 names = g_new0(char *, n + 1);
                 for (GList *l = members; l != NULL; l = l->next)
                     names[i++] = g_strdup(l->data);
+                /* Les maillons sont neufs, mais les chaines qu'ils portent
+                 * sont les cles du hash table interne de l'objet : empruntees,
+                 * pas copiees. Donc g_list_free() SEUL — g_list_free_full()
+                 * libererait les cles de l'objet (double free). */
+                g_list_free(members);
             }
         }
     }

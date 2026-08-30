@@ -551,9 +551,16 @@ update_diff(App *app)
     if (app->diffbar == NULL)
         return;
     ranges = g_ptr_array_new_with_free_func(g_free);
-    if (app->current_file != NULL && app->saved_content != NULL)
-        cdb_diff_compute(app->saved_content, buffer_text(app), ranges, &total);
-    else
+    if (app->current_file != NULL && app->saved_content != NULL) {
+        /* buffer_text() est propriétaire : gtk_text_buffer_get_text() copie.
+         * Déjà respecté ailleurs (g_free apres l'appel) mais oublie ici, ou le
+         * resultat etait passe inline — une copie du fichier entier a chaque
+         * passage du debounce. */
+        char *current = buffer_text(app);
+
+        cdb_diff_compute(app->saved_content, current, ranges, &total);
+        g_free(current);
+    } else
         total = 0;
     cdb_diff_bar_set_ranges(CDB_DIFF_BAR(app->diffbar), ranges, total);
     g_ptr_array_free(ranges, TRUE);

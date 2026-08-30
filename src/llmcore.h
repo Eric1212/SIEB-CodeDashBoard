@@ -16,21 +16,10 @@ void
 llm_models_free(LlmModelInfo *models);
 
 void
-md_enrich(LlmModelInfo *models, const char *provider);
+md_enrich(LlmModelInfo *models);
 
 void
 md_deliver(ModelsFetch *f, LlmModelInfo *models);
-
-MdPending *
-md_deferred_new(ModelsFetch *f, LlmModelInfo *models);
-
-void
-md_load_done(GObject *source, GAsyncResult *res,
-             gpointer G_GNUC_UNUSED data)
-;
-
-void
-md_load_start(void);
 
 void
 models_fetch_done(GObject *source, GAsyncResult *res, gpointer data);

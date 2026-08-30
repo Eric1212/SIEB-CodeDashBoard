@@ -238,27 +238,17 @@ typedef struct {
 } CreditsFetch;
 
 /* ------------------------------------------------ */
-/* models.dev : noms lisibles par provider           */
+/* models.dev : noms lisibles des modèles            */
 /*                                                   */
 /* Certains providers (OpenCode Zen) ne renvoient    */
-/* aucun nom dans /models. Leur client puise les     */
-/* métadonnées dans models.dev/api.json : clé        */
-/* provider → { models : { slug : { name } } }.      */
-/* On charge ce JSON une fois, puis on enrichit les  */
-/* listes avant de livrer les callbacks.             */
+/* aucun nom dans /models. Les métadonnées viennent  */
+/* du tree models.dev vendoré sous                   */
+/* third_party/models-dev/models, lu à la demande    */
+/* par md_enrich() — plus d'api.json, plus de        */
+/* chargement initial, plus de file d'attente.       */
+/*                                                   */
+/* Voir llmcore.c pour les règles de résolution.     */
 /* ------------------------------------------------ */
-
-extern GHashTable * md_names;
-extern GSList     * md_pending;
-
-typedef struct {
-    ModelsFetch  *f;
-    LlmModelInfo *models;
-} MdPending;
-
-
-/* Complète les noms manquants depuis le cache models.dev. */
-
 /* ------------------------------------------------------------------ */
 /* Tuile chat                                                         */
 /* ------------------------------------------------------------------ */
