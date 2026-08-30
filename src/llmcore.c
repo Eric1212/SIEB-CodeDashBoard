@@ -548,7 +548,12 @@ llm_models_fetch(const char *provider, LlmModelsCallback cb,
         md_deliver(f, NULL);
         return;
     }
-    /* La session possède msg après l'appel : NE PAS unref ici.     * Variante « read » : tout le corps en mémoire (les /models sont
+    /* Règle mesurée au weak pointer, voir llm_send_attempt : send_async ne
+     * vole pas la référence de l'appelant — la session tient la sienne et la
+     * rend à la fin, c'est donc à nous de rendre la nôtre. Ce site ne le
+     * fait pas encore : un message survit par fetch (GET sans corps,
+     * quelques Ko, contre 2,7 Mo par tour côté chat).
+     * Variante « read » : tout le corps en mémoire (les /models sont
      * petits) — le finish correspondant est send_and_read_finish. */
     soup_session_send_and_read_async(f->soup, msg, G_PRIORITY_DEFAULT,
                                      NULL, models_fetch_done, f);
@@ -859,7 +864,10 @@ llm_credits_fetch(const char *provider, LlmCreditsCallback cb,
                                 "Authorization", auth);
     g_free(auth);
 
-    /* La session possède msg après l'appel : NE PAS unref ici. */
+    /* Règle mesurée au weak pointer, voir llm_send_attempt : send_async ne
+     * vole pas la référence de l'appelant, la session rend seulement la
+     * sienne. Elle n'est donc pas rendue ici : un message survit par poll
+     * (GET sans corps, quelques Ko — contre 2,7 Mo par tour côté chat). */
     soup_session_send_and_read_async(f->soup, msg, G_PRIORITY_DEFAULT,
                                      NULL, credits_fetch_done, f);
     return TRUE;
@@ -3457,6 +3465,11 @@ llm_request_free(LlmRequest *req)
     g_free(req->url);
     g_free(req->body);
     g_free(req->auth);
+    /* Le message du dernier tour, lui, n'a pas de tentative suivante pour le
+     * deloger : c'est ici qu'il doit partir. Place avant le garde `done` pour
+     * qu'aucun chemin d'erreur — annulation, HTTP, fin de flux — ne l'oublie.
+     * Sur une conversation de 2,7 Mo, c'etait 2,7 Mo par tour qui restaient. */
+    g_clear_object (&req->msg);
     if (req->pending != NULL)
         g_string_free(req->pending, TRUE);
     if (req->done)
@@ -3960,9 +3973,11 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
                               sizeof(req->scratch), G_PRIORITY_DEFAULT,
                               req->core->cancel, llm_stream_read, req);
 }
-/* Un essai d'envoi : reconstruit un SoupMessage neuf depuis la
- * requête stockée (la session possède le message après send_async,
- * donc chaque tentative repart d'une instance fraîche). */
+/* Un essai d'envoi : reconstruit un SoupMessage neuf depuis la requête
+ * stockée. Contre l'intuition — et contre l'ancien commentaire, qui disait
+ * que « la session possède le message après send_async » : send_async ne vole
+ * PAS la référence de l'appelant, la session tient la sienne et la rend à la
+ * fin. C'est donc bien à nous de rendre la nôtre, voir plus bas. */
 void
 llm_send_attempt(LlmRequest *req)
 {
@@ -4012,6 +4027,12 @@ llm_send_attempt(LlmRequest *req)
 
         llm_busy_set(tv, TRUE); /* icône pause = annuler */
     }
+    /* Le message de la tentative precedente — une ratee, un retry 429 —
+     * n'est tenu que par nous : libsoup rend SA reference quand la requete
+     * se termine (verifie au weak pointer, pas au souvenir). Sans ce clear,
+     * chaque tentative laisse un SoupMessage et sa copie du corps — la
+     * conversation entiere serialisee — sans plus aucun pointeur dessus. */
+    g_clear_object (&req->msg);
     req->msg = msg;
     soup_session_send_async(req->core->soup, msg, G_PRIORITY_DEFAULT,
                             req->core->cancel, llm_send_done, req);
@@ -4909,7 +4930,8 @@ llm_body_build(LlmTile *t)
             json_builder_begin_array(builder);
 
             /* Persona utilisateur + politique du canal tools. */
-            base_persona = llm_persona_load(t);            persona = g_strconcat(base_persona != NULL
+            base_persona = llm_persona_load(t);
+            persona = g_strconcat(base_persona != NULL
                                       ? base_persona : "",
                                   _(tools_policy), NULL);
             g_free(base_persona);
