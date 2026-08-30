@@ -17,7 +17,7 @@ TARGET  := cdb
 # silencieusement sur les msgid (anglais pivot), et un utilisateur francophone
 # verrait son interface passer en anglais après un `make clean`. `mo` est
 # phony mais dépend des fichiers .mo : msgfmt ne relance qu'au besoin.
-all: $(TARGET) mo
+all: $(TARGET) mo tools
 
 $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LIBS) $(LDFLAGS)
@@ -27,6 +27,26 @@ $(TARGET): $(OBJ)
 
 run: $(TARGET) mo
 	./$(TARGET)
+
+# --- Deps vendorées : checker + updater -------------------------------
+# refresh_third_party lit third_party/manifest.toml et compare chaque pin au
+# HEAD amont. Il se moque de GTK et de libsoup : flags dédiés, sinon -MMD lui
+# accoucherait d'un .d orphelin et --cflags gtk irait chercher des headers
+# qu'il ne regarde pas.
+TOOLS     := tools/refresh_third_party
+TOOLFLAGS := -std=c17 -O1 -Wall -Wextra
+TOOLDEPS  := tools/refresh_third_party.c third_party/tomlc17/tomlc17.c \
+             third_party/tomlc17/tomlc17.h
+
+tools: $(TOOLS)
+
+$(TOOLS): $(TOOLDEPS)
+	$(CC) $(TOOLFLAGS) -I third_party/tomlc17 -o $@ tools/refresh_third_party.c third_party/tomlc17/tomlc17.c
+
+# .git/hooks/ n'est pas versionné : le hook vit dans tools/git-hooks/ et ce
+# script le copie en le rendant exécutable. À lancer après un fresh clone.
+install-hooks:
+	./tools/install_git_hooks.sh
 
 # Build avec AddressSanitizer + UBSan (debug de corruption mémoire).
 asan:
@@ -138,10 +158,9 @@ i18n-check:
 	done; exit $$fail
 
 clean:
-	rm -f $(OBJ) $(DEP) $(TARGET)
+	rm -f $(OBJ) $(DEP) $(TARGET) $(TOOLS)
 	rm -rf $(LOCALEDIR)
 
 # Dépendances de headers générées par -MMD (ignorées si absentes).
 -include $(DEP)
-
-.PHONY: all run asan clean pot po mo i18n-check
+.PHONY: all run asan clean pot po mo i18n-check tools install-hooks

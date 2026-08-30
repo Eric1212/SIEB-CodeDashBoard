@@ -1,0 +1,52 @@
+# CodeDashBoard — third_party manifest
+#
+# Source de vérité unique pour les dépendances vendorées. Voir
+# tools/refresh_third_party.c pour le checker / updater, et
+# tools/git-hooks/post-commit qui le déclenche à chaque commit.
+#
+# Modes :
+#   "submodule" : git submodule, pinné dans .gitmodules ; refresh via
+#                 `git submodule update --remote --merge`.
+#   "vendored"  : fichiers téléchargés depuis raw.githubusercontent.com
+#                 et committés dans le repo ; refresh via curl par fichier.
+#   "tree"      : un ou plusieurs CHEMINS amont (répertoires comme fichiers),
+#                 matérialisés par un clone sparse à profondeur 1 verrouillé
+#                 sur le commit pinné ; refresh via git.
+#
+# Le champ "files" liste les fichiers vendorés au format "src:dest" où src est
+# le path dans le repo upstream et dest le path dans third_party/<name>/.
+# Le champ "paths" attend des chemins amont bruts, sans destination : ils sont
+# reproduits tels quels sous third_party/<name>/. Ignoré pour les submodules.
+[tomlc17]
+mode     = "vendored"
+upstream = "https://github.com/cktan/tomlc17"
+ref      = "main"
+commit   = "64a063b8636a4b48d142f978270f5e53e605e240"
+license  = "MIT"
+files    = [
+    "src/tomlc17.c:tomlc17.c",
+    "src/tomlc17.h:tomlc17.h",
+    "LICENSE:LICENSE",
+    "README.md:README.md",
+]
+
+# models.dev — registre des modèles (fournisseur, slug) → nom lisible.
+# La branche dev est le portage TOML du monstre api.json (4,3 Mio de texte,
+# ~20 Mio de DOM json-glib) que CDB chargeait au premier /models. Un fichier
+# par modèle, 295 Kio au total : CDB nomme un modèle sans réseau.
+#
+# Mode « tree », pas « vendored » : files[] compterait ici 364 lignes écrites
+# d'avance, et un modèle paru en amont y resterait invisible tant que
+# personne ne pense à régénérer la liste — le hook téléchargerait sagement
+# l'inventaire au lieu de l'arbre. paths[] nomme des chemins ; c'est l'arbre
+# amont qui fait foi à chaque bump.
+[models-dev]
+mode     = "tree"
+upstream = "https://github.com/anomalyco/models.dev"
+ref      = "dev"
+commit   = "ff4bb8eba4fb758fd077e7e2b4ac798fd6846726"
+license  = "MIT"
+paths    = [
+    "models",
+    "LICENSE",
+]

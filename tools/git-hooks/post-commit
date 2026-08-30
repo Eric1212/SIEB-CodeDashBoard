@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Post-commit hook CodeDashBoard — déclenche refresh_third_party --auto.
+#
+# But : voir le tableau d'état des deps vendorées (pin vs HEAD amont) collé
+# juste après le commit, sans avoir à lancer quoi que ce soit à la main.
+# --auto est throttlé à 24 h : hors de ce délai le tableau sort du cache, ce
+# qui rend le hook quasi instantané et sans réseau à chaque commit.
+#
+# Installé via `make install-hooks` depuis la racine du repo.
+# Source de vérité : tools/git-hooks/post-commit (versionné).
+
+# Binaire absent (fresh clone sans build) = skip silencieux : un hook qui
+# échoue ne doit jamais faire échouer le commit qui l'a déjà.
+if [ -x tools/refresh_third_party ]; then
+    exec tools/refresh_third_party --auto
+fi
+
+exit 0

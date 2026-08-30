@@ -14,3 +14,11 @@ cdb
 # Traductions compilées (générées par make mo)
 *.mo
 po/locale/
+
+# Arbre de travail du mode "tree" de refresh_third_party : clone sparse
+# éphémère sous third_party/, jamais versionné (le contenu vendu, lui, l'est).
+third_party/.tree-tmp-*
+
+# Binaire de l'outil de refresh — sa source (tools/refresh_third_party.c) et
+# son manifest sont versionnés, pas le programme compilé.
+tools/refresh_third_party
