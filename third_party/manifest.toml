@@ -17,6 +17,10 @@
 # le path dans le repo upstream et dest le path dans third_party/<name>/.
 # Le champ "paths" attend des chemins amont bruts, sans destination : ils sont
 # reproduits tels quels sous third_party/<name>/. Ignoré pour les submodules.
+# Le champ "watch" (optionnel) déplace le SHA cible : le "latest" devient le
+# dernier commit AYANT TOUCHÉ ce chemin, au lieu du HEAD de "ref". À mettre sur
+# toute dep qui ne copie qu'un sous-répertoire d'un dépôt très fréquenté — sans
+# lui, le hook annonce un retard pour des commits qui ne nous concernent pas.
 [tomlc17]
 mode     = "vendored"
 upstream = "https://github.com/cktan/tomlc17"
@@ -44,7 +48,14 @@ files    = [
 mode     = "tree"
 upstream = "https://github.com/anomalyco/models.dev"
 ref      = "dev"
-commit   = "ff4bb8eba4fb758fd077e7e2b4ac798fd6846726"
+# Suivre models/, pas la branche : dev avance surtout sur providers/ (les
+# sync des catalogues de fournisseurs, plusieurs fois par jour). Sans ce
+# champ, le pin serait le HEAD de branche et le hook annoncerait un retard
+# pour un contenu qu'on ne copie pas — mesuré : 114 commits de « BEHIND »
+# pour 0 fichier changé sous models/. Le pin devient donc « le dernier état
+# de CE qu'on copie », qui est aussi ce qu'on materialise vraiment.
+watch    = "models"
+commit   = "0192737626c161e7bebc953e0069f17d2f480d6d"
 license  = "MIT"
 paths    = [
     "models",

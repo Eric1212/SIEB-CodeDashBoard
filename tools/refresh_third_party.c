@@ -9,6 +9,14 @@
  *                 listés dans paths[]
  *   "submodule" : pinned via .gitmodules, refresh = git submodule update
  *
+ * Champs optionnels qui déplacent le SHA cible :
+ *   tracks_submodule_of = "parent:chemin"  → le SHA du submodule du parent
+ *   watch = "chemin"  → le DERNIER COMMIT AYANT TOUCHÉ ce chemin sur la ref,
+ *              au lieu du HEAD de la branche. Pour une dep qui ne vendorise
+ *              qu'un sous-répertoire : sinon le tablier agité du reste du
+ *              dépôt la fait passer pour en retard sur chaque commit, et le
+ *              statut ne veut plus rien dire. Voir fetch_latest_sha_at_path.
+ *
  * Usage :
  *   refresh_third_party                  # check all, table status
  *   refresh_third_party --bump <name>    # fetch latest pour <name>, rewrite manifest
@@ -57,14 +65,14 @@ static int parse_owner_repo(const char *url, char *out, size_t cap) {
     return 0;
 }
 
-/* Lit le SHA HEAD d'une ref via l'API github. Stocke 40 chars + NUL.
-   Pas de parsing JSON complet : on cherche le premier "sha":"..." de la
-   réponse, ce qui est toujours le commit du HEAD pour cet endpoint. */
-static int fetch_latest_sha(const char *owner_repo, const char *ref, char out[41]) {
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-             "curl -sS 'https://api.github.com/repos/%s/commits/%s' 2>/dev/null",
-             owner_repo, ref);
+/* Extrait le premier "sha":"..." d'une réponse de l'API github. Pas de parsing
+   JSON complet : sur les deux endpoints utilisés ici, le premier sha de la
+   réponse EST le commit demandé — objet unique pour /commits/<ref>, et pour
+   /commits?sha=&path= le tableau commence par le commit le plus récent, dont
+   "sha" est le premier champ de l'objet. Vérifié sur les réponses réelles. */
+static int first_sha_of(const char *url, char out[41]) {
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "curl -sS '%s' 2>/dev/null", url);
     FILE *fp = popen(cmd, "r");
     if (!fp) return -1;
     char buf[8192];
@@ -87,6 +95,36 @@ static int fetch_latest_sha(const char *owner_repo, const char *ref, char out[41
     }
     out[40] = '\0';
     return 0;
+}
+
+/* Lit le SHA HEAD d'une ref via l'API github. Stocke 40 chars + NUL. */
+static int fetch_latest_sha(const char *owner_repo, const char *ref, char out[41]) {
+    char url[512];
+    snprintf(url, sizeof(url), "https://api.github.com/repos/%s/commits/%s",
+             owner_repo, ref);
+    return first_sha_of(url, out);
+}
+
+/* Lit le SHA du DERNIER COMMIT AYANT TOUCHÉ un chemin, sur une ref.
+   Ce qu'il faut à une dep qui ne vendorise qu'un sous-répertoire du dépôt :
+   le HEAD de la branche avance sur tout le reste (modèles.dev synchronise ses
+   catalogues de fournisseurs plusieurs fois par jour), et une dep qui le suit
+   se déclare éternellement en retard pour un contenu qui n'a pas bougé — un
+   signal qui force à ouvrir le diff pour découvrir qu'il est vide. Suivre le
+   chemin rend le statut vrai : BEHIND veut alors dire « il y a du nouveau ici ».
+
+   Le mirror matériel n'y change rien : les commits entre le dernier ayant
+   touché le chemin et le HEAD de la branche ne touchent QUE d'autres chemins,
+   donc l'arbre du chemin suivi est le même des deux côtés. Ce qui change est
+   la assertion du manifest : « ce pin est le dernier état de CE que nous
+   copions », et non « nous étions là dans la branche ». */
+static int fetch_latest_sha_at_path(const char *owner_repo, const char *ref,
+                                    const char *path, char out[41]) {
+    char url[512];
+    snprintf(url, sizeof(url),
+             "https://api.github.com/repos/%s/commits?sha=%s&path=%s&per_page=1",
+             owner_repo, ref, path);
+    return first_sha_of(url, out);
 }
 
 /* Sk8-post : Récupère le SHA d'un submodule (mode=160000) à un path donné
@@ -284,6 +322,12 @@ typedef struct {
        puis dear-imgui suit (les deux atterrissent cohérents).
        NULL = mode classique (master HEAD de upstream). */
     const char *tracks_submodule_of;
+    /* Chemin amont à poursuivre, au lieu du HEAD de la ref : le SHA cible
+       devient le dernier commit AYANT TOUCHÉ ce chemin. Une dep qui ne
+       vendorise qu'un sous-répertoire du dépôt a besoin de ça, sinon elle
+       se déclare en retard sur chaque commit sans rapport avec son
+       périmètre. NULL = HEAD de la ref (comportement historique). */
+    const char *watch;
     toml_datum_t files;   /* mode "vendored" : TOML_ARRAY de "src:dest[:exec]" */
     toml_datum_t paths;   /* mode "tree"     : TOML_ARRAY de chemins amont    */
 } dep_t;
@@ -296,16 +340,19 @@ static int dep_from_toml(const char *name, toml_datum_t tab, dep_t *out) {
     out->commit               = toml_seek(tab, "commit").u.s;
     out->license              = toml_seek(tab, "license").u.s;
     out->tracks_submodule_of  = toml_seek(tab, "tracks_submodule_of").u.s;
+    out->watch                = toml_seek(tab, "watch").u.s;
     out->files                = toml_seek(tab, "files");
     out->paths                = toml_seek(tab, "paths");
     return (out->mode && out->upstream && out->ref && out->commit) ? 0 : -1;
 }
 
-/* Résout le SHA cible pour un dep. Si tracks_submodule_of est défini, query
-   le submodule du parent à son **HEAD** upstream (pas à son commit pinné !) :
-   le tracker veut savoir où devrait aller le child si on bumpait le parent.
-   Comparer au pin parent cacherait toute disponibilité de bump. Sinon
-   (mode classique), query HEAD du propre upstream. */
+/* Résout le SHA cible d'une dep. Trois cas, par priorité :
+   - tracks_submodule_of : le SHA du submodule au path donné dans le HEAD
+     upstream du parent (voir le Sk8-post dans dep_t) ;
+   - watch : le dernier commit AYANT TOUCHÉ ce chemin sur la ref, et non le
+     HEAD de la branche — ce qu'il faut à une dep qui ne vendorise qu'un
+     sous-répertoire (voir fetch_latest_sha_at_path) ;
+   - sinon : le HEAD de la ref. */
 static int resolve_latest_sha(const dep_t *dep, const dep_t *all_deps, int n_all,
                                 char out[41]) {
     if (dep->tracks_submodule_of && dep->tracks_submodule_of[0]) {
@@ -333,6 +380,8 @@ static int resolve_latest_sha(const dep_t *dep, const dep_t *all_deps, int n_all
     }
     char owner_repo[128];
     if (parse_owner_repo(dep->upstream, owner_repo, sizeof(owner_repo)) != 0) return -1;
+    if (dep->watch && dep->watch[0])
+        return fetch_latest_sha_at_path(owner_repo, dep->ref, dep->watch, out);
     return fetch_latest_sha(owner_repo, dep->ref, out);
 }
 
