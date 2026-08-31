@@ -3487,6 +3487,22 @@ llm_request_free(LlmRequest *req)
      * livre QU'UN callback (garantie GAsyncReadyCallback) et core->cur_req
      * est remis a NULL en tete de cette fonction, avant toute liberation. */
     g_free(req);
+    /* Le tour se termine ici, et c'est ICI qu'il faut rendre les pages, pas
+     * seulement apres la sauvegarde du live. L'ordre d'un tour est : push ->
+     * llm_live_save (trim la) -> llm_send -> llm_body_build (arbre json de
+     * la conversation entiere + son texte) -> g_strdup du corps dans le
+     * message -> streaming (reply, pending, un JsonParser par evenement SSE)
+     * -> cette liberation. Le pic de ~6 Mo d'un fil de 800 Ko nait DONC
+     * apres le dernier trim disponible, et comme la reponse qui suit a deja
+     * pose des objets sur les blocs libres, malloc_trim ne peut plus rien
+     * reprendre : le trou reste inscrit au plancher. Mesure sur la session
+     * reelle (tick.sh, 186 s, 13 messages) : +10 108 Ko de RAM privee pour
+     * +16 Ko de conversation, soit ~778 Ko par tour — la taille de la
+     * conversation, pas celle du message. Avec le trim de llmlive.c, les
+     * sauvegardes rendaient bien leurs pages (-1036 et -256 Ko constates),
+     * mais le plancher montait quand meme a chaque tour : c'est ce pic-la
+     * qui n'etait jamais rendu. Un appel par tour, 0,2 a 1 ms (mem.c). */
+    cdb_mem_trim();
 }
 
 /* Réassemblage des lignes SSE. Le buffer est DYNAMIQUE (GString) : une
@@ -3565,6 +3581,8 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
     if (error != NULL) {
         gboolean cancelled = g_error_matches(error, G_IO_ERROR,
                                              G_IO_ERROR_CANCELLED);
+        gboolean timed_out = !cancelled &&
+            g_error_matches(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
 
         if (cancelled) {
             g_error_free(error);
@@ -3580,13 +3598,43 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
             llm_request_free(req);
             return;
         }
-        for (vi = 0; vi < c->views->len; vi++)
-            hist_append(g_ptr_array_index(c->views, vi), error->message);
+        if (timed_out) {
+            /* Timeout en cours de flux (idle ~120 s du provider/proxy).
+             * On relance la requête entière sur la config 5xx. Le
+             * contenu partiel déjà rendu dans les vues sera remplacé
+             * par hist_update_reply au prochain appel (incohérence
+             * len < rendered_len → re-rendu complet depuis reply_mark). */
+            LlmRetry5xx rc;
+            gboolean    infinite;
+
+            llm_retry5xx_load(&rc);
+            infinite = rc.max_retries == 0;
+            if (rc.retry && (infinite || req->attempt < rc.max_retries)) {
+                req->attempt++;
+                g_string_truncate(req->pending, 0);
+                g_string_truncate(c->reply, 0);
+                c->in_reasoning = FALSE;
+                if (req->stream != NULL) {
+                    g_input_stream_close(req->stream, NULL, NULL);
+                    g_clear_object(&req->stream);
+                }
+                if (req->attempt == 1) {
+                    core_cdb_announce(c,
+                        _("\n[CDB] Stream timeout — retries in progress…\n"));
+                }
+                g_error_free(error);
+                g_timeout_add((guint)rc.delay_ms, llm_retry_tick, req);
+                return;
+            }
+        }
+        if (!timed_out) {
+            for (vi = 0; vi < c->views->len; vi++)
+                hist_append(g_ptr_array_index(c->views, vi), error->message);
+        }
         g_error_free(error);
         llm_request_free(req);
         return;
     }
-
     if (n <= 0) {
         gboolean has_tools = llm_finalize_pending_tools(c);
 
@@ -3895,8 +3943,36 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
     if (error != NULL) {
         gboolean cancelled = g_error_matches(error, G_IO_ERROR,
                                              G_IO_ERROR_CANCELLED);
+        gboolean timed_out = !cancelled &&
+            g_error_matches(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
 
-        if (!cancelled) {
+        if (timed_out) {
+            /* G_IO_ERROR_TIMED_OUT : le mur idle (~120 s) du provider ou
+             * d'un proxy. Retryable, sur la même config que les 5xx. */
+            LlmRetry5xx rc;
+            gboolean    retry_on;
+            gboolean    infinite;
+            int         max_retries, delay_ms;
+            llm_retry5xx_load(&rc);
+            retry_on = rc.retry;
+            max_retries = rc.max_retries;
+            delay_ms = rc.delay_ms;
+            infinite = max_retries == 0;
+
+            if (retry_on && (infinite || req->attempt < max_retries)) {
+                req->attempt++;
+                g_string_truncate(req->pending, 0);
+                if (req->attempt == 1) {
+                    core_cdb_announce(c,
+                        _("\n[CDB] Timeout — retries in progress…\n"));
+                }
+                g_error_free(error);
+                g_timeout_add((guint)delay_ms, llm_retry_tick, req);
+                return;
+            }
+        }
+
+        if (!cancelled && !timed_out) {
             char *note = g_strdup_printf(_("\n[error: %s]\n"),
                                          error->message);
 
@@ -3911,7 +3987,6 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
     }
     {
         guint status = soup_message_get_status(req->msg);
-
         if (status == 429 ||
             (status >= 500 && status <= 504)) {
             gboolean    is_429 = status == 429;
