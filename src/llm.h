@@ -335,6 +335,13 @@ typedef struct {
     GCancellable *cancel;    /* annulation de la requête en cours */
     LlmRequest   *cur_req;   /* requête active */
     gboolean      stop_requested; /* pause cliquée : jette tout entrant */
+    /* Arête de la boucle agentique pour le ding de fin de tour. La mort
+     * d'une requête ne suffit pas à dire que le tour est fini (round d'outils
+     * en cours, file non vide) : seul core_agent_loop_alive le sait. On mémorise
+     * l'état tenu pour ne sonner QUE le passage vivant→inerte, une fois par
+     * core et non par vue. g_new0 le naît à FALSE : un core qui n'a jamais
+     * travaillé ne dinge pas. */
+    gboolean      loop_alive;
     gboolean      in_reasoning; /* delta courant = thinking */
     GString      *reply;     /* réponse en cours d'accumulation */
     GArray       *history;   /* LlmMsg[] : fil de conversation envoyé */

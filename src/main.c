@@ -34,6 +34,7 @@ extern char **environ;
 #include "layout.h"
 #include "layout.h"
 #include "i18n.h"
+#include "sfx.h"
 
 /* Un fichier ouvert garde son propre buffer (l'historique undo survit à la
  * navigation) et son propre baseline « propre ». */
@@ -2834,7 +2835,8 @@ static GtkWidget *build_harness_form(void);
 static GtkWidget *build_tools_form(void);
 static void on_tool_mode_clicked(GtkButton *btn, gpointer data);
 static GtkWidget *build_initprompt_editor(void);
-static GtkWidget *build_general_form(const char *rest);
+static GtkWidget *build_language_form(void);
+static GtkWidget *build_sounds_form(void);
 
 static GtkWidget *
 build_settings_section(const SettingsSection *sec)
@@ -2885,14 +2887,27 @@ build_settings_section(const SettingsSection *sec)
         body = build_initprompt_editor();
     else if (g_strcmp0(sec->id, "Tools") == 0)
         body = build_tools_form();
-    else if (g_strcmp0(sec->id, "General") == 0)
-        /* La section n'a pas de sous-section : ce branchement doit bien
-         * précéder celui des subs, sinon « General » retombe dans le
-         * placeholder « à venir » qu'il remplace. */
-        body = build_general_form(sec->placeholder);
+    else if (g_strcmp0(sec->id, "Language") == 0)
+        body = build_language_form();
+    else if (g_strcmp0(sec->id, "Sounds") == 0)
+        body = build_sounds_form();
     else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_widget_set_margin_start(body, 16);
+        /* Un parent peut porter à la fois une note ET des sous-accordéons :
+         * Général affiche son « à venir » AU-DESSUS de Language/Sounds, et
+         * chaque enfant reste un accordéon repliable — le motif de LLM, à
+         * l'identique. Une section sans note (LLM) ne change rien. */
+        if (sec->placeholder != NULL) {
+            GtkWidget *note = gtk_label_new(_(sec->placeholder));
+
+            gtk_label_set_wrap(GTK_LABEL(note), TRUE);
+            gtk_label_set_xalign(GTK_LABEL(note), 0.0);
+            gtk_widget_add_css_class(note, "dim-label");
+            gtk_widget_set_margin_top(note, 6);
+            gtk_widget_set_margin_bottom(note, 6);
+            gtk_box_append(GTK_BOX(body), note);
+        }
         for (gsize i = 0; i < sec->n_subs; i++)
             gtk_box_append(GTK_BOX(body),
                            build_settings_section(&sec->subs[i]));
@@ -2938,6 +2953,7 @@ on_provider_save_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
 
     llm_config_save_provider(provider, key);
     gtk_label_set_text(GTK_LABEL(status), _("Saved \u2713"));
+    sfx_play_feedback();   /* ding court : la clé du fournisseur est écrite */
 }
 
 /* ------------------------------------------------ */
@@ -3277,6 +3293,10 @@ harness_apply(GtkWidget *src)
                 (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_max)),
                 (int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(spin_delay)));
     }
+    /* Ding court : un réglage du harnais vient d'être écrit (retry 429 ou
+     * 5xx, switch ou spin). throttlée dans sfx.c — tenir la flèche d'un
+     * spin ne doit pas mitrailler. */
+    sfx_play_feedback();
 }
 
 static void
@@ -3367,6 +3387,7 @@ on_tool_mode_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
     }
     llm_config_save_tool_mode(name, prof, next);
     tool_button_set_mode(btn, next);
+    sfx_play_feedback();   /* ding court : le mode de l'outil est cycles/écrit */
 }
 
 /* Grille Tools : outils en lignes, trois profils en colonnes. Chaque
@@ -3496,7 +3517,11 @@ language_form_mark(GtkWidget *grid)
         g_list_free_full(langs, g_free);
     }
 
-    for (row = 1; row < 40; row++) {
+    /* Balaye depuis la colonne 0, ligne 0 : le formulaire de langue ne met
+     * plus d'en-tête (le titre de l'accordéon le porte), la ligne « système »
+     * occupe donc le premier rang. Les étiquettes de note, attachées en
+     * colonne 0 sans « lang-code », rendent NULL et passent leur chemin. */
+    for (row = 0; row < 40; row++) {
         GtkWidget  *w = gtk_grid_get_child_at(GTK_GRID(grid), 0, row);
         const char *code;
         gboolean    sys, on;
@@ -3559,6 +3584,7 @@ on_language_clicked(GtkButton *btn, gpointer grid)
     if (note != NULL)
         gtk_label_set_text(GTK_LABEL(note), LANG_NOTE);
     language_form_mark(GTK_WIDGET(grid));
+    sfx_play_feedback();   /* ding court : la langue est appliquée puis épinglée */
 }
 
 static void
@@ -3605,27 +3631,101 @@ language_add_row(GtkWidget *grid, int row, const char *code,
     gtk_grid_attach(GTK_GRID(grid), b, 0, row, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), mark, 1, row, 1, 1);
 }
+/* ------------------------------------------------ */
+/* Sons : les deux interruptions sonores              */
+/* ------------------------------------------------ */
 
+/* Une bascule par son. set_active est posé AVANT la connexion du signal
+ * (même discipline que build_harness_form) : à l'ouverture du panneau,
+ * gtk_switch_set_active n'émet rien, donc aucun tic fantôme ni preview
+ * parasite — le son ne part QUE sur un vrai geste. */
+static void
+on_sound_long_toggled(GtkSwitch *sw, GParamSpec G_GNUC_UNUSED *pspec,
+                      gpointer G_GNUC_UNUSED data)
+{
+    gboolean on = gtk_switch_get_active(sw);
+
+    sfx_set_enabled_turn_done(on);
+    if (on)
+        sfx_preview_turn_done();   /* on entend ce que d'activer vient d'armer */
+}
+
+static void
+on_sound_short_toggled(GtkSwitch *sw, GParamSpec G_GNUC_UNUSED *pspec,
+                       gpointer G_GNUC_UNUSED data)
+{
+    gboolean on = gtk_switch_get_active(sw);
+
+    sfx_set_enabled_feedback(on);
+    if (on)
+        sfx_preview_feedback();
+}
+
+/* Bouton ▶ d'une ligne de son. data = 0 (long) ou 1 (court). Il joue
+ * l'aperçu QUEL que soit l'état de la bascule : c'est le banc d'essai qui
+ * répond à « à quoi ressemble ce son, avant que je l'active ? ». */
+static void
+on_sound_preview_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    if (GPOINTER_TO_INT(data) == 0)
+        sfx_preview_turn_done();
+    else
+        sfx_preview_feedback();
+}
+
+/* Une rangée : libellé qui prend la place, bascule, bouton test. Le tout
+ * dans une hbox que la grille de Général posera sur ses deux colonnes. */
 static GtkWidget *
-build_general_form(const char *rest)
+sound_row(const char *label_text, gboolean active, GCallback toggled,
+          int which)
+{
+    GtkWidget *row  = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *lbl  = gtk_label_new(label_text);   /* déjà traduit par l'appelant */
+    GtkWidget *sw   = gtk_switch_new();
+    GtkWidget *play = gtk_button_new_from_icon_name(
+                          "media-playback-start-symbolic");
+
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    gtk_widget_set_valign(lbl, GTK_ALIGN_CENTER);
+    gtk_widget_set_halign(sw, GTK_ALIGN_START);
+    gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text(play, _("Play this sound"));
+
+    gtk_switch_set_active(GTK_SWITCH(sw), active);   /* avant la connexion */
+    g_signal_connect(sw, "notify::active", toggled, NULL);
+    g_signal_connect(play, "clicked",
+                     G_CALLBACK(on_sound_preview_clicked),
+                     GINT_TO_POINTER(which));
+
+    gtk_box_append(GTK_BOX(row), lbl);
+    gtk_box_append(GTK_BOX(row), sw);
+    gtk_box_append(GTK_BOX(row), play);
+    return row;
+}
+
+
+/* Général → Language : un rang par catalogue réellement présent.
+ *
+ * Pas d'en-tête « Language: » ici : le titre de l'accordéon le porte déjà,
+ * exactement comme build_harness_form ne répète pas « Harness » sous LLM. Les
+ * rangées démarquent donc à 0 — et language_form_mark, qui parcourt la colonne
+ * 0, balaie à partir de 0 depuis que la ligne d'en-tête n'existe plus. */
+static GtkWidget *
+build_language_form(void)
 {
     GtkWidget  *grid = gtk_grid_new();
-    GtkWidget  *head = gtk_label_new(_("Language:"));
     GtkWidget  *note;
     GList      *langs, *l;
     const char *sys = g_getenv("LC_ALL");
     char       *sys_lbl;
-    int         row = 1;
+    int         row = 0;
 
     gtk_grid_set_row_spacing(GTK_GRID(grid), 4);
     gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
     gtk_widget_set_margin_start(grid, 24);
     gtk_widget_set_margin_top(grid, 12);
     gtk_widget_set_margin_bottom(grid, 12);
-
-    gtk_widget_add_css_class(head, "heading");
-    gtk_widget_set_halign(head, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), head, 0, 0, 2, 1);
 
     if (sys == NULL || sys[0] == '\0')
         sys = g_getenv("LANG");
@@ -3652,20 +3752,41 @@ build_general_form(const char *rest)
     gtk_grid_attach(GTK_GRID(grid), note, 0, row, 2, 1);
     g_object_set_data(G_OBJECT(grid), "lang-note", note);
 
-    /* La table porte encore N_("(to come: …)") pour cette section : c'est la
-     * seule trace de ce qui reste à faire dans Général. On l'affiche sous les
-     * langues plutôt que de la laisser devenir un msgid mort au catalogue.
-     * Patrons §6.7 : N_() à la définition, _() à l'usage. */
-    if (rest != NULL) {
-        GtkWidget *more = gtk_label_new(_(rest));
-
-        gtk_label_set_wrap(GTK_LABEL(more), TRUE);
-        gtk_label_set_xalign(GTK_LABEL(more), 0.0);
-        gtk_widget_add_css_class(more, "dim-label");
-        gtk_grid_attach(GTK_GRID(grid), more, 0, row + 1, 2, 1);
-    }
-
     language_form_mark(grid);
+    return grid;
+}
+
+/* Général → Sounds : les deux bascules, chacune avec son bouton test ▶. */
+static GtkWidget *
+build_sounds_form(void)
+{
+    GtkWidget *grid = gtk_grid_new();
+    GtkWidget *r_long, *r_short, *snote;
+
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+    gtk_widget_set_margin_start(grid, 24);
+    gtk_widget_set_margin_top(grid, 12);
+    gtk_widget_set_margin_bottom(grid, 12);
+
+    r_long = sound_row(_("End-of-turn sound (when the wait ends):"),
+                       sfx_enabled_turn_done(),
+                       G_CALLBACK(on_sound_long_toggled), 0);
+    gtk_grid_attach(GTK_GRID(grid), r_long, 0, 0, 2, 1);
+
+    r_short = sound_row(_("Change sound (a choice, a save):"),
+                        sfx_enabled_feedback(),
+                        G_CALLBACK(on_sound_short_toggled), 1);
+    gtk_grid_attach(GTK_GRID(grid), r_short, 0, 1, 2, 1);
+
+    snote = gtk_label_new(_("▶ plays the sound as a test, even when the "
+                            "switch is off. Silent if no audio player is "
+                            "installed."));
+    gtk_label_set_wrap(GTK_LABEL(snote), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(snote), 0.0);
+    gtk_widget_add_css_class(snote, "dim-label");
+    gtk_grid_attach(GTK_GRID(grid), snote, 0, 2, 2, 1);
+
     return grid;
 }
 
@@ -3810,6 +3931,7 @@ on_ip_save_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     llm_persona_save(text);
     g_free(text);
     gtk_label_set_text(GTK_LABEL(ctx->status), _("Saved ✓"));
+    sfx_play_feedback();   /* ding court : le persona (Init-Prompt) est écrit */
 }
 
 static GtkWidget *
@@ -4043,8 +4165,15 @@ build_settings(App *app G_GNUC_UNUSED)
         { "Tools",     N_("Tools"),     NULL, NULL, 0 },  /* formulaire outils */
         { "Providers", N_("Providers"), NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
     };
+    /* Général prend le même motif repliable que LLM : deux sous-accordéons
+     * (Language, Sounds), et sa note « à venir » portée par le parent au-
+     * dessus des enfants — build_settings_section sait faire les deux. */
+    static const SettingsSection general_subs[] = {
+        { "Language", N_("Language"), NULL, NULL, 0 },  /* formulaire langue */
+        { "Sounds",   N_("Sounds"),   NULL, NULL, 0 },  /* formulaire sons   */
+    };
     static const SettingsSection sections[] = {
-        { "General",    N_("General"),    N_("(to come: theme, font, indentation…)"), NULL, 0 },
+        { "General",    N_("General"),    N_("(to come: theme, font, indentation…)"), general_subs, G_N_ELEMENTS(general_subs) },
         { "GitHub/Git", "GitHub/Git",     N_("(to come: token, user, repo defaults…)"), NULL, 0 },
         { "LLM",        N_("LLM"),        NULL, llm_subs, G_N_ELEMENTS(llm_subs) },
     };
@@ -4917,6 +5046,12 @@ on_activate(GtkApplication *gtk_app, gpointer data)
             g_free(lang);
         }
     }
+    /* Effets sonores : APRES session_init (les préférences d'activation
+     * vivent dans layout.json, dont le chemin exige le numéro de session).
+     * Résout <dir_binaire>/resources/sounds, choisit le lecteur CLI, lit
+     * l'activation. Sans resources/ ni lecteur, sfx_init ne dit rien et
+     * chaque play se tait — aucune dépendance audio liée, aucun crash. */
+    sfx_init();
 
     /* Tout ce qui depend du numero de session se construit ICI, une fois
      * session_init() passee. Avant, cdb_session vaut encore sa valeur

@@ -16,6 +16,7 @@
 #include "llmlive.h"
 #include "i18n.h"
 #include "mem.h"
+#include "sfx.h"
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 #include <glib/gstdio.h>
@@ -723,6 +724,24 @@ llm_busy_set(LlmTile *t, gboolean busy)
         llm_status_start(t);
     else
         llm_status_stop(t);
+    /* Ding long — la fin du tour, entendue. llm_busy_set est le SEUL point
+     * où tous les chemins convergent (fin de flux, erreur réseau, timeout
+     * épuisé, round d'outils, annulation) : on détecte l'arête ici plutôt
+     * que de la disperser. busy||alive = la boucle tient, on arme le témoin.
+     * Sinon la boucle est inerte : on ne sonne QUE si l'on sortait de vivant
+     * (loop_alive), et JAMAIS sur une pause cliquée (stop_requested — tu
+     * interromps, inutile de te le renvoyer). Le témoin s'efface aussitôt :
+     * c'est ce qui fait qu'une conversation ouverte sur trois tuiles ne
+     * dinge pas trois fois (la loi du miroir, côté oreille). */
+    if (t->core != NULL) {
+        if (busy || alive) {
+            t->core->loop_alive = TRUE;
+        } else {
+            if (t->core->loop_alive && !t->core->stop_requested)
+                sfx_play_turn_done();
+            t->core->loop_alive = FALSE;
+        }
+    }
 
     if (g_getenv("CDB_DEBUG") != NULL)
         g_printerr("CDB: [btn] busy=%d alive=%d views=%u\n", busy, alive,
@@ -2743,6 +2762,11 @@ on_box_choice(GtkWidget G_GNUC_UNUSED *box, IboxChoice choice,
         cdb_decision_approve(c, d);
     else
         cdb_decision_refuse(c, d);
+    /* Ding court — la décision est tombée : oui ou non, la boîte a tranché
+     * et le fil avance. C'est un changement confirmé par Éric, le cas
+     * d'école du feedback. throttlée dans sfx.c : deux clics rapprochés ne
+     * mitraillent pas l'oreille. */
+    sfx_play_feedback();
 }
 
 /* Pose une boîte au bas du fil. Chemin COMMUN des deux sortes de demande :
