@@ -5388,7 +5388,7 @@ main(int argc, char **argv)
     /* NON_UNIQUE : chaque processus est sa propre application — sinon
      * l'enfant délègue son activation au primaire (même ID D-Bus) et
      * meurt, en perturbant la fenêtre du parent. */
-    gtk_app = GTK_APPLICATION(adw_application_new("org.sieb.cdb",
+    gtk_app = GTK_APPLICATION(adw_application_new("ca.sieb.cdb",
                                                   G_APPLICATION_NON_UNIQUE));
     g_signal_connect(gtk_app, "activate", G_CALLBACK(on_activate), app);
 

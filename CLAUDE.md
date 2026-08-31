@@ -3,7 +3,7 @@
 IDE léger sous forme de Dashboard, orienté LLM.
 
 Nomenclature : **SIEB** = entreprise, **CodeDashBoard** = nom long,
-**CDB** = sigle (binaire, logs, app ID `org.sieb.cdb`).
+**CDB** = sigle (binaire, logs, app ID `ca.sieb.cdb`).
 
 ## Vision
 
