@@ -667,6 +667,20 @@ msgid qui se ressemblent. Il a proposé `Delete folder` → **« Nouveau dossier
     sur le MÊME fichier, relisait avant d'écrire. Deux règles, un fichier, et
     une perte silencieuse. La fusion ne laisse plus ce choix.
 
+13. **Une chaîne marquée lue par deux régimes de peinture se résout UNE FOIS.**
+    La signature `CodeDashBoard by SIEB` se lit à deux places : l'étiquette de la
+    titlebar, posée une seule fois à la construction de la fenêtre, et le nom de
+    la fenêtre, recomposé à chaque changement de fichier et à chaque bascule
+    d'occupation. Deux `_()` côte à côte rendraient un écran qui se contredit
+    dès qu'une langue est changée en cours de session — le titre bascule,
+    l'étiquette reste — soit exactement ce que §6.11 interdit : un écran à moitié
+    retraduit ment plus qu'un redémarrage. La règle sépare donc la traduction de
+    la peinture : `cdb_signature()` (`main.c:405`) résout le msgid une fois dans
+    un tampon statique, et les deux sites lisent la même chaîne. Un msgid, deux
+    lecteurs, divergence structurellement impossible. Tampon statique et non
+    `g_strdup` : `mem.c` tient la comptabilité des allocations, et une singleton
+    de la vie du processus y passerait pour une fuite sous `CDB_DEBUG=1`.
+
 ---
 ## 7. Commandes et garde-fous
 
@@ -742,8 +756,33 @@ en connaissance de cause, pas des oublis.
   au modèle dans sa langue d'origine. Décision d'Éric : « à l'utilisateur de
   gérer ça ». Aucun mécanisme de renouvellement n'a été construit, volontairement.
 
-**Dernier état mesuré** : 304 msgids, 301 traduits, 3 voulu, 0 fuzzy,
-`make i18n-check` vert sur `fr` et `en`, build à 0 erreur 0 warning.
+**Trou trouvé après clôture, et corrigé (rév. 11).** La signature
+`CodeDashBoard by SIEB` n'avait **jamais** été marquée. Elle est née dans un
+commit de nomenclature (`d4bc738`, « CodeDashBoard (CDB) partout ») et n'a
+jamais franchi `make pot` : `git log -S` sur `po/` ne rend **aucun** commit la
+concernant. Elle ne figure dans aucune liste de « restés volontairement non
+marqués » (jalons D et E, §6.2), et la clause ci-dessus — « des choix refusés en
+connaissance de cause, pas des oublis » — ne la couvrait donc pas : c'était un
+trou. Marquée avec sa note `TRANSLATORS:` (les deux noms se gardent, seul le mot
+de lien se traduit), gelée par §6.13, rendue en français sous « CodeDashBoard
+par SIEB ». Découverte en relisant le nom de la fenêtre, hors chantier — ce qui
+rappelle §6.8 : un compte de msgids ne prouve jamais l'exhaustivité du marquage.
+**Remisé avec les README** (décision d'Éric) : le dialogue « À propos »
+(`main.c:4878`). Le relevé donne **une** chaîne à marquer — le commentaire de
+`4887`, de la prose — et **une à qualifier**, le copyright de `4890` (`Copyright`
+s'écrit pareil en français : décision d'Éric, pas d'un script). Restent nus et
+**doivent** le rester, par §6.2 : la marque seule `CodeDashBoard`, le nom propre
+`SIEB` des auteurs, et le numéro `"0.1"`. Piège de comptage, relevé au passage :
+le commentaire de `4887` est écrit en deux littéraux adjacents que C concatène —
+**un** msgid, pas deux.
+
+**Dernier état mesuré** : 316 msgids, 313 traduits, 3 voulus, 0 fuzzy,
+`make i18n-check` vert sur `fr` et `en`, build à 0 erreur 0 warning. Compté à la
+grille et non au `grep` : les 10 entrées `#~ ` de `fr.po` sont des archivages,
+pas des doublons — vérifié dans les quatre sens, contrôle négatif à l'appui (un
+msgid dupliqué injecté à dessein fait crier `msgfmt --check` en fatal). Le total
+est passé de 304 (rév. 10) à 315 avant ce lot, puis 316 : un seul msgid ici, la
+signature.
 
 ---
 
@@ -758,4 +797,8 @@ Jalon F, §6.9 (étiquette de protocole) et §6.10 (unités hors gettext). Rév.
 Jalon G — sélecteur de langue, §6.11 et §6.12 ; dans le même cycle, le
 déplacement des racines dans `llm.json`, la règle « chacun fait de son mieux »
 (§6.11 e) et la langue demandée lue dans l'environnement. Rév. 10 : clôture (§8).
+Rév. 11 : après clôture, un trou trouvé et corrigé hors chantier i18n — la
+signature de la titlebar n'avait jamais été marquée. Marquée avec sa note
+`TRANSLATORS:`, règle §6.13 posée sur les deux régimes de peinture, bilan §8
+re-mesuré à la grille.
 Toute modification passe par une révision de ce document.*

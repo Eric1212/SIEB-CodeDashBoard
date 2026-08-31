@@ -478,7 +478,7 @@ update_modified_indicator(App *app)
         if (app->header_file != NULL)
             gtk_label_set_text(app->header_file, "");
     }
-    window_title_sync(app);   /* nom de fenêtre : composition à part (voir sur) */
+    window_title_sync(app);   /* nom de fenêtre : composition à part, plus haut */
 }
 
 /* TRUE si l'item est « sale » : fichier présent dans dirty_store, ou
