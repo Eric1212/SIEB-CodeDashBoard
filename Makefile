@@ -34,7 +34,7 @@ run: $(TARGET) mo
 # accoucherait d'un .d orphelin et --cflags gtk irait chercher des headers
 # qu'il ne regarde pas.
 TOOLS     := tools/refresh_third_party
-TOOLFLAGS := -std=c17 -O1 -Wall -Wextra
+TOOLFLAGS := -std=c23 -O1 -Wall -Wextra
 TOOLDEPS  := tools/refresh_third_party.c third_party/tomlc17/tomlc17.c \
              third_party/tomlc17/tomlc17.h
 
