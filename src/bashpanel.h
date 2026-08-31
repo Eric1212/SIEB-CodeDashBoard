@@ -14,6 +14,11 @@
  * spawn via roots/multi_paths), sinon $HOME. */
 GtkWidget *bash_panel_new(GListStore *roots, GHashTable *multi_paths);
 
+/* Initialise le backend bash permanent au demarrage, independamment de
+ * toute tuile visible : des cet appel, les outils peuvent executer sans
+ * panneau affiche. Idempotent (ne cree le notebook qu'une seule fois). */
+void bash_panel_init(GListStore *roots, GHashTable *multi_paths);
+
 /* Injecte STRICTEMENT la commande dans l'onglet N (au clavier du shell).
  * Aucune plomberie : pas de redirection, pas de sentinelle. */
 gboolean bash_panel_exec_tab(guint index, const char *command);
@@ -52,5 +57,11 @@ void bash_panel_set_busy(guint index, gboolean busy);
 /* Remplace l'onglet N par un terminal FRAIS (même index, même projet) :
  * équivalent du clic « x » + nouvel onglet. No-op si absent. */
 void bash_panel_reset_tab(guint index);
+
+/* Libere le backend bash permanent en fin de process. Le notebook se
+ * finalise alors (s'il n'est plus accroche a une vue) et avec lui les
+ * onglets encore vivants : leurs PTY ferment, comme un « x » sur chaque
+ * terminal au moment de quitter. */
+void bash_panel_shutdown(void);
 
 #endif /* CDB_BASHPANEL_H */

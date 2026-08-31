@@ -2,11 +2,18 @@
  * bashpanel.c : panneau « Bash » — GtkNotebook de 1 à 10 terminaux VTE.
  *
  * Chaque onglet est un VteTerminal avec un vrai shell ($SHELL, fallback
- * /bin/bash) lancé dans $HOME. Le panneau est une vue fraîche : comme les
- * autres pièces, il est détruit/recréé au re-rendu du layout (les sessions
- * en cours ne survivent pas aux splits/removes — voir CLAUDE.md).
+ * /bin/bash) lancé dans le projet courant (sinon $HOME).
+ *
+ * DECOUPLAGE (loi : le layout ne fait QUE rendre). Le notebook et ses
+ * terminaux sont un backend PERMANENT (cdb_first_panel, ref forte) cree une
+ * fois par process par bash_panel_init() : les outils cdb_bash executent
+ * sans aucune tuile « bash » affichée. bash_panel_new() n'est qu'une VUE qui
+ * EMPRUNTE ce notebook ; le retirer du layout le dé-arente mais ne tue rien
+ * (sonde VTE : un terminal unrealized garde son PTY et sa sortie). Seuls les
+ * ACTES humains ferment un terminal : le « x » et le reset ALLOW+ passent
+ * par gtk_notebook_remove_page(), qui finalise le VteTerminal et ferme son
+ * PTY (SIGHUP).
  */
-
 #include "bashpanel.h"
 #include "i18n.h"
 #include <string.h>
@@ -182,7 +189,7 @@ on_add_tab_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
 /* Panneau                                           */
 /* ------------------------------------------------ */
 
-static GtkWidget *cdb_first_panel = NULL; /* référence FAIBLE */
+static GtkWidget *cdb_first_panel = NULL; /* backend PERMANENT (ref forte) */
 
 /* Un panneau bash est-il disponible pour un appel d'outil ? */
 gboolean
@@ -528,30 +535,38 @@ bash_panel_destroy(GtkWidget G_GNUC_UNUSED *w, gpointer data)
     }
 }
 
-GtkWidget *
-bash_panel_new(GListStore *roots, GHashTable *multi_paths)
+/* Crée UNE fois le backend bash permanent : le notebook singleton et son
+ * BashPanel, tenus par une ref FORTE. Appelé au démarrage (bash_panel_init)
+ * et, par sûreté, à chaque création de vue. Dès ici cdb_first_panel ne
+ * repart plus à NULL (plus de pointeur faible) : les outils peuvent exécuter
+ * sans qu'aucune tuile « bash » ne soit affichée. roots/multi_paths sont
+ * re-fixés à chaque appel — la sélection du projet se résout au spawn. */
+static void
+bash_backend_ensure(GListStore *roots, GHashTable *multi_paths)
 {
-    BashPanel *p = g_new0(BashPanel, 1);
+    BashPanel *p;
 
+    if (cdb_first_panel != NULL) {
+        p = g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel");
+        if (p != NULL) {
+            p->roots = roots;
+            p->multi_paths = multi_paths;
+        }
+        return;
+    }
+
+    p = g_new0(BashPanel, 1);
     p->notebook = gtk_notebook_new();
     p->roots = roots;
     p->multi_paths = multi_paths;
+    /* Ref FORTE : le notebook survit au démontage de l'arbre de layout.
+     * render_layout() fait un gtk_widget_unparent() qui, SANS cette ref,
+     * finaliserait le notebook -> ses pages -> la fermeture des PTY. Une
+     * vue ne fait qu'EMPRUNTER le notebook ; la dernière ref n'est lâchée
+     * qu'à bash_panel_shutdown(). C'est le découplage rendu/état. */
+    g_object_ref_sink(p->notebook);
     g_object_set_data_full(G_OBJECT(p->notebook), "bash-panel", p, g_free);
-    /* Enregistrement TOUJOURS sur le dernier panneau créé : lors d'un
-     * re-rendu du layout, si le nouveau était créé avant la destruction
-     * de l'ancien, il ne s'enregistrait pas — et le pointeur faible
-     * repartait à NULL avec l'ancien (bash « absent » pour les outils). */
-    if (cdb_first_panel != NULL)
-        g_object_remove_weak_pointer(G_OBJECT(cdb_first_panel),
-                                     (gpointer *)&cdb_first_panel);
-    g_object_add_weak_pointer(G_OBJECT(p->notebook),
-                              (gpointer *)&cdb_first_panel);
-    if (cdb_first_panel != NULL)
-        g_object_remove_weak_pointer(G_OBJECT(cdb_first_panel),
-                                     (gpointer *)&cdb_first_panel);
     cdb_first_panel = p->notebook;
-    g_object_add_weak_pointer(G_OBJECT(p->notebook),
-                              (gpointer *)&cdb_first_panel);
     g_signal_connect(p->notebook, "destroy", G_CALLBACK(bash_panel_destroy), p);
 
     /* Bouton « + » : nouvel onglet (désactivé à la limite). */
@@ -561,8 +576,50 @@ bash_panel_new(GListStore *roots, GHashTable *multi_paths)
     g_signal_connect(p->add_btn, "clicked", G_CALLBACK(on_add_tab_clicked), p);
     gtk_notebook_set_action_widget(GTK_NOTEBOOK(p->notebook), p->add_btn,
                                    GTK_PACK_START);
+}
 
-    /* Au moins un terminal — mais SPAWN DIFFÉRÉ : voir bash_first_spawn_idle. */
-    p->first_spawn_idle = g_idle_add(bash_first_spawn_idle, p);
-    return p->notebook;
+/* Point d'entrée du démarrage : rend le backend bash disponible pour les
+ * outils AVANT toute tuile visible, sans créer d'onglet (création lazy). */
+void
+bash_panel_init(GListStore *roots, GHashTable *multi_paths)
+{
+    bash_backend_ensure(roots, multi_paths);
+}
+
+/* Fabrique de VUE. La tuile « bash » n'est qu'un support d'affichage du
+ * notebook singleton. S'il est encore accroché à une vue précédente
+ * (modale « tuile autonome »), on le détache avant de le re-parenter : la
+ * ref forte du backend le maintient vivant entre les deux, et AUCUN onglet
+ * existant n'est perdu — les shells survivent désormais aux re-rendus. */
+GtkWidget *
+bash_panel_new(GListStore *roots, GHashTable *multi_paths)
+{
+    BashPanel *p;
+
+    bash_backend_ensure(roots, multi_paths);
+    p = g_object_get_data(G_OBJECT(cdb_first_panel), "bash-panel");
+
+    /* Premier onglet d'une vue fraîche — mais SPAWN DIFFÉRÉ au boot pour
+     * résoudre le projet courant : voir bash_first_spawn_idle. */
+    if (p != NULL && p->count == 0 && p->first_spawn_idle == 0)
+        p->first_spawn_idle = g_idle_add(bash_first_spawn_idle, p);
+
+    /* Emprunt : en re-rendu l'ancien arbre est déjà démonté (parent NULL) ;
+     * seule une modale ouverte peut encore tenir le notebook. */
+    if (gtk_widget_get_parent(cdb_first_panel) != NULL)
+        gtk_widget_unparent(cdb_first_panel);
+
+    return cdb_first_panel;
+}
+
+/* Fin de process : lâche la ref forte du singleton. Le notebook se
+ * finalise alors (s'il n'est plus dans un arbre), et avec lui ses onglets
+ * vivants — leurs PTY ferment, comme un « x » sur chaque terminal au quit. */
+void
+bash_panel_shutdown(void)
+{
+    if (cdb_first_panel == NULL)
+        return;
+    g_object_unref(cdb_first_panel);
+    cdb_first_panel = NULL;
 }

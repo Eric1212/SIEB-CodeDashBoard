@@ -37,6 +37,30 @@ l'explorateur : `roots`, `last_file`), `llm_live.json`, `llm_slots/`,
 `prompts/`. Il n'y a plus de `window.json` ni de `roots.json` : les deux ont
 été absorbés au Jalon G, chacun sous un membre de son fichier d'accueil.
 
+## Loi du layout : rendre ≠ posséder
+
+Le layout (`layout.json`) est un modèle de **placement**. `render_layout()` ne
+fait que **rendre** ce modèle en arbre de widgets : il n'est jamais la cause
+d'un état. Corollaire — une capacité ne dépend jamais de la **présence** d'une
+tuile à l'écran. Trois pièces appliquent la loi, chacune avec son état hors vue :
+
+- **Éditeur** : les buffers vivent dans `App` (`files`, `PerFile`) ; la
+  `GtkSourceView` est recréée à chaque rendu, le contenu survit.
+- **LLM** : `LlmCore` « vit sans vue », `LlmTile` n'en est que le miroir
+  (plusieurs tuiles sur un même core).
+- **Bash** : le notebook et ses `VteTerminal` sont un **backend permanent**
+  (`bash_panel_init()`, ref forte) créé une fois par process. `bash_panel_new()`
+  n'est qu'une **vue** qui **emprunte** ce notebook ; retirer la tuile ne fait
+  que le dé-arenter — les shells et leurs PTY survivent aux splits/removes, et
+  un outil `cdb_bash` s'exécute **sans aucune tuile Bash affichée**.
+
+La loi ne défend pas l'état contre l'**humain** : le « x » d'un onglet et le
+reset ALLOW+ (`gtk_notebook_remove_page()`) ferment bien le PTY — c'est un acte
+ciblé, pas un effet de rendu. (Bug utilisateur d'août 2026 : le bash forçait la
+tuile ouverte, car son pointeur était **faible** et posé par la vue. Corrigé en
+backend permanent à ref forte — vérifié par sonde VTE : un terminal unrealized
+garde son PTY et sa sortie.)
+
 ## Architecture LLM
 
 - `src/llmcore.c` : **LlmCore** — état conversationnel + réseau +

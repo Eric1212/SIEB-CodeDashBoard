@@ -4942,6 +4942,12 @@ on_activate(GtkApplication *gtk_app, gpointer data)
      * fixe le dossier de llm_live.json. */
     llm_live_load(app->llm_core);
 
+    /* Backend bash permanent : cree une seule fois et survit a tout
+     * re-rendu du layout. Apres cet appel, un outil cdb_bash execute sans
+     * qu'aucune tuile « bash » ne soit affichee (regle : le layout ne fait
+     * que rendre — l'existence d'un etat n'en depend pas). */
+    bash_panel_init(app->roots, app->multi_paths);
+
     app->win = GTK_WINDOW(gtk_application_window_new(gtk_app));
     gtk_window_set_title(app->win, "CodeDashBoard");
     gtk_window_set_default_size(app->win, 1280, 800);
@@ -5397,6 +5403,12 @@ main(int argc, char **argv)
     if (app->dirty != NULL)
         dirty_persist_now(app->dirty);
     g_object_unref(gtk_app);
+
+    /* Backend bash permanent : rend la ref forte gardee pour qu'il survit a
+     * la destruction de la fenetre. Le notebook se finalise ici, et avec lui
+     * les onglets encore vivants — leurs PTY ferment au quit. Vient APRES
+     * unref(gtk_app) : jusque-la il pouvait encore etre tenu par son arbre. */
+    bash_panel_shutdown();
     if (app->diff_timer != 0)
         g_source_remove(app->diff_timer);
     if (app->tree_model != NULL)
