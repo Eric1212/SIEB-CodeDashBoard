@@ -347,6 +347,26 @@ typedef struct {
     GArray       *history;   /* LlmMsg[] : fil de conversation envoyé */
     GPtrArray    *views;     /* vues attachées (pointeurs empruntés) */
     /* Ressources de session (empruntées à App, vivent plus longtemps) */
+    /* Numéro de session dans la titlebar (étiquette « 000 »). Emprunté à
+     * App, mais contrairement à cfg/roots il meurt AVANT le core (la fenêtre
+     * part avant llm_core_free) : on le détache sur son signal « destroy »
+     * pour qu'une complétion réseau en retard ne pose jamais une classe CSS
+     * sur un widget finalisé. NULL = pas de fenêtre principale. */
+    GtkWidget    *header_session;
+    /* Nom de la fenêtre (taskbar / alt-tab). Le titre WM est du texte BRUT :
+     * pas de gras possible là-bas — c'est pourquoi l'occupation y est rendue
+     * par un préfixe « ▶ », jamais par une graisse. Ces deux pointeurs sont
+     * empruntés à App et suivent la VIE DE LA FENÊTRE, pas celle du core :
+     * ils sont remis à NULL par header_session_destroyed, l'unique ancre qui
+     * éteint à la fois l'étiquette de titlebar et ce callback. */
+    void         (*title_sync)(void *app);  /* (void*)window_title_sync */
+    void         *title_user;               /* l'App, rendue au callback    */
+    /* Mémorise le paramètre `busy` posé par llm_busy_set — la MEME variable
+     * que lit l'icône play/pause. Le titre la relit au lieu de recalculer
+     * core_agent_loop_alive (qui est busy||alive), sinon un busy=FALSE posé
+     * sur boucle vivante afficherait « ▶ » sur une fenêtre dont le bouton
+     * est déjà revenu à play. g_new0 : FALSE au départ. */
+    gboolean      session_busy;
     LlmConfig    *cfg;
     GListStore   *roots;
     GHashTable   *multi_paths;

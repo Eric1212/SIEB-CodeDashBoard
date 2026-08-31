@@ -637,6 +637,33 @@ find_project_for_path(GListStore *roots, const char *path)
     return NULL;
 }
 
+/* Chemin d'affichage « nom-du-projet/relatif » pour un chemin absolu — ce que
+ * porte le nom de la fenêtre. Le projet est celui qui CONTIENT path (racine
+ * ROOT_PROJECT directe, ou projet enfant d'une structure) ; son basename
+ * préfixe le reste. Hors de tout projet, on rend l'absolu tel quel : mieux
+ * vaut un long chemin honnête qu'un raccourci inventé. path NULL → NULL.
+ * Renvoie une chaîne g_strdup (à libérer). */
+char *
+roots_project_path(GListStore *roots, const char *path)
+{
+    RootEntry *pr;
+    size_t     len;
+    char      *out;
+
+    if (path == NULL)
+        return NULL;
+    pr = find_project_for_path(roots, path);
+    if (pr == NULL)
+        return g_strdup(path);            /* hors projet : absolu, sans mentir */
+    len = strlen(pr->path);
+    if (path[len] == '\0')
+        out = g_strdup(pr->basename);     /* le chemin EST le projet */
+    else
+        out = g_strdup_printf("%s/%s", pr->basename, path + len + 1);
+    g_object_unref(pr);   /* find_project_for_path rend une ref : on la rend */
+    return out;
+}
+
 char *
 roots_current_project(GListStore *roots, GHashTable *multi_paths)
 {

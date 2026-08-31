@@ -712,6 +712,35 @@ llm_busy_set(LlmTile *t, gboolean busy)
                                 ? _("Cancel generation")
                                 : _("Send"));
     gtk_widget_set_sensitive(t->send_btn, TRUE);
+    /* Le numéro de session de la titlebar suit l'icône posée juste au-dessus,
+     * mot pour mot : même variable `busy`, pose pause = gras, leve play =
+     * non gras. Titre et bouton partagent une seule source de vérité, ils ne
+     * peuvent pas diverger. header_session est emprunté au core et peut être
+     * NULL (modale sans titlebar, ou fenêtre déjà détruite — l'étiquette se
+     * détache du core sur son signal « destroy », voir main.c). */
+    if (t->core != NULL && t->core->header_session != NULL) {
+        if (busy)
+            gtk_widget_add_css_class(t->core->header_session, "cdb-busy");
+        else
+            gtk_widget_remove_css_class(t->core->header_session, "cdb-busy");
+    }
+
+    /* Le NOM de la fenêtre (ce que lit le WM : taskbar, alt-tab, aperçu) obéit
+     * à la même valeur que l'icône — le paramètre `busy` — mémorisée sur le
+     * core. Cette mémorisation est la clé de la synchro promise : window_title_sync
+     * est aussi appelé sur changement de fichier, hors tout changement d'état,
+     * et doit alors relire LE même état que le bouton, jamais le recalculer —
+     * core_agent_loop_alive est busy||alive, et un busy=FALSE posé sur une
+     * boucle vivante peindrait un « ▶ » sur une fenêtre déjà revenue à play.
+     * Le titre WM est du texte BRUT : pas de gras possible, d'où le préfixe
+     * « ▶ » que compose window_title_sync (main.c). title_sync est remis à
+     * NULL quand la fenêtre meurt (header_session_destroyed) : les deux
+     * gardes ne sont pas redondants, ils couvrent des vies différentes. */
+    if (t->core != NULL) {
+        t->core->session_busy = busy;
+        if (t->core->title_sync != NULL)
+            t->core->title_sync(t->core->title_user);
+    }
 
     /* Un seul rythme, celui de la boucle agentique (loi d'Éric, 27 août) :
      * vivante = icône pause, donc un clic annule tout — la décision ASK en

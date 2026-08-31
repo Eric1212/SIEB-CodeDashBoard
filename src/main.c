@@ -390,8 +390,74 @@ buffer_text(App *app)
     return gtk_text_buffer_get_text(GTK_TEXT_BUFFER(app->buffer), &start, &end, TRUE);
 }
 
-/* Met à jour le titre de la fenêtre et le point de la barre de statut :
- * le témoin ne vaut « sale » que pour le fichier COURANT (∈ dirty_store). */
+/* La signature de la marque, résolue UNE FOIS pour la vie du processus et lue
+ * par les DEUX sites qui l'affichent : l'étiquette de la titlebar et le nom de
+ * la fenêtre (window_title_sync). Une seule source, jamais deux _() côte à
+ * côte, à cause d'un régime de peinture différent : l'étiquette est posée une
+ * fois à la construction, alors que le titre WM est recalculé à chaque
+ * changement de fichier et à chaque bascule d'occupation. Marquer les deux
+ * séparément les ferait diverger dès qu'une langue est changée en cours de
+ * session — or la loi du sélecteur est claire (LANG_NOTE, plus bas) : un écran
+ * déjà monté garde sa langue, parce qu'un écran à moitié retraduit ment. Le
+ * tampon est statique et non un g_strdup : src/mem.c tient la comptabilité des
+ * allocations, et une singleton de la vie du processus y passerait pour une
+ * fuite sous CDB_DEBUG=1. */
+static const char *
+cdb_signature(void)
+{
+    static char sig[128];
+
+    if (sig[0] == '\0') {
+        /* TRANSLATORS: CodeDashBoard and SIEB are the product and the company
+         * names — keep them untouched, translate only the linking word. */
+        g_strlcpy(sig, _("CodeDashBoard by SIEB"), sizeof sig);
+    }
+    return sig;
+}
+
+/* Le NOM DE LA FENÊTRE (taskbar / alt-tab / aperçu du WM). Contrainte dure :
+ * gtk_window_set_title veut du TEXTE BRUT — le WM le rend uniformément, il
+ * n'y a ni Pango ni gras possible. C'est pourquoi l'occupation, ici, est un
+ * PRÉFIXE « ▶ » (elle ne peut pas être une graisse comme dans la titlebar,
+ * où le « 000 » se met en gras). Format voulu, dans la langue de la session —
+ * la signature vient de cdb_signature(), la MEME chaîne que l'étiquette de la
+ * titlebar : une source pour les deux sites, jamais deux traductions côte à
+ * côte (voir le helper, sur la raison de ce gel) :
+ *   « ▶ 000 | SIEB-CodeDashBoard/src/sfx.c* | CodeDashBoard by SIEB »
+ * sans le « ▶ » (ni son espace) quand la session est inactive ; le « * » est
+ * le marqueur non-sauvegardé, déjà en usage. L'état busy vient de
+ * core->session_busy — la MEME variable que pose l'icône play/pause — jamais
+ * d'un recalcul, pour que titre et bouton ne puissent pas diverger. Appelé ici
+ * (changement de fichier/sale) et par llm_busy_set (changement d'état) via le
+ * pointeur title_sync du core. */
+static void
+window_title_sync(App *app)
+{
+    gboolean busy, dirty;
+    char    *path, *title;
+
+    if (app->win == NULL)
+        return;                         /* fenêtre pas encore construite */
+    busy  = (app->llm_core != NULL && app->llm_core->session_busy);
+    dirty = (app->current_file != NULL
+             && dirty_contains(app->dirty, app->current_file));
+    path  = roots_project_path(app->roots, app->current_file);
+
+    if (path != NULL)
+        title = g_strdup_printf("%s%03d | %s%s | %s",
+                                busy ? "▶ " : "", cdb_session,
+                                path, dirty ? "*" : "", cdb_signature());
+    else                                /* aucun fichier : pas de segment vide */
+        title = g_strdup_printf("%s%03d | %s",
+                                busy ? "▶ " : "", cdb_session, cdb_signature());
+    gtk_window_set_title(app->win, title);
+    g_free(title);
+    g_free(path);
+}
+
+/* Met à jour le point « sale » de la barre de statut, le chemin de la
+ * titlebar, et le nom de la fenêtre. Le témoin ne vaut « sale » que pour le
+ * fichier COURANT (∈ dirty_store). */
 static void
 update_modified_indicator(App *app)
 {
@@ -405,15 +471,14 @@ update_modified_indicator(App *app)
         char *title = g_strdup_printf("%s%s", app->current_file,
                                       dirty ? "*" : "");
 
-        gtk_window_set_title(app->win, title);
         if (app->header_file != NULL)
             gtk_label_set_text(app->header_file, title);
         g_free(title);
     } else {
-        gtk_window_set_title(app->win, "CodeDashBoard");
         if (app->header_file != NULL)
             gtk_label_set_text(app->header_file, "");
     }
+    window_title_sync(app);   /* nom de fenêtre : composition à part (voir sur) */
 }
 
 /* TRUE si l'item est « sale » : fichier présent dans dirty_store, ou
@@ -5008,6 +5073,35 @@ modal_open_empty(App *app)
     return TRUE;
 }
 
+/* L'étiquette « 000 » de la titlebar meurt avec la fenêtre — on en profite
+ * pour détacher AUSSI ce que la fenêtre empruntait au core pour peindre son
+ * titre (title_sync / title_user) : tout ce qui dépend de la VIE DE LA
+ * FENÊTRE est remis à zéro en une seule ancre, pour qu'une complétion réseau
+ * en retard ne pose jamais ni une classe CSS sur un widget finalisé, ni un
+ * callback sur un app->win détruit. Le core, lui, ne tombe qu'après
+ * g_application_run (llm_core_free), donc la fenêtre part avant lui.
+ *
+ * session_busy, lui, n'est PAS détaché ici — c'est voulu. Le champ dit l'état
+ * de la boucle agentique, pas celui de la fenêtre : son détenteur est le core,
+ * qui survit à la fenêtre. Le figer à FALSE sur destroy mentirait sur une
+ * boucle encore vivante, et l'anti-peinture est déjà ailleurs : title_sync à
+ * NULL coupe le chemin du titre, donc rien ne viendrait lire ce champ. */
+static void
+header_session_destroyed(GtkWidget *w, gpointer core)
+{
+    LlmCore *c = core;
+
+    /* Comparaison d'identité : on ne libère le pointeur que si c'est bien
+     * CETTE étiquette qu'on détruit. Sans ça, une ré-activation qui aurait
+     * remplacé header_session verrait la vieille étiquette, en mourant,
+     * effacer la nouvelle. */
+    if (c->header_session == (GtkWidget *) w) {
+        c->header_session = NULL;
+        c->title_sync     = NULL;
+        c->title_user     = NULL;
+    }
+}
+
 static void
 on_activate(GtkApplication *gtk_app, gpointer data)
 {
@@ -5149,29 +5243,66 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     }
     gtk_window_set_titlebar(app->win, header);
 
-    /* Chemin + signature dans le widget titre (centré, non gras). */
+    /* Numéro de session + chemin + signature dans le widget titre. Lu :
+     * « :: 000 :: /chemin/courant :: CodeDashBoard by SIEB :: ». Le « 000 »
+     * (cdb_session, %03d) se met en gras pendant que la session travaille,
+     * piloté par llm_busy_set sur la même variable que l'icône play/pause ;
+     * le reste (chemin, signature) reste non gras. */
     {
         GtkWidget *title_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+        GtkWidget *sep1, *sep2, *sep3, *sep4, *sig, *session;
+        char      *num;
 
         /* Pas d'alignement par baseline : les labels sont centrés
          * verticalement (le « :: » sinon paraît plus bas que les
          * capitales de la signature). */
         gtk_box_set_baseline_position(GTK_BOX(title_box),
                                       GTK_BASELINE_POSITION_CENTER);
-        GtkWidget *sep1 = gtk_label_new("::");
-        GtkWidget *sep2 = gtk_label_new("::");
-        GtkWidget *sep3 = gtk_label_new("::");
-        GtkWidget *sig = gtk_label_new("CodeDashBoard by SIEB");
+        sep1 = gtk_label_new("::");
+        sep2 = gtk_label_new("::");
+        sep3 = gtk_label_new("::");
+        sep4 = gtk_label_new("::");
+        sig  = gtk_label_new(cdb_signature());
+
+        /* Le numéro de session, figé pour la vie du processus (une session =
+         * un PID = une fenêtre principale ; « Nouvelle session » spawn un
+         * autre processus avec son propre numéro). Non traduisible : c'est un
+         * nombre, pas de la prose. */
+        num = g_strdup_printf("%03d", cdb_session);
+        session = gtk_label_new(num);
+        g_free(num);
+        gtk_widget_set_valign(session, GTK_ALIGN_CENTER);
+        gtk_widget_add_css_class(session, "titlebar-session");
+        /* Emprunt au core pour que llm_busy_set le marque gras. Le core est
+         * né plus haut (llm_core_new) ; s'il manquait, on laisse NULL et le
+         * toggle se tait. L'étiquette se détache elle-même sur « destroy ». */
+        if (app->llm_core != NULL) {
+            app->llm_core->header_session = session;
+            g_signal_connect(session, "destroy",
+                             G_CALLBACK(header_session_destroyed),
+                             app->llm_core);
+            /* Le titre de la fenêtre (taskbar / alt-tab) rend le même service
+             * que la titlebar : le callback est emprunté au core et meurt avec
+             * le label (header_session_destroyed, ci-dessus). Rien n'est peint
+             * ici — l'enregistrement suffit. La première composition du titre
+             * vient de update_modified_indicator, appelée plus bas à la fin de
+             * cette fonction, avant la présentation de la fenêtre ; peindre
+             * deux fois la même chaîne n'aurait fait qu'offrir un second
+             * chemin à un état déjà source unique. */
+            app->llm_core->title_sync = (void (*)(void *)) window_title_sync;
+            app->llm_core->title_user = app;
+        }
 
         gtk_widget_set_valign(title_box, GTK_ALIGN_CENTER);
         gtk_widget_set_valign(sep1, GTK_ALIGN_CENTER);
         gtk_widget_set_valign(sep2, GTK_ALIGN_CENTER);
         gtk_widget_set_valign(sep3, GTK_ALIGN_CENTER);
-        gtk_widget_set_valign(sig, GTK_ALIGN_CENTER);
-
+        gtk_widget_set_valign(sep4, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(sig,  GTK_ALIGN_CENTER);
         gtk_widget_add_css_class(sep1, "titlebar-sep");
         gtk_widget_add_css_class(sep2, "titlebar-sep");
         gtk_widget_add_css_class(sep3, "titlebar-sep");
+        gtk_widget_add_css_class(sep4, "titlebar-sep");
         gtk_widget_add_css_class(sig, "titlebar-signature");
         app->header_file = GTK_LABEL(gtk_label_new(""));
         gtk_label_set_ellipsize(app->header_file, PANGO_ELLIPSIZE_MIDDLE);
@@ -5179,10 +5310,12 @@ on_activate(GtkApplication *gtk_app, gpointer data)
         gtk_widget_add_css_class(GTK_WIDGET(app->header_file),
                                  "titlebar-file");
         gtk_box_append(GTK_BOX(title_box), sep1);
-        gtk_box_append(GTK_BOX(title_box), GTK_WIDGET(app->header_file));
+        gtk_box_append(GTK_BOX(title_box), session);
         gtk_box_append(GTK_BOX(title_box), sep2);
-        gtk_box_append(GTK_BOX(title_box), sig);
+        gtk_box_append(GTK_BOX(title_box), GTK_WIDGET(app->header_file));
         gtk_box_append(GTK_BOX(title_box), sep3);
+        gtk_box_append(GTK_BOX(title_box), sig);
+        gtk_box_append(GTK_BOX(title_box), sep4);
         gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title_box);
     }
 

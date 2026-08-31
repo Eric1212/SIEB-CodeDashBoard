@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-31 01:22-0400\n"
+"POT-Creation-Date: 2026-08-31 04:13-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -79,11 +79,11 @@ msgstr ""
 msgid "Editor"
 msgstr ""
 
-#: src/layout.c:355 src/main.c:1820
+#: src/layout.c:355 src/main.c:1885
 msgid "Explorer"
 msgstr ""
 
-#: src/layout.c:361 src/main.c:5111
+#: src/layout.c:361 src/main.c:5199
 msgid "Settings"
 msgstr ""
 
@@ -777,240 +777,240 @@ msgstr ""
 msgid "Cancel generation"
 msgstr ""
 
-#: src/llmtile.c:713 src/llmtile.c:2351
+#: src/llmtile.c:713 src/llmtile.c:2380
 msgid "Send"
 msgstr ""
 
-#: src/llmtile.c:1002
+#: src/llmtile.c:1031
 #, c-format
 msgid "image paste failed: %s"
 msgstr ""
 
-#: src/llmtile.c:1003
+#: src/llmtile.c:1032
 msgid "unknown error"
 msgstr ""
 
-#: src/llmtile.c:1014
+#: src/llmtile.c:1043
 msgid "image paste failed: PNG encoding."
 msgstr ""
 
-#: src/llmtile.c:1155 src/llmtile.c:1224 src/llmtile.c:1774 src/main.c:1055
-#: src/main.c:1176 src/main.c:1486 src/main.c:1572 src/session.c:328
+#: src/llmtile.c:1184 src/llmtile.c:1253 src/llmtile.c:1803 src/main.c:1120
+#: src/main.c:1241 src/main.c:1551 src/main.c:1637 src/session.c:328
 msgid "Cancel"
 msgstr ""
 
-#: src/llmtile.c:1156
+#: src/llmtile.c:1185
 msgid "OK"
 msgstr ""
 
-#: src/llmtile.c:1272
+#: src/llmtile.c:1301
 #, c-format
 msgid ""
 "/* invalid JSON: %s — raw: */\n"
 "%s"
 msgstr ""
 
-#: src/llmtile.c:1294
+#: src/llmtile.c:1323
 msgid "Copy"
 msgstr ""
 
-#: src/llmtile.c:1305
+#: src/llmtile.c:1334
 msgid "modal limit reached (4): close one first."
 msgstr ""
 
-#: src/llmtile.c:1308
+#: src/llmtile.c:1337
 msgid "JSON — as sent"
 msgstr ""
 
-#: src/llmtile.c:1323
+#: src/llmtile.c:1352
 msgid "Save to a slot"
 msgstr ""
 
-#: src/llmtile.c:1324 src/llmtile.c:1373 src/llmtile.c:1626
+#: src/llmtile.c:1353 src/llmtile.c:1402 src/llmtile.c:1655
 msgid "Slot number (0-999):"
 msgstr ""
 
-#: src/llmtile.c:1328
+#: src/llmtile.c:1357
 #, c-format
 msgid "Slot %d already exists. Overwrite?"
 msgstr ""
 
-#: src/llmtile.c:1331 src/llmtile.c:1699
+#: src/llmtile.c:1360 src/llmtile.c:1728
 msgid "Slot in use"
 msgstr ""
 
-#: src/llmtile.c:1331 src/llmtile.c:1699
+#: src/llmtile.c:1360 src/llmtile.c:1728
 msgid "Overwrite"
 msgstr ""
 
-#: src/llmtile.c:1343
+#: src/llmtile.c:1372
 #, c-format
 msgid "Slot %d saved."
 msgstr ""
 
-#: src/llmtile.c:1346
+#: src/llmtile.c:1375
 #, c-format
 msgid "Failed to save slot %d."
 msgstr ""
 
-#: src/llmtile.c:1369
+#: src/llmtile.c:1398
 msgid "cannot load while a request is in progress."
 msgstr ""
 
-#: src/llmtile.c:1372
+#: src/llmtile.c:1401
 msgid "Load a slot"
 msgstr ""
 
-#: src/llmtile.c:1378
+#: src/llmtile.c:1407
 #, c-format
 msgid "Slot %d is empty."
 msgstr ""
 
-#: src/llmtile.c:1385
+#: src/llmtile.c:1414
 #, c-format
 msgid "Slot %d: invalid JSON (%s)."
 msgstr ""
 
-#: src/llmtile.c:1400
+#: src/llmtile.c:1429
 msgid "no \"messages\" array in this slot."
 msgstr ""
 
-#: src/llmtile.c:1538 src/llmtile.c:2170
+#: src/llmtile.c:1567 src/llmtile.c:2199
 msgid "(no new content)"
-msgstr ""
-
-#: src/llmtile.c:1613
-#, c-format
-msgid "Slot %d loaded — the thread was replaced."
-msgstr ""
-
-#: src/llmtile.c:1625 src/llmtile.c:1636
-msgid "Clear a slot"
-msgstr ""
-
-#: src/llmtile.c:1630
-#, c-format
-msgid "Slot %d is already empty."
-msgstr ""
-
-#: src/llmtile.c:1635
-#, c-format
-msgid "Clear slot %d?"
-msgstr ""
-
-#: src/llmtile.c:1636 src/llmtile.c:1817
-msgid "Clear"
 msgstr ""
 
 #: src/llmtile.c:1642
 #, c-format
+msgid "Slot %d loaded — the thread was replaced."
+msgstr ""
+
+#: src/llmtile.c:1654 src/llmtile.c:1665
+msgid "Clear a slot"
+msgstr ""
+
+#: src/llmtile.c:1659
+#, c-format
+msgid "Slot %d is already empty."
+msgstr ""
+
+#: src/llmtile.c:1664
+#, c-format
+msgid "Clear slot %d?"
+msgstr ""
+
+#: src/llmtile.c:1665 src/llmtile.c:1846
+msgid "Clear"
+msgstr ""
+
+#: src/llmtile.c:1671
+#, c-format
 msgid "Slot %d cleared."
 msgstr ""
 
-#: src/llmtile.c:1676
+#: src/llmtile.c:1705
 msgid "Three numbers 0-999 expected."
 msgstr ""
 
-#: src/llmtile.c:1680
+#: src/llmtile.c:1709
 #, c-format
 msgid "Session %03d has no slots."
 msgstr ""
 
-#: src/llmtile.c:1688
+#: src/llmtile.c:1717
 #, c-format
 msgid "Slot %d is empty in session %03d."
 msgstr ""
 
-#: src/llmtile.c:1696
+#: src/llmtile.c:1725
 #, c-format
 msgid "Target slot %d already exists. Overwrite?"
 msgstr ""
 
-#: src/llmtile.c:1728
+#: src/llmtile.c:1757
 msgid "Import from a session"
 msgstr ""
 
-#: src/llmtile.c:1746
+#: src/llmtile.c:1775
 msgid "Source session (000-999):"
 msgstr ""
 
-#: src/llmtile.c:1747
+#: src/llmtile.c:1776
 msgid "Source slot (0-999):"
 msgstr ""
 
-#: src/llmtile.c:1748
+#: src/llmtile.c:1777
 msgid "Target slot (0-999):"
 msgstr ""
 
-#: src/llmtile.c:1775
+#: src/llmtile.c:1804
 msgid "Import"
 msgstr ""
 
-#: src/llmtile.c:1794
+#: src/llmtile.c:1823
 #, c-format
 msgid "Slot imported into slot %d."
 msgstr ""
 
-#: src/llmtile.c:1800
+#: src/llmtile.c:1829
 msgid "import failed."
 msgstr ""
 
-#: src/llmtile.c:1812
+#: src/llmtile.c:1841
 msgid "cannot clear while a request is in progress."
 msgstr ""
 
-#: src/llmtile.c:1815
+#: src/llmtile.c:1844
 msgid "Clear the current chat"
 msgstr ""
 
-#: src/llmtile.c:1816
+#: src/llmtile.c:1845
 msgid "Clear the current conversation?"
 msgstr ""
 
-#: src/llmtile.c:1843
+#: src/llmtile.c:1872
 msgid "current chat cleared."
 msgstr ""
 
-#: src/llmtile.c:1886 src/llmtile.c:2383
+#: src/llmtile.c:1915 src/llmtile.c:2412
 msgid "Not saved"
 msgstr ""
 
-#: src/llmtile.c:1889
+#: src/llmtile.c:1918
 #, c-format
 msgid "Not saved — +%s · %d turn"
 msgid_plural "Not saved — +%s · %d turns"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/llmtile.c:1895
+#: src/llmtile.c:1924
 #, c-format
 msgid "Slot %d — up to date"
 msgstr ""
 
-#: src/llmtile.c:1898
+#: src/llmtile.c:1927
 #, c-format
 msgid "Slot %d — +%s · %d turn"
 msgid_plural "Slot %d — +%s · %d turns"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/llmtile.c:1933
+#: src/llmtile.c:1962
 #, c-format
 msgid "Tool profile: %s (Settings → LLM → Tools)"
 msgstr ""
 
-#: src/llmtile.c:1939
+#: src/llmtile.c:1968
 #, c-format
 msgid "Active profile — %s"
 msgstr ""
 
-#: src/llmtile.c:2029
+#: src/llmtile.c:2058
 msgid ""
 "no active model: choose one in the model menu (the \"?\" button) above the "
 "input."
 msgstr ""
 
-#: src/llmtile.c:2264
+#: src/llmtile.c:2293
 msgid ""
 "LLM not configured.\n"
 "\n"
@@ -1019,51 +1019,51 @@ msgid ""
 "below."
 msgstr ""
 
-#: src/llmtile.c:2368
+#: src/llmtile.c:2397
 msgid "View sent JSON…"
 msgstr ""
 
-#: src/llmtile.c:2369
+#: src/llmtile.c:2398
 msgid "Save to a slot…"
 msgstr ""
 
-#: src/llmtile.c:2370
+#: src/llmtile.c:2399
 msgid "Load a slot…"
 msgstr ""
 
-#: src/llmtile.c:2371
+#: src/llmtile.c:2400
 msgid "Clear a slot…"
 msgstr ""
 
-#: src/llmtile.c:2372
+#: src/llmtile.c:2401
 msgid "Clear the current chat…"
 msgstr ""
 
-#: src/llmtile.c:2373
+#: src/llmtile.c:2402
 msgid "Import from a session…"
 msgstr ""
 
-#: src/llmtile.c:2431
+#: src/llmtile.c:2460
 msgid "Active profile"
 msgstr ""
 
-#: src/llmtile.c:2483
+#: src/llmtile.c:2512
 msgid "Select a model…"
 msgstr ""
 
-#: src/llmtile.c:2504
+#: src/llmtile.c:2533
 msgid "Configure…"
 msgstr ""
 
-#: src/llmtile.c:2796
+#: src/llmtile.c:2825
 msgid "(CDB action)"
 msgstr ""
 
-#: src/llmtile.c:2802
+#: src/llmtile.c:2831
 msgid "✔ allowed +"
 msgstr ""
 
-#: src/llmtile.c:2803
+#: src/llmtile.c:2832
 msgid "✔ allowed"
 msgstr ""
 
@@ -1103,107 +1103,113 @@ msgid ""
 "%s"
 msgstr ""
 
-#: src/main.c:775
+#. TRANSLATORS: CodeDashBoard and SIEB are the product and the company
+#. * names — keep them untouched, translate only the linking word.
+#: src/main.c:413
+msgid "CodeDashBoard by SIEB"
+msgstr ""
+
+#: src/main.c:840
 #, c-format
 msgid "CDB: removing \"%s\"\n"
 msgstr ""
 
-#: src/main.c:806
+#: src/main.c:871
 msgid "CDB: right-click on no row\n"
 msgstr ""
 
-#: src/main.c:856
+#: src/main.c:921
 #, c-format
 msgid "Delete %u item"
 msgid_plural "Delete %u items"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/main.c:869
+#: src/main.c:934
 msgid "New file…"
 msgstr ""
 
-#: src/main.c:875
+#: src/main.c:940
 msgid "New folder…"
 msgstr ""
 
-#: src/main.c:887
+#: src/main.c:952
 msgid "Rename…"
 msgstr ""
 
-#: src/main.c:893
+#: src/main.c:958
 msgid "Delete folder"
 msgstr ""
 
-#: src/main.c:894 src/main.c:1177
+#: src/main.c:959 src/main.c:1242
 msgid "Delete"
 msgstr ""
 
-#: src/main.c:904
+#: src/main.c:969
 msgid "Add a project…"
 msgstr ""
 
-#: src/main.c:914
+#: src/main.c:979
 msgid "Delete this project…"
 msgstr ""
 
-#: src/main.c:920
+#: src/main.c:985
 msgid "Delete this root"
 msgstr ""
 
-#: src/main.c:941
+#: src/main.c:1006
 #, c-format
 msgid "CDB: popover requested for \"%s\"\n"
 msgstr ""
 
-#: src/main.c:967
+#: src/main.c:1032
 msgid "Project name is empty."
 msgstr ""
 
-#: src/main.c:970 src/main.c:1377
+#: src/main.c:1035 src/main.c:1442
 msgid "Invalid name (no \"/\", no \".\", no \"..\")."
 msgstr ""
 
-#: src/main.c:972
+#: src/main.c:1037
 msgid "A hidden project (starting with \".\") is not allowed."
 msgstr ""
 
-#: src/main.c:976
+#: src/main.c:1041
 msgid "This folder already exists."
 msgstr ""
 
-#: src/main.c:978 src/main.c:1398
+#: src/main.c:1043 src/main.c:1463
 msgid "Cannot create the folder."
 msgstr ""
 
-#: src/main.c:1023
+#: src/main.c:1088
 msgid "New project"
 msgstr ""
 
-#: src/main.c:1035 src/main.c:1463
+#: src/main.c:1100 src/main.c:1528
 #, c-format
 msgid ""
 "Create a folder in:\n"
 "%s"
 msgstr ""
 
-#: src/main.c:1043
+#: src/main.c:1108
 msgid "project name"
 msgstr ""
 
-#: src/main.c:1056 src/main.c:1487
+#: src/main.c:1121 src/main.c:1552
 msgid "Create"
 msgstr ""
 
-#: src/main.c:1104
+#: src/main.c:1169
 msgid "Cannot delete the folder (permissions?)."
 msgstr ""
 
-#: src/main.c:1141
+#: src/main.c:1206
 msgid "Delete project"
 msgstr ""
 
-#: src/main.c:1154
+#: src/main.c:1219
 #, c-format
 msgid ""
 "The folder and all its contents will be permanently deleted:\n"
@@ -1212,358 +1218,358 @@ msgid ""
 "Retype DELETE to confirm."
 msgstr ""
 
-#: src/main.c:1374
+#: src/main.c:1439
 msgid "Name is empty."
 msgstr ""
 
-#: src/main.c:1390 src/main.c:1395
+#: src/main.c:1455 src/main.c:1460
 msgid "This name already exists."
 msgstr ""
 
-#: src/main.c:1392
+#: src/main.c:1457
 msgid "Cannot rename."
 msgstr ""
 
-#: src/main.c:1403
+#: src/main.c:1468
 msgid "Cannot create the file."
 msgstr ""
 
-#: src/main.c:1409
+#: src/main.c:1474
 #, c-format
 msgid "CDB: created \"%s\" in \"%s\"\n"
 msgstr ""
 
-#: src/main.c:1450
+#: src/main.c:1515
 msgid "New folder"
 msgstr ""
 
-#: src/main.c:1451
+#: src/main.c:1516
 msgid "New file"
 msgstr ""
 
-#: src/main.c:1464
+#: src/main.c:1529
 #, c-format
 msgid ""
 "Create a file in:\n"
 "%s"
 msgstr ""
 
-#: src/main.c:1473
+#: src/main.c:1538
 msgid "folder name"
 msgstr ""
 
-#: src/main.c:1473
+#: src/main.c:1538
 msgid "file name"
 msgstr ""
 
-#: src/main.c:1537 src/main.c:1573
+#: src/main.c:1602 src/main.c:1638
 msgid "Rename"
 msgstr ""
 
-#: src/main.c:1549
+#: src/main.c:1614
 #, c-format
 msgid ""
 "Rename:\n"
 "%s"
 msgstr ""
 
-#: src/main.c:1649
+#: src/main.c:1714
 msgid "Some items could not be deleted."
 msgstr ""
 
-#: src/main.c:1666
+#: src/main.c:1731
 msgid "Cannot delete."
 msgstr ""
 
-#: src/main.c:1707
+#: src/main.c:1772
 msgid "This folder is already a root or a project of a structure."
 msgstr ""
 
-#: src/main.c:1728
+#: src/main.c:1793
 msgid "Choose a structure root"
 msgstr ""
 
-#: src/main.c:1729
+#: src/main.c:1794
 msgid "Choose a project root"
 msgstr ""
 
-#: src/main.c:1788
+#: src/main.c:1853
 msgid "Structure root…"
 msgstr ""
 
-#: src/main.c:1789
+#: src/main.c:1854
 msgid "Project root…"
 msgstr ""
 
-#: src/main.c:1800
+#: src/main.c:1865
 msgid "Add a root"
 msgstr ""
 
-#: src/main.c:1839
+#: src/main.c:1904
 msgid "Reload the projects tree"
 msgstr ""
 
-#: src/main.c:1879
+#: src/main.c:1944
 #, c-format
 msgid "CDB: selection -> %lu item(s) (changed pos=%u n=%u)\n"
 msgstr ""
 
-#: src/main.c:2028
+#: src/main.c:2093
 #, c-format
 msgid "CDB: pick=%s — no row position\n"
 msgstr ""
 
-#: src/main.c:2075
+#: src/main.c:2140
 msgid "CDB: Ctrl+click outside any item\n"
 msgstr ""
 
-#: src/main.c:2090
+#: src/main.c:2155
 #, c-format
 msgid "CDB: Shift+click range [%u, %u] (unselect_rest=%d)\n"
 msgstr ""
 
-#: src/main.c:2104
+#: src/main.c:2169
 #, c-format
 msgid "CDB: Ctrl+click toggle pos=%u before: size=%lu is_selected=%d"
 msgstr ""
 
-#: src/main.c:2133
+#: src/main.c:2198
 #, c-format
 msgid "CDB: Ctrl+click full bitset size=%lu:"
 msgstr ""
 
-#: src/main.c:2546
+#: src/main.c:2611
 #, c-format
 msgid "CDB: rebuild_explorer (open folders=%u)\n"
 msgstr ""
 
-#: src/main.c:2565
+#: src/main.c:2630
 #, c-format
 msgid "CDB: rebuild_explorer view built (n_items=%u)\n"
 msgstr ""
 
-#: src/main.c:2604
+#: src/main.c:2669
 #, c-format
 msgid "CDB: style scheme = %s (dark=%d)\n"
 msgstr ""
 
-#: src/main.c:2955 src/main.c:3933
+#: src/main.c:3020 src/main.c:3998
 msgid "Saved ✓"
 msgstr ""
 
-#: src/main.c:3412
+#: src/main.c:3477
 msgid "Tool"
 msgstr ""
 
-#: src/main.c:3477
+#: src/main.c:3542
 msgid ""
 "Applied at once to everything created from now on: new tiles, dialogs, and "
 "what CDB sends to the model. Screens already open keep their language."
 msgstr ""
 
-#: src/main.c:3578
+#: src/main.c:3643
 msgid ""
 "No locale is installed for this language. Install it (locale-gen), then "
 "restart CDB."
 msgstr ""
 
-#: src/main.c:3615
+#: src/main.c:3680
 msgid "current language"
 msgstr ""
 
-#: src/main.c:3693
+#: src/main.c:3758
 msgid "Play this sound"
 msgstr ""
 
-#: src/main.c:3734
+#: src/main.c:3799
 #, c-format
 msgid "%s (system)"
 msgstr ""
 
-#: src/main.c:3772
+#: src/main.c:3837
 msgid "End-of-turn sound (when the wait ends):"
 msgstr ""
 
-#: src/main.c:3777
+#: src/main.c:3842
 msgid "Change sound (a choice, a save):"
 msgstr ""
 
-#: src/main.c:3782
+#: src/main.c:3847
 msgid ""
 "▶ plays the sound as a test, even when the switch is off. Silent if no audio "
 "player is installed."
 msgstr ""
 
-#: src/main.c:3797
+#: src/main.c:3862
 msgid "Retry on HTTP 429:"
 msgstr ""
 
-#: src/main.c:3799 src/main.c:3807
+#: src/main.c:3864 src/main.c:3872
 msgid "Retries (0 = infinite):"
 msgstr ""
 
-#: src/main.c:3800 src/main.c:3808
+#: src/main.c:3865 src/main.c:3873
 msgid "Delay between attempts (ms):"
 msgstr ""
 
-#: src/main.c:3805
+#: src/main.c:3870
 msgid "Retry on HTTP 5xx:"
 msgstr ""
 
-#: src/main.c:3983
+#: src/main.c:4048
 #, c-format
 msgid "CDB: Init-Prompt scheme=%s found=%d\n"
 msgstr ""
 
-#: src/main.c:4028 src/main.c:4064
+#: src/main.c:4093 src/main.c:4129
 msgid "Save"
 msgstr ""
 
-#: src/main.c:4060
+#: src/main.c:4125
 msgid "API key:"
 msgstr ""
 
-#: src/main.c:4062
+#: src/main.c:4127
 msgid "Allowed models:"
 msgstr ""
 
-#: src/main.c:4076
+#: src/main.c:4141
 msgid "(optional)"
 msgstr ""
 
-#: src/main.c:4078 src/main.c:4083 src/main.c:4087
+#: src/main.c:4143 src/main.c:4148 src/main.c:4152
 msgid "(empty: all models)"
 msgstr ""
 
-#: src/main.c:4081
+#: src/main.c:4146
 msgid "HyperCharm key…"
 msgstr ""
 
-#: src/main.c:4154
+#: src/main.c:4219
 msgid "(to come: endpoint, model, API key…)"
 msgstr ""
 
-#: src/main.c:4160
+#: src/main.c:4225
 msgid "Retry on error"
 msgstr ""
 
-#: src/main.c:4161
+#: src/main.c:4226
 msgid "Init-Prompt"
 msgstr ""
 
-#: src/main.c:4164
+#: src/main.c:4229
 msgid "Harness"
 msgstr ""
 
-#: src/main.c:4165
+#: src/main.c:4230
 msgid "Tools"
 msgstr ""
 
-#: src/main.c:4166
+#: src/main.c:4231
 msgid "Providers"
 msgstr ""
 
-#: src/main.c:4172
+#: src/main.c:4237
 msgid "Language"
 msgstr ""
 
-#: src/main.c:4173
+#: src/main.c:4238
 msgid "Sounds"
 msgstr ""
 
-#: src/main.c:4176
+#: src/main.c:4241
 msgid "General"
 msgstr ""
 
-#: src/main.c:4176
+#: src/main.c:4241
 msgid "(to come: theme, font, indentation…)"
 msgstr ""
 
-#: src/main.c:4177
+#: src/main.c:4242
 msgid "(to come: token, user, repo defaults…)"
 msgstr ""
 
-#: src/main.c:4178
+#: src/main.c:4243
 msgid "LLM"
 msgstr ""
 
-#: src/main.c:4213
+#: src/main.c:4278
 msgid ""
 "Empty\n"
 "(reserved slot)"
 msgstr ""
 
-#: src/main.c:4308
+#: src/main.c:4373
 msgid "Split horizontally"
 msgstr ""
 
-#: src/main.c:4309
+#: src/main.c:4374
 msgid "Split vertically"
 msgstr ""
 
-#: src/main.c:4345
+#: src/main.c:4410
 msgid "Remove this tile"
 msgstr ""
 
-#: src/main.c:4355
+#: src/main.c:4420
 msgid "Group"
 msgstr ""
 
-#: src/main.c:4365
+#: src/main.c:4430
 msgid "Split group horizontally"
 msgstr ""
 
-#: src/main.c:4366
+#: src/main.c:4431
 msgid "Split group vertically"
 msgstr ""
 
-#: src/main.c:4380
+#: src/main.c:4445
 msgid "Collapse group to this piece"
 msgstr ""
 
-#: src/main.c:4390
+#: src/main.c:4455
 msgid "Remove group"
 msgstr ""
 
-#: src/main.c:4677
+#: src/main.c:4742
 msgid "CDB: window.json merged into layout.json\n"
 msgstr ""
 
-#: src/main.c:4808
+#: src/main.c:4873
 #, c-format
 msgid "CDB: modal limit of %d reached"
 msgstr ""
 
-#: src/main.c:4842
+#: src/main.c:4907
 msgid "Settings — CodeDashBoard"
 msgstr ""
 
-#: src/main.c:4886
+#: src/main.c:4951
 msgid "CDB: readlink /proc/self/exe failed"
 msgstr ""
 
-#: src/main.c:4919
+#: src/main.c:4984
 msgid "CDB: failed to spawn the new session"
 msgstr ""
 
-#: src/main.c:5044
+#: src/main.c:5132
 #, c-format
 msgid "CDB: no locale installed for language %s\n"
 msgstr ""
 
-#: src/main.c:5110
+#: src/main.c:5198
 msgid "About CDB"
 msgstr ""
 
-#: src/main.c:5112
+#: src/main.c:5200
 msgid "Exit"
 msgstr ""
 
-#: src/main.c:5136
+#: src/main.c:5224
 msgid "New window"
 msgstr ""
 
-#: src/main.c:5137
+#: src/main.c:5225
 msgid "New session…"
 msgstr ""
 

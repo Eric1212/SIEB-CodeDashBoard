@@ -69,6 +69,11 @@ static const char *cdb_css =
     ".titlebar-sep { padding: 0 4px; font-size: 10pt; }\n"
     ".titlebar-signature { font-size: 10pt; font-weight: normal; }\n"
     ".titlebar-file { font-weight: normal; font-size: 10pt; }\n"
+    ".titlebar-session { font-weight: normal; font-size: 10pt; }\n"
+    /* Le numéro de session se met en gras quand la boucle agentique tient —
+     * la classe est posée/retirée par llm_busy_set, du même coup d'œil que
+     * l'icône play/pause, donc titre et bouton ne peuvent pas diverger. */
+    ".titlebar-session.cdb-busy { font-weight: bold; }\n"
 
     /* --- Boutons icônes vraiment flat --- */
     "button.cdb-flat, menubutton.cdb-flat > button { background: none; "
