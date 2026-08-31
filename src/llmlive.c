@@ -5,6 +5,7 @@
 #include "llmlive.h"
 #include "session.h"
 #include "i18n.h"
+#include "mem.h"
 
 #include <json-glib/json-glib.h>
 #include <glib/gstdio.h>
@@ -115,6 +116,19 @@ llm_live_save(LlmCore *c)
     g_free(data);
     g_free(path);
     json_node_unref(root);
+    /* Écrire, libérer, rendre les pages : trois gestes, et le troisième ne
+     * suit pas tout seul. free() rend des objets, pas des pages — donc une
+     * sauvegarde « propre » laisse son haut-pic cartographié. Mesuré en
+     * rejouant ce geste hors de l'arbre, sur des fils réels : sans trim, dix
+     * sauvegardes d'un fil de 275 messages (747 Ko) font monter RssAnon de
+     * +904 Ko, par à-coups de 0,5 à 2,5 Mo, pendant que le tas alloué reste
+     * plat à 782 Ko — rien ne fuit, ça reste collé. Avec trim, la courbe est
+     * plate, solde final -420 Ko ; sur un fil de 2,7 Mo, 9,6 Mo au lieu de
+     * 17,3 Mo. Coût : 0,06 à 0,3 ms sur 747 Ko, 0,2 à 1 ms sur 2,7 Mo —
+     * quelques millisecondes par tour d'outil, qui en paie un de plusieurs
+     * secondes. Le trim n'est pas un filet anti-fuite : un objet vivant
+     * n'est jamais concerné (voir mem.c). */
+    cdb_mem_trim();
 }
 
 static LlmMsgKind
