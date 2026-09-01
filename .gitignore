@@ -27,3 +27,17 @@ tools/refresh_third_party
 # ci-dessus, sa source (tools/test_textops.c) est versionnee, pas le
 # programme compile.
 tools/test_textops
+
+# CLAUDE.md : le contrat de travail entre Éric Boucher et son employé LLM
+# (Claude) — les règles, la nomenclature, les lois d'architecture. Pas une
+# documentation destinée au public du dépôt. Il était versionné et donc publié
+# depuis 621ca40 (17 août 2026), où il était entré incognito dans un commit au
+# titre sans rapport (« Refactor explorateur inline »), ce qui explique qu'il
+# ait survécu quatorze jours sans qu'on le voie dans le log.
+#
+# CE RETRAIT NE VAUT QUE POUR L'AVENIR. Les versions du 17 août jusqu'ici
+# restent accessibles dans l'historique, par SHA et par blob ; le fichier est
+# resté public tout ce temps et aucun geste ne le rend privé rétrospectivement.
+# Éric a choisi de vivre cette exposition plutôt que de réécrire un log public
+# — ne pas confondre cette ligne avec une purge.
+CLAUDE.md
