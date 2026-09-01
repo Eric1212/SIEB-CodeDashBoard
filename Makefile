@@ -67,6 +67,11 @@ MSGINIT  := msginit
 PODIR    := po
 LOCALEDIR:= $(PODIR)/locale
 POT      := $(PODIR)/cdb.pot
+# Année courante AU MOMENT DU BUILD, jamais gravée en dur : les en-têtes
+# de copyright (POT de repli, en-têtes des .po) suivent le calendrier.
+# Le POT de xgettext, lui, garde « YEAR » littéral — convention GNU : le
+# gabarit est un template, msginit remplit l'année à l'initialisation.
+YEAR     := $(shell date +%Y)
 LANGS    := $(shell grep -v '^\#' $(PODIR)/LINGUAS 2>/dev/null)
 POS      := $(addprefix $(PODIR)/,$(addsuffix .po,$(LANGS)))
 MOS      := $(foreach l,$(LANGS),$(LOCALEDIR)/$(l)/LC_MESSAGES/cdb.mo)
@@ -83,20 +88,20 @@ pot:
 	$(XGETTEXT) --from-code=UTF-8 --keyword=_ --keyword=N_:1 \
 	    --keyword=ngettext:1,2 --add-comments=TRANSLATORS \
 	    --package-name=cdb --package-version=0.1 \
-	    --copyright-holder="SIEB" \
+	    --copyright-holder="Éric Boucher (SIEB)" \
 	    --files-from=$(PODIR)/.potfiles --output=$(POT)
 	rm -f $(PODIR)/.potfiles
 	@if [ ! -f $(POT) ]; then \
 	    echo "  XGETTEXT  aucune chaîne marquée : POT d'en-tête seul"; \
 	    printf '%s\n' \
 	        '# CodeDashBoard translation template.' \
-	        '# Copyright (C) 2025 SIEB.' \
+	        '# Copyright (C) $(YEAR) Éric Boucher (SIEB).' \
 	        '#' \
 	        'msgid ""' \
 	        'msgstr ""' \
 	        '"Project-Id-Version: cdb 0.1\n"' \
 	        '"Report-Msgid-Bugs-To: \n"' \
-	        '"POT-Creation-Date: 2025-08-27 00:00+0000\n"' \
+	        '"POT-Creation-Date: $(shell date -u '+%Y-%m-%d %H:%M+0000')\n"' \
 	        '"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"' \
 	        '"Last-Translator: \n"' \
 	        '"Language-Team: \n"' \
@@ -126,6 +131,8 @@ po: pot
 	    fi; \
 	    $(MSGMERGE) --update --no-fuzzy-matching --backup=none \
 	        $(PODIR)/$$l.po $(POT); \
+	    sed -i 's/^# Copyright (C) [0-9-]* \(Éric Boucher (SIEB)\)\.$$/# Copyright (C) $(YEAR) \1./' \
+	        $(PODIR)/$$l.po; \
 	done
 
 # Compilation des catalogues binaires (.mo) dans po/locale/<lang>/LC_MESSAGES/.

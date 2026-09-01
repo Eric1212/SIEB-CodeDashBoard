@@ -1,5 +1,5 @@
 # Traductions françaises de CodeDashBoard (CDB).
-# Copyright (C) 2025 SIEB.
+# Copyright (C) 2026 Éric Boucher (SIEB).
 #
 # Les msgid sont en anglais : c'est la langue source, le pivot. Ce fichier
 # restitue le français parlé. Trois règles pour traduire ici :
@@ -15,7 +15,7 @@ msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-09-01 12:38-0400\n"
-"PO-Revision-Date: 2025-08-27 00:00+0000\n"
+"PO-Revision-Date: 2026-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
 "Language: fr\n"

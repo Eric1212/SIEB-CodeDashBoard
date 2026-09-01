@@ -5763,7 +5763,7 @@ on_about_activated(GSimpleAction G_GNUC_UNUSED *action,
         "CodeDashBoard (CDB) by SIEB is a C IDE for developing with LLM "
         "on a lightweight footprint on RAM and CPU.");
     gtk_about_dialog_set_copyright(GTK_ABOUT_DIALOG(dlg),
-                                   "Copyright © 2026 SIEB");
+                                   "Copyright © 2026 Éric Boucher (SIEB)");
     gtk_about_dialog_set_authors(GTK_ABOUT_DIALOG(dlg), authors);
     gtk_window_set_transient_for(GTK_WINDOW(dlg), app->win);
     gtk_window_set_modal(GTK_WINDOW(dlg), TRUE);

@@ -1,0 +1,341 @@
+LICENCE CODEDASHBOARD (CDB)
+Copyright (c) 2026 Éric Boucher (SIEB) <eb@sieb.ca>
+
+================================================================
+VERSION FRANÇAISE
+================================================================
+
+Article 1 — Définitions
+
+Dans la présente licence, les termes suivants ont la signification
+ci-après :
+
+1.1. « CDB » désigne le logiciel CodeDashBoard, incluant son code
+     source, ses binaires, sa documentation, ses fichiers de
+     configuration et toute œuvre dérivée au sens de l'Article 6.
+
+1.2. « Titulaire » désigne Éric Boucher (SIEB), détenteur des
+     droits d'auteur sur CDB.
+
+1.3. « Utilisateur » désigne toute personne physique ou morale qui
+     utilise, copie, modifie ou distribue CDB ou un Produit Dérivé.
+
+1.4. « Code Dérivé » désigne toute modification, adaptation,
+     traduction ou extension apportée au code source de CDB.
+
+1.5. « Produit Dérivé » désigne tout produit, service ou œuvre, en
+     tout ou en partie, qui incorpore, inclut ou est dérivé de CDB
+     ou de Code Dérivé.
+
+1.6. « Part CDB » désigne le ratio entre le nombre de lignes de
+     code source (LoC) provenant de CDB ou de Code Dérivé et le
+     nombre total de lignes de code source du Produit Dérivé. Les
+     lignes vides et les commentaires sont exclus du calcul. Le
+     décompte est effectué au moyen d'un outil standard de comptage
+     (par exemple cloc). En cas de divergence sur la méthode, celle
+     retenue par le Titulaire prévaut.
+
+1.7. « Revenus CDB » désigne tout chiffre d'affaires brut
+     directement lié à CDB, incluant notamment et sans s'y limiter :
+
+     (a) support technique, formation, dépannage ou assistance
+         aux utilisateurs de CDB ;
+     (b) travail de développement, modification, customisation ou
+         intégration de CDB pour un tiers, y compris la
+         rémunération, le salaire ou tout autre gain tiré de ce
+         travail ;
+     (c) exploitation d'un service en ligne (SaaS) ou de tout
+         autre service basé sur CDB ;
+     (d) vente ou distribution commerciale d'un Produit Dérivé dont
+         la Part CDB est égale ou supérieure à 10 %.
+
+1.8. « Redevance » désigne la somme due au Titulaire en application
+     de l'Article 4.
+
+Article 2 — Octroi de droits
+
+Sous réserve du respect de l'ensemble des termes de la présente
+licence, le Titulaire accorde à tout Utilisateur le droit non
+exclusif, mondial et perpétuel d'utiliser, de copier, de modifier et
+de distribuer CDB, y compris à des fins commerciales.
+
+Article 3 — Exemption d'usage-outil
+
+L'utilisation de CDB comme outil de développement — notamment comme
+environnement de développement intégré — pour créer, développer ou
+maintenir des logiciels qui n'incorporent pas de code CDB ne
+constitue pas un usage assujetti à la Redevance. Cette exemption
+couvre l'usage interne en entreprise, l'usage personnel et l'usage
+éducatif.
+
+Article 4 — Redevance
+
+4.1. Tout Utilisateur qui tire des Revenus CDB doit verser au
+     Titulaire une Redevance équivalant à 10 % du chiffre d'affaires
+     brut des Revenus CDB. Cette Redevance est exigible dès le
+     premier dollar, sans seuil ni franchise.
+
+4.2. En ce qui concerne les Revenus CDB visés à l'alinéa 1.7(d)
+     (vente ou distribution d'un Produit Dérivé), la Redevance
+     s'applique uniquement si la Part CDB du Produit Dérivé est
+     égale ou supérieure à 10 %. Lorsque ce seuil est atteint, la
+     Redevance est de 10 % du chiffre d'affaires brut de ce Produit
+     Dérivé.
+
+4.3. Les Revenus CDB visés aux alinéas 1.7(a), (b) et (c) sont
+     assujettis à la Redevance sans condition de seuil.
+
+4.4. La Redevance est payable dans les 30 jours suivant la prise de
+     connaissance par l'Utilisateur de l'obligation de verser la
+     Redevance. Le Titulaire fournit ses coordonnées de paiement sur
+     demande.
+
+Article 5 — Attribution
+
+Toute distribution de CDB ou de Code Dérivé, ainsi que tout Produit
+Dérivé, doit inclure une mention visible du Titulaire du droit
+d'auteur et de la présente licence, conformément à la formulation
+suivante :
+
+  « Ce produit inclut du code de CodeDashBoard (CDB),
+    Copyright (c) 2026 Éric Boucher (SIEB) <eb@sieb.ca> »
+
+Article 6 — Modifications et Code Dérivé
+
+L'Utilisateur peut modifier CDB et conserver ses modifications
+privées (aucune obligation de publication du code source). Toute
+modification demeure assujettie à la présente licence, incluant
+l'obligation d'attribution (Article 5) et la Redevance (Article 4).
+
+Article 7 — Conformité et contrôle
+
+7.1. Déclaration : tout Utilisateur assujetti à la Redevance doit,
+     sur demande du Titulaire, fournir une déclaration des Revenus
+     CDB perçus.
+
+7.2. Audit : le Titulaire se réserve le droit de vérifier la
+     conformité de tout Utilisateur, incluant l'examen du code
+     source des Produits Dérivés (aux fins du calcul de la Part CDB)
+     et la consultation des registres comptables liés aux Revenus
+     CDB. Cet audit peut être effectué à des intervalles raisonnables
+     et sur préavis de 14 jours.
+
+7.3. Le Titulaire peut exercer tout moyen légal à sa disposition
+     pour faire respecter la présente licence, incluant les recours
+     judiciaires, sans que cette énumération soit limitative.
+
+Article 8 — Absence de garantie
+
+CDB est fourni « tel quel », sans aucune garantie d'aucune sorte,
+expresse ou implicite, incluant sans s'y limiter les garanties de
+qualité marchande, d'adéquation à un usage particulier et de
+non-contrefaçon. Le Titulaire ne garantit pas que CDB sera exempt
+d'erreurs ou que son utilisation sera ininterrompue.
+
+Article 9 — Limitation de responsabilité
+
+En aucun cas le Titulaire ne sera tenu responsable des dommages
+directs, indirects, accessoires, spéciaux ou consécutifs résultant
+de l'utilisation ou de l'incapacité d'utiliser CDB. La
+responsabilité totale du Titulaire est plafonnée à la somme
+effectivement reçue de l'Utilisateur pour CDB, ou à zéro si CDB a
+été obtenu gratuitement.
+
+Article 10 — Résiliation
+
+Le non-respect de tout terme de la présente licence, incluant le
+défaut de paiement de la Redevance, entraîne la résiliation
+immédiate et de plein droit du droit d'utilisation de CDB. À la
+résiliation, l'Utilisateur doit cesser toute utilisation et
+distribution de CDB et de tout Produit Dérivé, et détruire toutes
+les copies en sa possession.
+
+Article 11 — Dispositions générales
+
+11.1. Loi applicable : la présente licence est régie par les lois
+      en vigueur au Québec, Canada.
+
+11.2. Divisibilité : si une disposition de la présente licence est
+      jugée invalide ou inapplicable, les autres dispositions
+      demeurent en vigueur.
+
+11.3. Intégralité : la présente licence constitue l'intégralité de
+      l'entente entre le Titulaire et l'Utilisateur concernant CDB.
+
+11.4. Modification : toute modification à la présente licence doit
+      être faite par écrit et signée par le Titulaire.
+
+11.5. Marques de commerce : la présente licence n'accorde aucune
+      autorisation d'utilisation des marques de commerce, noms
+      commerciaux ou logos du Titulaire, incluant « SIEB »,
+      « CodeDashBoard » et « CDB ».
+
+================================================================
+ENGLISH VERSION
+================================================================
+
+Article 1 — Definitions
+
+In this license, the following terms have the meanings set forth
+below:
+
+1.1. "CDB" refers to the CodeDashBoard software, including its
+     source code, binaries, documentation, configuration files,
+     and any derivative work as defined in Article 6.
+
+1.2. "Licensor" refers to Éric Boucher (SIEB), holder of the
+     copyright in CDB.
+
+1.3. "User" refers to any natural or legal person who uses, copies,
+     modifies, or distributes CDB or a Derivative Product.
+
+1.4. "Derivative Code" refers to any modification, adaptation,
+     translation, or extension made to the source code of CDB.
+
+1.5. "Derivative Product" refers to any product, service, or work,
+     in whole or in part, that incorporates, includes, or is derived
+     from CDB or Derivative Code.
+
+1.6. "CDB Share" refers to the ratio between the number of lines of
+     source code (LoC) originating from CDB or Derivative Code and
+     the total number of source code lines in the Derivative Product.
+     Blank lines and comments are excluded from the calculation.
+     The count is performed using a standard line-counting tool (e.g.
+     cloc). In case of a disagreement on the method, the method
+     chosen by the Licensor prevails.
+
+1.7. "CDB Revenue" refers to any gross revenue directly related to
+     CDB, including but not limited to:
+
+     (a) technical support, training, troubleshooting, or
+         assistance to users of CDB;
+     (b) development work, modification, customization, or
+         integration of CDB for a third party, including the
+         remuneration, salary, or any other gain derived from such
+         work;
+     (c) operation of an online service (SaaS) or any other service
+         based on CDB;
+     (d) sale or commercial distribution of a Derivative Product
+         whose CDB Share is equal to or greater than 10%.
+
+1.8. "Royalty" refers to the amount owed to the Licensor under
+     Article 4.
+
+Article 2 — Grant of Rights
+
+Subject to compliance with all terms of this license, the Licensor
+grants to any User the non-exclusive, worldwide, and perpetual right
+to use, copy, modify, and distribute CDB, including for commercial
+purposes.
+
+Article 3 — Tool Usage Exemption
+
+The use of CDB as a development tool — notably as an integrated
+development environment — to create, develop, or maintain software
+that does not incorporate CDB code does not constitute usage subject
+to the Royalty. This exemption covers internal corporate use,
+personal use, and educational use.
+
+Article 4 — Royalty
+
+4.1. Any User who derives CDB Revenue shall pay the Licensor a
+     Royalty equal to 10% of the gross revenue of CDB Revenue. This
+     Royalty is due from the first dollar, with no threshold or
+     exemption.
+
+4.2. With respect to CDB Revenue under paragraph 1.7(d) (sale or
+     distribution of a Derivative Product), the Royalty applies
+     only if the CDB Share of the Derivative Product is equal to or
+     greater than 10%. Once this threshold is met, the Royalty is
+     10% of the gross revenue of that Derivative Product.
+
+4.3. CDB Revenue under paragraphs 1.7(a), (b), and (c) is subject
+     to the Royalty without any threshold condition.
+
+4.4. The Royalty is payable within 30 days of the User becoming
+     aware of the obligation to pay the Royalty. The Licensor
+     provides payment instructions upon request.
+
+Article 5 — Attribution
+
+Any distribution of CDB or Derivative Code, as well as any
+Derivative Product, must include a visible notice of the copyright
+holder and of this license, in accordance with the following
+wording:
+
+  "This product includes code from CodeDashBoard (CDB),
+   Copyright (c) 2026 Éric Boucher (SIEB) <eb@sieb.ca>"
+
+Article 6 — Modifications and Derivative Code
+
+The User may modify CDB and keep modifications private (no
+obligation to publish source code). Any modification remains subject
+to this license, including the attribution requirement (Article 5)
+and the Royalty (Article 4).
+
+Article 7 — Compliance and Enforcement
+
+7.1. Declaration: any User subject to the Royalty shall, upon
+     request by the Licensor, provide a declaration of CDB Revenue
+     received.
+
+7.2. Audit: the Licensor reserves the right to verify the compliance
+     of any User, including examination of the source code of
+     Derivative Products (for the purpose of calculating the CDB
+     Share) and review of accounting records related to CDB Revenue.
+     Such audit may be conducted at reasonable intervals and upon
+     14 days' notice.
+
+7.3. The Licensor may exercise any legal means available to enforce
+     this license, including legal proceedings, without this
+     enumeration being limiting.
+
+Article 8 — No Warranty
+
+CDB is provided "as is", without any warranty of any kind, express or
+implied, including without limitation the warranties of
+merchantability, fitness for a particular purpose, and
+non-infringement. The Licensor does not warrant that CDB will be
+error-free or that its use will be uninterrupted.
+
+Article 9 — Limitation of Liability
+
+In no event shall the Licensor be liable for any direct, indirect,
+incidental, special, or consequential damages arising from the use
+or inability to use CDB. The total liability of the Licensor is
+capped at the amount actually received from the User for CDB, or
+zero if CDB was obtained free of charge.
+
+Article 10 — Termination
+
+Failure to comply with any term of this license, including failure
+to pay the Royalty, results in the immediate and automatic
+termination of the right to use CDB. Upon termination, the User
+must cease all use and distribution of CDB and any Derivative
+Product, and destroy all copies in their possession.
+
+Article 11 — General Provisions
+
+11.1. Governing law: this license is governed by the laws in force
+      in Québec, Canada.
+
+11.2. Severability: if any provision of this license is held to be
+      invalid or unenforceable, the remaining provisions remain in
+      effect.
+
+11.3. Entire agreement: this license constitutes the entire
+      agreement between the Licensor and the User regarding CDB.
+
+11.4. Amendment: any amendment to this license must be in writing
+      and signed by the Licensor.
+
+11.5. Trademarks: this license does not grant any right to use the
+      trademarks, trade names, or logos of the Licensor, including
+      "SIEB", "CodeDashBoard", and "CDB".
+
+================================================================
+Les deux versions de cette licence (française et anglaise) ont
+égale valeur juridique.
+Both versions of this license (French and English) are equally
+authoritative.
+================================================================
