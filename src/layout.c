@@ -132,7 +132,7 @@ layout_save(Layout *root)
     }
     if (file_node == NULL) {
         file_node = json_node_new(JSON_NODE_OBJECT);
-        json_node_init_object(file_node, json_object_new());
+        json_node_take_object(file_node, json_object_new());
     }
     obj = json_node_get_object(file_node);
     json_object_set_member(obj, "root", tree);   /* consomme tree */
@@ -415,7 +415,7 @@ layout_pref_set(const char *key, const char *value)
     g_object_unref(parser);
     if (file_node == NULL) {
         file_node = json_node_new(JSON_NODE_OBJECT);
-        json_node_init_object(file_node, json_object_new());
+        json_node_take_object(file_node, json_object_new());
     }
     obj = json_node_get_object(file_node);
     if (value != NULL)
@@ -482,7 +482,7 @@ layout_merge_members(JsonObject *members)
     g_object_unref(parser);
     if (file_node == NULL) {
         file_node = json_node_new(JSON_NODE_OBJECT);
-        json_node_init_object(file_node, json_object_new());
+        json_node_take_object(file_node, json_object_new());
     }
     obj = json_node_get_object(file_node);
 

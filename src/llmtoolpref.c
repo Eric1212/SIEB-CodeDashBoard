@@ -295,7 +295,7 @@ llm_config_save_tool_mode(const char *name, LlmToolProfile profile,
     } else {
         root = json_object_new();
         work = json_node_new(JSON_NODE_OBJECT);
-        json_node_set_object(work, root);
+        json_node_take_object(work, root);
     }
 
     {
@@ -383,7 +383,7 @@ llm_config_set_active_profile(LlmToolProfile profile)
     } else {
         root = json_object_new();
         work = json_node_new(JSON_NODE_OBJECT);
-        json_node_set_object(work, root);
+        json_node_take_object(work, root);
     }
 
     /* active peut être absent (config jamais ouverte) ou NULL : on le

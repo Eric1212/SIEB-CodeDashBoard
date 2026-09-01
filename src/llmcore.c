@@ -109,7 +109,7 @@ llm_config_merge_members(JsonObject *members)
     g_object_unref(parser);
     if (work == NULL) {
         work = json_node_new(JSON_NODE_OBJECT);
-        json_node_init_object(work, json_object_new());
+        json_node_take_object(work, json_object_new());
     }
     obj = json_node_get_object(work);
 
@@ -933,7 +933,7 @@ llm_config_set_allowed_models(const char *provider, const char *filter)
     } else {
         root = json_object_new();
         work_root = json_node_new(JSON_NODE_OBJECT);
-        json_node_set_object(work_root, root);
+        json_node_take_object(work_root, root);
     }
     if (!json_object_has_member(root, "providers")) {
         json_object_set_object_member(root, "providers", json_object_new());
@@ -1047,7 +1047,7 @@ llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms)
     } else {
         root = json_object_new();
         work = json_node_new(JSON_NODE_OBJECT);
-        json_node_set_object(work, root);
+        json_node_take_object(work, root);
     }
 
     if (!json_object_has_member(root, "harness") ||
@@ -1129,7 +1129,7 @@ llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms)
     } else {
         root = json_object_new();
         work = json_node_new(JSON_NODE_OBJECT);
-        json_node_set_object(work, root);
+        json_node_take_object(work, root);
     }
 
     if (!json_object_has_member(root, "harness") ||
@@ -1228,7 +1228,7 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
     } else {
         root = json_object_new();
         work = json_node_new(JSON_NODE_OBJECT);
-        json_node_set_object(work, root);
+        json_node_take_object(work, root);
     }
 
     /* api_url/api_key du provider choisi (s'il est déjà connu). */
@@ -1455,7 +1455,7 @@ llm_config_save_provider(const char *provider, const char *api_key)
         provs = json_object_new();
         json_object_set_object_member(root, "providers", provs);
         root_node = json_node_new(JSON_NODE_OBJECT);
-        json_node_set_object(root_node, root);
+        json_node_take_object(root_node, root);
     }
 
     prov = json_object_has_member(provs, provider)
@@ -1540,19 +1540,32 @@ llm_config_seed_if_absent(void)
         return;
     }
 
-    /* Le geste exact, MESURÉ et non supposé. Quatre formes testées sous ASAN
-     * contre cette version de json-glib : set_object en gardant notre
-     * référence, init_object en la gardant, init_object sur un nœud
-     * JSON_NODE_NULL — les trois laissent la racine et son sous-arbre
-     * atteignables à la sortie (56 octets directs, 264 indirects par seed).
-     * La seule propre est set_object suivi de l'abandon de notre référence :
-     * json_node_set_object REFERENCE, il ne vole pas.
+    /* Convention json-glib, MESURÉE et non supposée — elle commande tout
+     * transfert d'objet vers un nœud dans le projet :
      *
-     * Avertissement pour ce fichier : les trois formes qui fuient sont déjà
-     * écrites plus haut (merge_members, save_provider, switch_active) — elles
-     * ne sont pas corrigées ici, hors de ce changement. Et json_node_new
-     * (JSON_NODE_OBJECT) ne crée PAS l'objet : json_node_get_object sur un
-     * nœuf neuf rend NULL, ce qui fait planter le générateur. */
+     *   json_node_set_object()   REFERENCE  -> il faut rendre notre référence
+     *   json_node_init_object()  REFERENCE  -> idem
+     *   json_node_take_object()  VOLE       -> il ne faut RIEN rendre
+     *
+     * On prend take_object : un mot, pas de ligne de plus, et c'est déjà
+     * l'idiome de llmlive.c.
+     *
+     * Comment ça a été établi, parce que la première mesure était fausse.
+     * Quatre formes testées dans UN SEUL processus : la dernière ne fuyait
+     * pas. LSAN l'avait déclarée atteignable — son pointeur traînait encore
+     * dans une pile alors dans les bornes au moment du rapport. Faux négatif
+     * d'ordre d'exécution, pas de sémantique. Remis UN processus par forme,
+     * la fuite est apparue des deux côtés, et l'ordre ne change plus rien.
+     *
+     * Le discriminant croisé, lui, ne dépend pas de LSAN : rendre notre
+     * référence APRÈS la mort du nœud ne plaint que pour take_object (double
+     * free), et relire l'objet après cette mort ne plaint que pour lui aussi.
+     * Preuve directe de qui possédait quoi, sans rapport de fuite.
+     *
+     * Et pour qui relirait ce fichier : json_node_new(JSON_NODE_OBJECT) ne
+     * crée PAS l'objet — son pointeur interne est NULL. json_node_get_object
+     * sur un nœud ayant encore rien reçu rend donc NULL, et le générateur
+     * s'y écrase. */
     root  = json_object_new();
     provs = json_object_new();
     for (i = 0; i < G_N_ELEMENTS(LLM_PROVIDERS); i++) {
@@ -1566,8 +1579,7 @@ llm_config_seed_if_absent(void)
     json_object_set_object_member(root, "providers", provs);
 
     work = json_node_new(JSON_NODE_OBJECT);
-    json_node_set_object(work, root);
-    json_object_unref(root);          /* le nœud reste seul propriétaire */
+    json_node_take_object(work, root);   /* le nœud devient propriétaire */
 
     gen  = json_generator_new();
     json_generator_set_root(gen, work);
