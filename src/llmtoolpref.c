@@ -38,10 +38,10 @@ static void
 tool_pref_apply_defaults(LlmToolPref *p)
 {
     p->modes[LLM_PROFILE_MINIMAL] = LLM_TOOL_OFF;
-    /* cdb_read est en lecture seule (sans effet destructeur) : il est
+    /* read est en lecture seule (sans effet destructeur) : il est
      * annonce en ALLOW des le profil DEFAULT. Les autres outils restent
      * en ASK (decision d'Eric avant execution). */
-    if (p->name != NULL && g_strcmp0(p->name, "cdb_read") == 0)
+    if (p->name != NULL && g_strcmp0(p->name, "read") == 0)
         p->modes[LLM_PROFILE_DEFAULT] = LLM_TOOL_ALLOW;
     else
         p->modes[LLM_PROFILE_DEFAULT] = LLM_TOOL_ASK;
@@ -101,8 +101,39 @@ llm_tools_pref_find(GPtrArray *prefs, const char *name)
     return NULL;
 }
 
+/* Migration des noms d'outils. Le prefixe cdb_ est tombe et remove est ne.
+ *
+ * Sans cette table, un llm.json enregistre avant le changement ne retrouve
+ * AUCUNE de ses lignes : cherchee sous "read", trouvee sous "cdb_read",
+ * chaque outil retombe silencieusement sur ses defauts. L'utilisateur
+ * perd ses reglages sans le moindre message, et le crois ensuite a un bug
+ * des modes. On reecrit le nom a la LECTURE : la prochaine sauvegarde
+ * ecrira le nom neuf, et un llm.json deja neuf traverse sans rien changer.
+ *
+ * Les noms a gauche sont les SEULS endroits du projet ou "cdb_read" & co
+ * survivent volontairement. */
+static const char *
+tool_name_migrate(const char *legacy)
+{
+    static const struct { const char *from, *to; } map[] = {
+        { "cdb_bash",    "bash"    },
+        { "cdb_read",    "read"    },
+        { "cdb_insert",  "insert"  },
+        { "cdb_replace", "replace" },
+        { "cdb_create",  "create"  },
+        { "cdb_delete",  "delete"  },
+    };
+
+    if (legacy == NULL)
+        return NULL;
+    for (guint i = 0; i < G_N_ELEMENTS(map); i++)
+        if (g_strcmp0(legacy, map[i].from) == 0)
+            return map[i].to;
+    return legacy;
+}
+
 /* Lecture llm.json "tools". Outil inconnu (jamais vu) : absent de la
- * liste. cdb_bash est TOUJOURS présent (défauts appliqués si manquant) :
+ * liste. bash est TOUJOURS présent (défauts appliqués si manquant) :
  * c'est l'outil natif historique du dashboard. */
 GPtrArray *
 llm_tools_prefs_load(void)
@@ -113,6 +144,7 @@ llm_tools_prefs_load(void)
     gboolean    have_bash = FALSE;
     gboolean    have_read = FALSE;
     gboolean    have_insert = FALSE;
+    gboolean    have_remove = FALSE;
     gboolean    have_replace = FALSE;
     gboolean    have_create = FALSE;
     gboolean    have_delete = FALSE;
@@ -133,8 +165,8 @@ llm_tools_prefs_load(void)
                 if (o == NULL || !json_object_has_member(o, "name"))
                     continue;
                 p = g_new0(LlmToolPref, 1);
-                p->name = g_strdup(json_object_get_string_member(o,
-                                                                 "name"));
+                p->name = g_strdup(tool_name_migrate(
+                    json_object_get_string_member(o, "name")));
                 tool_pref_apply_defaults(p);
 
                 /* Compat : ancien format {enabled:bool} -> tout ASK/OFF. */
@@ -160,17 +192,19 @@ llm_tools_prefs_load(void)
                         p->modes[k] = en ? LLM_TOOL_ASK : LLM_TOOL_OFF;
                 }
 
-                if (g_strcmp0(p->name, "cdb_bash") == 0)
+                if (g_strcmp0(p->name, "bash") == 0)
                     have_bash = TRUE;
-                if (g_strcmp0(p->name, "cdb_read") == 0)
+                if (g_strcmp0(p->name, "read") == 0)
                     have_read = TRUE;
-                if (g_strcmp0(p->name, "cdb_insert") == 0)
+                if (g_strcmp0(p->name, "insert") == 0)
                     have_insert = TRUE;
-                if (g_strcmp0(p->name, "cdb_replace") == 0)
+                if (g_strcmp0(p->name, "remove") == 0)
+                    have_remove = TRUE;
+                if (g_strcmp0(p->name, "replace") == 0)
                     have_replace = TRUE;
-                if (g_strcmp0(p->name, "cdb_create") == 0)
+                if (g_strcmp0(p->name, "create") == 0)
                     have_create = TRUE;
-                if (g_strcmp0(p->name, "cdb_delete") == 0)
+                if (g_strcmp0(p->name, "delete") == 0)
                     have_delete = TRUE;
                 g_ptr_array_add(out, p);
             }
@@ -182,14 +216,14 @@ llm_tools_prefs_load(void)
     if (!have_bash) {
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
-        p->name = g_strdup("cdb_bash");
+        p->name = g_strdup("bash");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }
     if (!have_read) {
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
-        p->name = g_strdup("cdb_read");
+        p->name = g_strdup("read");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }
@@ -198,14 +232,23 @@ llm_tools_prefs_load(void)
     if (!have_insert) {
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
-        p->name = g_strdup("cdb_insert");
+        p->name = g_strdup("insert");
+        tool_pref_apply_defaults(p);
+        g_ptr_array_add(out, p);
+    }
+    /* Miroir destructif de insert : meme place dans la liste, meme seed.
+     * Sans ces six lignes, remove ne serait jamais annonce au modele. */
+    if (!have_remove) {
+        LlmToolPref *p = g_new0(LlmToolPref, 1);
+
+        p->name = g_strdup("remove");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }
     if (!have_replace) {
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
-        p->name = g_strdup("cdb_replace");
+        p->name = g_strdup("replace");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }
@@ -214,14 +257,14 @@ llm_tools_prefs_load(void)
     if (!have_create) {
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
-        p->name = g_strdup("cdb_create");
+        p->name = g_strdup("create");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }
     if (!have_delete) {
         LlmToolPref *p = g_new0(LlmToolPref, 1);
 
-        p->name = g_strdup("cdb_delete");
+        p->name = g_strdup("delete");
         tool_pref_apply_defaults(p);
         g_ptr_array_add(out, p);
     }

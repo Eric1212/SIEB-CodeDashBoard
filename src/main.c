@@ -4244,7 +4244,7 @@ tool_mode_cycle(const char *name, guint *n_out)
         LLM_TOOL_OFF, LLM_TOOL_ASK, LLM_TOOL_ALLOW
     };
 
-    if (name != NULL && g_strcmp0(name, "cdb_bash") == 0) {
+    if (name != NULL && g_strcmp0(name, "bash") == 0) {
         *n_out = G_N_ELEMENTS(bash_cycle);
         return bash_cycle;
     }
@@ -6060,7 +6060,7 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     llm_live_load(app->llm_core);
 
     /* Backend bash permanent : cree une seule fois et survit a tout
-     * re-rendu du layout. Apres cet appel, un outil cdb_bash execute sans
+     * re-rendu du layout. Apres cet appel, un outil bash execute sans
      * qu'aucune tuile « bash » ne soit affichee (regle : le layout ne fait
      * que rendre — l'existence d'un etat n'en depend pas). */
     bash_panel_init(app->roots, app->multi_paths);

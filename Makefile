@@ -8,7 +8,7 @@ PKGS    := gtk4 gtksourceview-5 libadwaita-1 json-glib-1.0 vte-2.91-gtk4 libsoup
 CFLAGS  += $(shell pkg-config --cflags $(PKGS))
 LIBS    := $(shell pkg-config --libs $(PKGS))
 
-SRC     := src/main.c src/css.c src/roots.c src/fslist.c src/dirty.c src/diffbar.c src/bashpanel.c src/modal.c src/session.c src/llmcore.c src/llmtile.c src/mdview.c src/layout.c src/llmslots.c src/llmlive.c src/llmtoolpref.c src/ibox.c src/i18n.c src/mem.c src/sfx.c
+SRC     := src/main.c src/css.c src/roots.c src/fslist.c src/dirty.c src/diffbar.c src/bashpanel.c src/modal.c src/session.c src/llmcore.c src/llmtile.c src/mdview.c src/layout.c src/llmslots.c src/llmlive.c src/llmtoolpref.c src/ibox.c src/i18n.c src/mem.c src/sfx.c src/textops.c
 OBJ     := $(SRC:.c=.o)
 DEP     := $(OBJ:.o=.d)
 TARGET  := cdb
@@ -42,6 +42,32 @@ tools: $(TOOLS)
 
 $(TOOLS): $(TOOLDEPS)
 	$(CC) $(TOOLFLAGS) -I third_party/tomlc17 -o $@ tools/refresh_third_party.c third_party/tomlc17/tomlc17.c
+
+# --- Couche pure : test hors application ------------------------------
+# textops.c ne depend que de glib : ni GTK, ni vue, ni disque. Meme lecon
+# que pour refresh_third_party : flags dedies sans -MMD, sinon la regle
+# generale accoucherait d'un .d orphelin et irait reclamer des headers
+# qu'elle ne regarde pas. Le binaire vit dans tools/ et n'entre PAS dans
+# `all` : `make` compile, `make check` prouve.
+TESTBIN     := tools/test_textops
+TESTFLAGS   := -std=c23 -O1 -g -Wall -Wextra
+TESTDEPS    := src/textops.c src/textops.h tools/test_textops.c
+GLIB_CFLAGS := $(shell pkg-config --cflags glib-2.0)
+GLIB_LIBS   := $(shell pkg-config --libs glib-2.0)
+
+check: $(TESTBIN)
+	./$(TESTBIN)
+
+$(TESTBIN): $(TESTDEPS)
+	$(CC) $(TESTFLAGS) $(GLIB_CFLAGS) -o $@ src/textops.c tools/test_textops.c $(GLIB_LIBS)
+
+# Le meme test sous ASan/UBSan : la couche pure manipule des offsets,
+# c'est exactement la ou une erreur de bornes se cache sans se voir.
+check-asan:
+	$(CC) $(TESTFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer \
+	    $(GLIB_CFLAGS) -o $(TESTBIN) src/textops.c tools/test_textops.c \
+	    $(GLIB_LIBS) -fsanitize=address,undefined
+	./$(TESTBIN)
 
 # .git/hooks/ n'est pas versionné : le hook vit dans tools/git-hooks/ et ce
 # script le copie en le rendant exécutable. À lancer après un fresh clone.
@@ -165,9 +191,9 @@ i18n-check:
 	done; exit $$fail
 
 clean:
-	rm -f $(OBJ) $(DEP) $(TARGET) $(TOOLS)
+	rm -f $(OBJ) $(DEP) $(TARGET) $(TOOLS) $(TESTBIN)
 	rm -rf $(LOCALEDIR)
 
 # Dépendances de headers générées par -MMD (ignorées si absentes).
 -include $(DEP)
-.PHONY: all run asan clean pot po mo i18n-check tools install-hooks
+.PHONY: all run asan clean pot po mo i18n-check tools install-hooks check check-asan

@@ -25,6 +25,7 @@
 #include "llmslots.h"
 #include "roots.h"
 #include "llmlive.h"
+#include "textops.h"
 
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
@@ -1651,7 +1652,7 @@ str_replace_all(const char *s, const char *old_s, const char *new_s)
     "on the workstation assigned to you both.\n\n"                        \
     "Project: [PROJET] ([CHEMIN]).\n\n"                                   \
     "# Remote control of the terminals\n"                                 \
-    "You have the native tool cdb_bash. Use it whenever you must "        \
+    "You have the native tool bash. Use it whenever you must "        \
     "inspect, measure, compile or run a local action.\n"                   \
     "- terminal: the number of a CDB terminal (0 to 9; it is created "    \
     "if needed).\n"                                                       \
@@ -1862,12 +1863,20 @@ llm_handle_sse_line(LlmCore *c, const char *line)
 
 static GPtrArray *cdb_polls = NULL;
 
-#define CDB_TOOL_NAME "cdb_bash"
-#define CDB_TOOL_NAME_READ "cdb_read"
-#define CDB_TOOL_NAME_INSERT "cdb_insert"
-#define CDB_TOOL_NAME_REPLACE "cdb_replace"
-#define CDB_TOOL_NAME_CREATE "cdb_create"
-#define CDB_TOOL_NAME_DELETE "cdb_delete"
+/* Noms PUBLICS des outils — tels que vus par le modele, tels que servis
+ * par llm_body_build, tels que compares au tool_call recu, et tels qu'ils
+ * servent de CLE dans le tableau "tools" de llm.json. Pas de prefixe :
+ * le namespace est deja celui de CDB tout entier, et ces noms sont
+ * exactement ceux que rend cdb_kind_label() plus bas. Les anciens noms
+ * "cdb_read" & co ne survivent que dans la table de migration de
+ * llmtoolpref.c. */
+#define CDB_TOOL_NAME           "bash"
+#define CDB_TOOL_NAME_READ      "read"
+#define CDB_TOOL_NAME_INSERT    "insert"
+#define CDB_TOOL_NAME_REMOVE    "remove"
+#define CDB_TOOL_NAME_REPLACE   "replace"
+#define CDB_TOOL_NAME_CREATE    "create"
+#define CDB_TOOL_NAME_DELETE    "delete"
 
 void
 llm_tool_call_free(gpointer data)
@@ -2110,92 +2119,24 @@ llm_process_tool_delta(LlmCore *c, JsonObject *obj, guint choice_index)
     }
 }
 
-/* ---- outils fichiers : hash court (CRC32 -> 4 chars base36) ---- */
-
-static guint32 cdb_crc_table[256];
-static gboolean cdb_crc_ready = FALSE;
-
-static void
-cdb_crc32_init(void)
-{
-    for (guint32 i = 0; i < 256; i++) {
-        guint32 c = i;
-        for (int k = 0; k < 8; k++)
-            c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
-        cdb_crc_table[i] = c;
-    }
-    cdb_crc_ready = TRUE;
-}
-
-static guint32
-cdb_crc32(const void *buf, gsize len)
-{
-    const guint8 *b = buf;
-    guint32 c = 0xFFFFFFFFu;
-
-    if (!cdb_crc_ready)
-        cdb_crc32_init();
-    for (gsize i = 0; i < len; i++)
-        c = cdb_crc_table[(c ^ b[i]) & 0xFFu] ^ (c >> 8);
-    return c ^ 0xFFFFFFFFu;
-}
-
-/* Hash court d'une plage : 4 caracteres base36 (36^4 = 1 679 616).
- * Garde-fou de synchronisation, pas une signature. */
-static char *
-cdb_hash4(const void *buf, gsize len)
-{
-    static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-    guint32 v = cdb_crc32(buf, len) % 1679616u; /* 36^4 */
-    char *s = g_new0(char, 5);
-
-    s[4] = '\0';
-    for (int i = 3; i >= 0; i--) {
-        s[i] = digits[v % 36];
-        v /= 36;
-    }
-    return s;
-}
-
-/* off[k] = offset du debut de la (k+1)-ieme ligne ; off[line_count] =
- * fin de la derniere ligne. Une ligne inclut son \n de terminaison,
- * sauf la derniere si le fichier ne finit pas par \n. vide => 0 ligne. */
-static void
-cdb_line_offsets(const char *content, gsize len, GArray *off,
-                 guint *line_count)
-{
-    gsize z = 0;
-    guint n_nl = 0;
-    gboolean ends_nl;
-
-    g_array_set_size(off, 0);
-    g_array_append_val(off, z);
-    for (gsize i = 0; i < len; i++) {
-        if (content[i] == '\n') {
-            gsize p = i + 1;
-            g_array_append_val(off, p);
-            n_nl++;
-        }
-    }
-    ends_nl = (len > 0 && content[len - 1] == '\n');
-    *line_count = n_nl + ((ends_nl || len == 0) ? 0 : 1);
-    if (!ends_nl && len > 0) {
-        gsize last = len;
-        g_array_append_val(off, last);
-    }
-}
-
 static const char *
 cdb_kind_label(CdbSpecKind k)
 {
+    /* Le libelle EST le nom public de l'outil, par les memes macros :
+     * ecrire "read" ici et "read" la aussi serait deux verites capables
+     * de diverger. Pas de default : un kind ajoute sans libelle doit
+     * faire du bruit a la compilation, pas retomber silencieusement sur
+     * le bash. */
     switch (k) {
-    case CDB_SPEC_READ:    return "read";
-    case CDB_SPEC_INSERT:  return "insert";
-    case CDB_SPEC_REPLACE: return "replace";
-    case CDB_SPEC_CREATE:  return "create";
-    case CDB_SPEC_DELETE:  return "delete";
-    default:               return "bash";
+    case CDB_SPEC_BASH:    return CDB_TOOL_NAME;
+    case CDB_SPEC_READ:    return CDB_TOOL_NAME_READ;
+    case CDB_SPEC_INSERT:  return CDB_TOOL_NAME_INSERT;
+    case CDB_SPEC_REMOVE:  return CDB_TOOL_NAME_REMOVE;
+    case CDB_SPEC_REPLACE: return CDB_TOOL_NAME_REPLACE;
+    case CDB_SPEC_CREATE:  return CDB_TOOL_NAME_CREATE;
+    case CDB_SPEC_DELETE:  return CDB_TOOL_NAME_DELETE;
     }
+    return CDB_TOOL_NAME;     /* inatteignable ; -Wreturn-type content */
 }
 
 /* Chaîne empruntée à l'arbre JSON : valable tant que le parser vit, NULL
@@ -2214,31 +2155,315 @@ cdb_json_str(JsonObject *root, const char *member)
         return NULL;
     return json_object_get_string_member(root, member);
 }
+/* ---- plan d'appel : LA source de verite des regles d'un outil ------ */
 
-/* Nombre de lignes logiques d'un bloc, règle des offsets : une ligne
- * inclut son \n de terminaison. */
-static guint
-cdb_logical_lines(const char *t, gsize len)
+/* Un seul endroit connait les regles d'un appel. Le dispatch (qui dresse
+ * la barre d'approbation) et l'execution consomment le MEME plan.
+ *
+ * Avant, chacun validait de son cote, en copie collee, et les deux avaient
+ * deja diverge : la barre annoncait « +1 line » la ou l'execution rendait
+ * « no whole line ». Le compte que Eric approuve n'etait pas le compte qui
+ * s'ecrivait.
+ *
+ * Le plan ne touche JAMAIS le disque : il ne statue que sur ce que le
+ * modele AFFIRME. Les hashes sont revifies a l'execution, parce qu'une
+ * decision ASK peut trainer et que le fichier a pu changer entre-temps.
+ * Un plan valide n'est donc jamais une autorisation d'ecrire, c'est une
+ * requete correctement formee.
+ *
+ * Le trio d'encadrement est le meme pour les trois outils d'edition, et
+ * c'est voulu : hash_before = la ligne qui precede la zone touchee,
+ * hash_target = la zone touchee elle-meme, hash_after = la ligne qui la
+ * suit. insert n'a pas de cible — il insert — il n'a donc que les bords. */
+typedef struct {
+    JsonParser  *parser;        /* possede l'arbre ; les chaines ci-dessous
+                                 * sont EMPRUNTEES et ne vivent que lui */
+    CdbSpecKind  kind;
+    const char  *path;
+
+    /* insert : point d'insertion entre deux bornes ADJACENTES */
+    long         before_line;   /* 0 = tete de fichier */
+    long         after_line;    /* 0 = fin de fichier */
+    const char  *text;          /* verbatim, newlines du modele */
+
+    /* remove et replace : bloc designe */
+    long         from_line;
+    long         to_line;
+
+    /* encadrement, commun aux trois */
+    const char  *hash_before;
+    const char  *hash_target;   /* remove/replace : read(from,to) */
+    const char  *hash_after;
+
+    /* replace seulement : lignes SANS terminateur */
+    char       **lines;
+    guint        n_lines;
+
+    /* create et delete seulement. Loges ici, et non relus dans un
+     * JsonObject au dispatch : un seul endroit touche aux arguments. */
+    const char  *content;       /* create */
+    const char  *file_hash;     /* delete, absent = 1re passe */
+} CdbToolPlan;
+
+static void
+cdb_plan_clear(CdbToolPlan *p)
 {
-    guint nl = 0;
-
-    if (len == 0)
-        return 0;
-    for (gsize i = 0; i < len; i++)
-        if (t[i] == '\n')
-            nl++;
-    return nl + ((t[len - 1] == '\n') ? 0 : 1);
+    if (p == NULL)
+        return;
+    if (p->lines != NULL) {
+        for (guint i = 0; i < p->n_lines; i++)
+            g_free(p->lines[i]);
+        g_free(p->lines);
+        p->lines = NULL;
+        p->n_lines = 0;
+    }
+    if (p->parser != NULL) {
+        g_object_unref(p->parser);
+        p->parser = NULL;
+    }
 }
 
-/* Numéro (1-based) de la ligne contenant un offset. */
-static guint
-cdb_line_at(GArray *off, guint line_count, gsize pos)
+/* Un hash de bord est soit requis, soit interdit, selon la position
+ * designee. L'INTERDIRE est la moitie utile de la regle : un hash presente
+ * la ou il n'y a pas de ligne dit que le modele croit voir un bord qui
+ * n'existe pas. Ce n'est pas une politesse, c'est une information.
+ *
+ * at_head = TRUE quand la zone touchee commence a la ligne 1 (pour insert,
+ * quand le point d'insertion est la tete du fichier : before_line == 0). */
+static gboolean
+cdb_plan_border(const char *which, long line_no, gboolean at_head,
+                const char *given, char **err)
 {
-    for (guint k = 1; k <= line_count; k++)
-        if (pos < g_array_index(off, gsize, k))
-            return k;
-    return line_count;
+    if (at_head) {
+        if (given != NULL && given[0] != '\0') {
+            *err = g_strdup_printf(_(
+                "%s given but there is no line above: the block starts at "
+                "the head of the file. Omit %s."), which, which);
+            return FALSE;
+        }
+        return TRUE;
+    }
+    if (given == NULL || given[0] == '\0') {
+        *err = g_strdup_printf(_(
+            "%s required: read the bordering line with read(%ld, %ld) and "
+            "replay its hash."), which, line_no, line_no);
+        return FALSE;
+    }
+    return TRUE;
 }
+
+/* Extrait lines[] : tableau de chaines, aucune ne contient de saut de
+ * ligne. Un element = une ligne. La regle de cardinalite est verifiee ICI
+ * et non a l'execution, pour que le compte affiche dans la barre
+ * d'approbation soit exactement celui qui sera ecrit. */
+static gboolean
+cdb_plan_lines(JsonObject *root, long from, long to,
+               CdbToolPlan *p, char **err)
+{
+    JsonArray *arr;
+    JsonNode  *member;
+    guint      want = (guint)(to - from + 1);
+
+    if (!json_object_has_member(root, "lines")) {
+        *err = g_strdup_printf(_(
+            "lines required: send exactly %u line%s, one element per line, "
+            "without their newlines. \"\" is an EMPTY line, not a deleted "
+            "one."), want, want == 1 ? "" : "s");
+        return FALSE;
+    }
+    member = json_object_get_member(root, "lines");
+    if (!JSON_NODE_HOLDS_ARRAY(member)) {
+        *err = g_strdup(_(
+            "lines must be an array of strings, one element per line."));
+        return FALSE;
+    }
+    arr = json_node_get_array(member);
+    if (json_array_get_length(arr) == 0) {
+        *err = g_strdup(_(
+            "lines is empty: to drop lines without rewriting them, use "
+            "remove."));
+        return FALSE;
+    }
+    if (json_array_get_length(arr) != want) {
+        *err = g_strdup_printf(_(
+            "cardinality mismatch: the block you read is %u line%s, you "
+            "sent %u. replace writes exactly as many lines as it read — to "
+            "shrink use remove, to grow use insert."),
+            want, want == 1 ? "" : "s", json_array_get_length(arr));
+        return FALSE;
+    }
+
+    p->lines = g_new0(char *, want);
+    for (guint i = 0; i < want; i++) {
+        JsonNode    *el = json_array_get_element(arr, i);
+        const char  *s;
+
+        if (el == NULL || !JSON_NODE_HOLDS_VALUE(el) ||
+            json_node_get_value_type(el) != G_TYPE_STRING) {
+            *err = g_strdup_printf(_(
+                "lines[%u] is not a string: one element per line, without "
+                "its newline."), i);
+            goto fail;
+        }
+        s = json_node_get_string(el);
+        for (const char *q = s; *q != '\0'; q++) {
+            if (*q != '\n' && *q != '\r')
+                continue;
+            *err = g_strdup_printf(_(
+                "lines[%u] contains a %s: one element is one line. Split it "
+                "into as many elements."), i,
+                *q == '\n' ? "newline" : "carriage return");
+            goto fail;
+        }
+        p->lines[i] = g_strdup(s);
+    }
+    p->n_lines = want;
+    return TRUE;
+
+fail:
+    for (guint i = 0; i < want; i++)
+        g_free(p->lines[i]);
+    g_free(p->lines);
+    p->lines = NULL;
+    p->n_lines = 0;
+    return FALSE;
+}
+
+/* TRUE si l'appel est correctement FORME. *err porte alors le message a
+ * rendre au modele et le plan est vide.
+ *
+ * Le refus des sequences NUL ne vit PAS ici : il est en tete de
+ * cdb_dispatch_file_tool, donc en amont de la file, et les arguments d'un
+ * appel en file ne mutent plus. Le repeter serait la duplication meme que
+ * ce validateur vient supprimer. */
+static gboolean
+cdb_plan_parse(CdbSpecKind kind, const char *args_json,
+               CdbToolPlan *p, char **err)
+{
+    JsonObject *root;
+
+    memset(p, 0, sizeof(*p));
+    p->kind = kind;
+    *err = NULL;
+
+    p->parser = json_parser_new();
+    if (!json_parser_load_from_data(p->parser,
+            args_json != NULL ? args_json : "", -1, NULL) ||
+        json_parser_get_root(p->parser) == NULL ||
+        !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(p->parser))) {
+        *err = g_strdup_printf(_("invalid JSON arguments for %s."),
+                               cdb_kind_label(kind));
+        goto bad;
+    }
+    root = json_node_get_object(json_parser_get_root(p->parser));
+
+    p->path = cdb_json_str(root, "path");
+    if (p->path == NULL || p->path[0] == '\0') {
+        *err = g_strdup(_("missing path."));
+        goto bad;
+    }
+    if (p->path[0] != '/') {
+        *err = g_strdup(_("absolute path required."));
+        goto bad;
+    }
+
+    p->hash_before = cdb_json_str(root, "hash_before");
+    p->hash_target = cdb_json_str(root, "hash_target");
+    p->hash_after  = cdb_json_str(root, "hash_after");
+
+    switch (kind) {
+    case CDB_SPEC_READ:
+        p->from_line = llm_json_int(root, "from_line", -1);
+        p->to_line   = llm_json_int(root, "to_line", -1);
+        if (p->from_line < 1 || p->to_line < p->from_line) {
+            *err = g_strdup(_(
+                "from_line/to_line invalid (1-based, to >= from >= 1)."));
+            goto bad;
+        }
+        return TRUE;
+
+    case CDB_SPEC_INSERT:
+        p->before_line = llm_json_int(root, "before_line", -1);
+        p->after_line  = llm_json_int(root, "after_line", -1);
+        p->text        = cdb_json_str(root, "text");
+        if (p->before_line < 0 || p->after_line < 0) {
+            *err = g_strdup(_(
+                "before_line/after_line required (0 = file bound)."));
+            goto bad;
+        }
+        if (p->before_line > 0 && p->after_line > 0 &&
+            p->after_line != p->before_line + 1) {
+            *err = g_strdup_printf(_(
+                "non-adjacent bounds: after_line must be before_line + 1 "
+                "(got %ld/%ld)."), p->before_line, p->after_line);
+            goto bad;
+        }
+        if (p->text == NULL || p->text[0] == '\0') {
+            *err = g_strdup(_(
+                "missing or empty text (to delete lines, use remove)."));
+            goto bad;
+        }
+        if (!cdb_plan_border("hash_before", p->before_line,
+                             p->before_line == 0, p->hash_before, err))
+            goto bad;
+        if (!cdb_plan_border("hash_after", p->after_line,
+                             p->after_line == 0, p->hash_after, err))
+            goto bad;
+        return TRUE;
+
+    case CDB_SPEC_REMOVE:
+    case CDB_SPEC_REPLACE:
+        p->from_line = llm_json_int(root, "from_line", -1);
+        p->to_line   = llm_json_int(root, "to_line", -1);
+        if (p->from_line < 1 || p->to_line < p->from_line) {
+            *err = g_strdup(_(
+                "from_line/to_line invalid (1-based, to >= from >= 1)."));
+            goto bad;
+        }
+        if (p->hash_target == NULL || p->hash_target[0] == '\0') {
+            *err = g_strdup_printf(_(
+                "hash_target required: it is the proof you read the very "
+                "lines you are about to destroy. Run read(%ld, %ld) and "
+                "replay the hash you got."), p->from_line, p->to_line);
+            goto bad;
+        }
+        if (!cdb_plan_border("hash_before", p->from_line - 1,
+                             p->from_line == 1, p->hash_before, err))
+            goto bad;
+        /* hash_after reste facultatif a ce stade : savoir si le bloc
+         * touche la fin du fichier est un FAIT DE DISQUE, pas une
+         * affirmation du modele. L'execution tranche dans les deux sens :
+         * present, il doit matcher la ligne to+1 ; absent, le bloc doit
+         * vraiment etre le dernier. Le silence n'est jamais une cle. */
+        if (kind == CDB_SPEC_REPLACE &&
+            !cdb_plan_lines(root, p->from_line, p->to_line, p, err))
+            goto bad;
+        return TRUE;
+
+    case CDB_SPEC_CREATE:
+        p->content = cdb_json_str(root, "content");
+        if (p->content == NULL) {
+            *err = g_strdup(_(
+                "missing content: set content empty to create an empty "
+                "file."));
+            goto bad;
+        }
+        return TRUE;
+
+    case CDB_SPEC_DELETE:
+        p->file_hash = cdb_json_str(root, "file_hash");
+        return TRUE;                /* absent = 1re passe : l'empreinte */
+
+    case CDB_SPEC_BASH:
+        *err = g_strdup(_("bash is not a file tool."));
+        goto bad;
+    }
+
+bad:
+    cdb_plan_clear(p);
+    return FALSE;
+}
+
 
 /* Un seul libérateur pour la file agentique : chaque champ ajouté à
  * CdbCmdSpec doit passer par ici, sinon les 4 points de purge fuient
@@ -2264,7 +2489,7 @@ cdb_decision_free(CdbDecision *d)
     g_free(d);
 }
 
-/* cdb_read : plage exacte depuis le DISQUE (jamais le dirty). */
+/* read : plage exacte depuis le DISQUE (jamais le dirty). */
 static void
 cdb_tool_file_read(LlmCore *c, const char *tool_call_id,
                    const char *args_json)
@@ -2289,7 +2514,7 @@ cdb_tool_file_read(LlmCore *c, const char *tool_call_id,
             -1, NULL) ||
         json_parser_get_root(parser) == NULL ||
         !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        char *e = g_strdup_printf(_("invalid JSON arguments for %s."), "cdb_read");
+        char *e = g_strdup_printf(_("invalid JSON arguments for %s."), "read");
         cdb_queue_text_result(c, tool_call_id, "read", e, NULL, FALSE);
         g_free(e);
         goto done;
@@ -2336,7 +2561,7 @@ cdb_tool_file_read(LlmCore *c, const char *tool_call_id,
     }
 
     off = g_array_new(FALSE, FALSE, sizeof(gsize));
-    cdb_line_offsets(content, len, off, &line_count);
+    textops_line_offsets(content, len, off, &line_count);
     f = (guint)from;
     t = (guint)to;
     if (f > line_count || t > line_count) {
@@ -2350,7 +2575,7 @@ cdb_tool_file_read(LlmCore *c, const char *tool_call_id,
 
     rstart = g_array_index(off, gsize, f - 1);
     rend = g_array_index(off, gsize, t);
-    hash = cdb_hash4(content + rstart, rend - rstart);
+    hash = textops_hash4(content + rstart, rend - rstart);
 
     out = g_string_new(NULL);
     g_string_append_printf(out,
@@ -2382,7 +2607,7 @@ done:
 }
 
 
-/* cdb_insert : insertion verbatim entre deux bornes adjacentes. DISQUE
+/* insert : insertion verbatim entre deux bornes adjacentes. DISQUE
  * seulement : le dirty de l'editeur reste l'affaire d'Eric (et git
  * protege). Les hashes sont revifies ICI et non au dispatch : c'est ce
  * qui permet a une approbation ASK de trainer sans rendre l'edition
@@ -2417,14 +2642,18 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
             args_json != NULL ? args_json : "", -1, NULL) ||
         json_parser_get_root(parser) == NULL ||
         !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        m = g_strdup_printf(_("invalid JSON arguments for %s."), "cdb_insert");
+        m = g_strdup_printf(_("invalid JSON arguments for %s."), "insert");
         goto done;
     }
     root = json_node_get_object(json_parser_get_root(parser));
     path = cdb_json_str(root, "path");
     text = cdb_json_str(root, "text");
-    before_hash = cdb_json_str(root, "before_hash");
-    after_hash = cdb_json_str(root, "after_hash");
+    /* MEMES cles que celles que valide cdb_plan_parse : le dispatch et
+     * l'execution doivent lire le meme champ, sinon le premier laisse
+     * passer ce que la seconde rejette. Les variables locales gardent
+     * leur nom, lui est purement interne. */
+    before_hash = cdb_json_str(root, "hash_before");
+    after_hash  = cdb_json_str(root, "hash_after");
     before = llm_json_int(root, "before_line", -1);
     after = llm_json_int(root, "after_line", -1);
 
@@ -2437,7 +2666,7 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
         goto done;
     }
     if (text == NULL || text[0] == '\0') {
-        m = g_strdup(_("missing or empty text (to delete, use cdb_replace)."));
+        m = g_strdup(_("missing or empty text (to delete, use replace)."));
         goto done;
     }
     if (before < 0 || after < 0) {
@@ -2455,7 +2684,7 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
     if (!g_file_get_contents(path, &content, &len, &gerr)) {
         if (gerr != NULL && gerr->domain == G_FILE_ERROR &&
             gerr->code == G_FILE_ERROR_NOENT)
-            m = g_strdup(_("file absent: use cdb_create."));
+            m = g_strdup(_("file absent: use create."));
         else
             m = g_strdup_printf(_("cannot read: %s"),
                                 gerr != NULL ? gerr->message : "?");
@@ -2468,7 +2697,7 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
     }
 
     off = g_array_new(FALSE, FALSE, sizeof(gsize));
-    cdb_line_offsets(content, len, off, &line_count);
+    textops_line_offsets(content, len, off, &line_count);
 
     if (line_count == 0) {
         if (before != 0 || after != 0) {
@@ -2511,14 +2740,14 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
         gsize ls = g_array_index(off, gsize, (guint)before - 1);
         gsize le = g_array_index(off, gsize, (guint)before);
 
-        hash = cdb_hash4(content + ls, le - ls);
+        hash = textops_hash4(content + ls, le - ls);
         if (before_hash == NULL || g_strcmp0(hash, before_hash) != 0) {
             /* JAMAIS le hash courant ici : un refus qui le divulgue
              * dispense le modele de lire, et detruit la preuve de Focus. */
             m = g_strdup_printf(
                 _("before_hash stale or missing: line %ld no longer holds "
                   "the content you claim to have read. Run "
-                  "cdb_read(%ld, %ld) and replay the hash you got."),
+                  "read(%ld, %ld) and replay the hash you got."),
                 before, before, before);
             goto done;
         }
@@ -2529,12 +2758,12 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
         gsize ls = g_array_index(off, gsize, (guint)after - 1);
         gsize le = g_array_index(off, gsize, (guint)after);
 
-        hash = cdb_hash4(content + ls, le - ls);
+        hash = textops_hash4(content + ls, le - ls);
         if (after_hash == NULL || g_strcmp0(hash, after_hash) != 0) {
             m = g_strdup_printf(
                 _("after_hash stale or missing: line %ld no longer holds "
                   "the content you claim to have read. Run "
-                  "cdb_read(%ld, %ld) and replay the hash you got."),
+                  "read(%ld, %ld) and replay the hash you got."),
                 after, after, after);
             goto done;
         }
@@ -2561,9 +2790,9 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
 
     /* On rend l'etat REEL apres coupure, pas l'intention declaree. */
     noff = g_array_new(FALSE, FALSE, sizeof(gsize));
-    cdb_line_offsets(fresh, newlen, noff, &new_line_count);
-    a = cdb_line_at(noff, new_line_count, ins_off);
-    b = cdb_line_at(noff, new_line_count, ins_off + tlen - 1);
+    textops_line_offsets(fresh, newlen, noff, &new_line_count);
+    a = textops_line_at(noff, new_line_count, ins_off);
+    b = textops_line_at(noff, new_line_count, ins_off + tlen - 1);
 
     /* Un token ne se frappe que sur une ligne ENTIEREMENT fournie par le
      * modele. Publier le hash d'une ligne de bordure qui melange son texte
@@ -2578,13 +2807,13 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
         "insert: ok\npath: %s\ninserted_range: %u-%u\nline_count: %u\n",
         path, a, b, new_line_count);
     if (lo <= hi) {
-        hblock = cdb_hash4(fresh + g_array_index(noff, gsize, lo - 1),
+        hblock = textops_hash4(fresh + g_array_index(noff, gsize, lo - 1),
                            g_array_index(noff, gsize, hi) -
                            g_array_index(noff, gsize, lo - 1));
-        hfirst = cdb_hash4(fresh + g_array_index(noff, gsize, lo - 1),
+        hfirst = textops_hash4(fresh + g_array_index(noff, gsize, lo - 1),
                            g_array_index(noff, gsize, lo) -
                            g_array_index(noff, gsize, lo - 1));
-        hlast  = cdb_hash4(fresh + g_array_index(noff, gsize, hi - 1),
+        hlast  = textops_hash4(fresh + g_array_index(noff, gsize, hi - 1),
                            g_array_index(noff, gsize, hi) -
                            g_array_index(noff, gsize, hi - 1));
         g_string_append_printf(out,
@@ -2599,15 +2828,19 @@ cdb_tool_file_insert(LlmCore *c, const char *tool_call_id,
             _("authored_range: no whole line\n"
               "note: no line is entirely yours (text without a trailing "
               "newline, or inserted mid-line). Read with "
-              "cdb_read(N,N) before any other write.\n"));
+              "read(N,N) before any other write.\n"));
     }
     result = g_string_free(out, FALSE);
     out = NULL;
-    cdb_queue_text_result(c, tool_call_id, "insert", result, NULL, FALSE);
+    cdb_queue_text_result(c, tool_call_id,
+                          cdb_kind_label(CDB_SPEC_INSERT),
+                          result, NULL, FALSE);
 
 done:
     if (m != NULL) {
-        cdb_queue_text_result(c, tool_call_id, "insert", m, NULL, FALSE);
+        cdb_queue_text_result(c, tool_call_id,
+                              cdb_kind_label(CDB_SPEC_INSERT),
+                              m, NULL, FALSE);
         g_free(m);
     }
     g_free(result);
@@ -2629,190 +2862,238 @@ done:
         g_object_unref(parser);
 }
 
-/* cdb_replace : remplace les lignes from..to EN ENTIER (avec leur \n de
- * terminaison, ce qui est exactement la zone couverte par block_hash) par
- * text verbatim. text vide = suppression. Aucun plafond : le hash est la
- * preuve que le modele a lu les lignes precises qu'il detruit. */
-static void
-cdb_tool_file_replace(LlmCore *c, const char *tool_call_id,
-                      const char *args_json)
+/* ---- garde partage : le trio verifie contre l'octet present ---------- */
+
+/* Hash d'UNE ligne (1-based), terminaison comprise — donc identique a ce
+ * que rend read(N,N). */
+static char *
+cdb_hash_line(GArray *off, const char *content, guint ln)
 {
-    JsonParser *parser = NULL;
-    JsonObject *root = NULL;
+    gsize a = g_array_index(off, gsize, ln - 1);
+    gsize b = g_array_index(off, gsize, ln);
+
+    return textops_hash4(content + a, b - a);
+}
+
+/* Verifie hash_target et les deux bords contre le fichier tel qu'il est
+ * MAINTENANT, et rend la zone du bloc. remove et replace partagent cette
+ * fonction : ils detruisent la meme zone et doivent la prouver de la meme
+ * facon. Deux implementations divergentes de la preuve, c'est exactement
+ * ce qu'on est venu corriger.
+ *
+ * Loi du silence : l'ABSENCE d'un hash est une affirmation, pas une
+ * absence d'affirmation. hash_after absent soutient « mon bloc est le
+ * dernier » — et cette soutient est verifiee, comme la presence. */
+static gboolean
+cdb_block_guard(const char *content, gsize len, GArray *off,
+                guint line_count, const CdbToolPlan *p,
+                gsize *start, gsize *end, char **err)
+{
+    const guint from = (guint)p->from_line, to = (guint)p->to_line;
+    char *h;
+
+    if (line_count == 0) {
+        *err = g_strdup(_(
+            "empty file: there is no line to destroy. Use insert to write "
+            "the first lines."));
+        return FALSE;
+    }
+    if (!textops_block_range(len, off, line_count, from, to, start, end)) {
+        *err = g_strdup_printf(_(
+            "block %u-%u is outside the file (line_count=%u). Line numbers "
+            "do not survive writes: read the file again before naming a "
+            "range."), from, to, line_count);
+        return FALSE;
+    }
+
+    h = textops_hash4(content + *start, *end - *start);
+    if (g_strcmp0(h, p->hash_target) != 0) {
+        g_free(h);
+        /* JAMAIS le hash courant : un refus qui le divulgue dispense de
+         * lire et detruit la loi du Focus. */
+        *err = g_strdup_printf(_(
+            "hash_target stale or wrong: %u-%u no longer holds what you "
+            "claim to have read. Run read(%u, %u) and replay the hash you "
+            "got."), from, to, from, to);
+        return FALSE;
+    }
+    g_free(h);
+    h = NULL;
+
+    if (from > 1) {
+        h = cdb_hash_line(off, content, from - 1);
+        if (g_strcmp0(h, p->hash_before) != 0) {
+            g_free(h);
+            *err = g_strdup_printf(_(
+                "hash_before stale or wrong: line %u no longer holds what "
+                "you claim to have read. Run read(%u, %u) and replay the "
+                "hash you got."), from - 1, from - 1, from - 1);
+            return FALSE;
+        }
+        g_free(h);
+        h = NULL;
+    }
+
+    if (p->hash_after != NULL && p->hash_after[0] != '\0') {
+        if (to >= line_count) {
+            *err = g_strdup_printf(_(
+                "hash_after given but the block already ends at the last "
+                "line (line_count=%u): there is nothing below it. Omit "
+                "hash_after."), line_count);
+            return FALSE;
+        }
+        h = cdb_hash_line(off, content, to + 1);
+        if (g_strcmp0(h, p->hash_after) != 0) {
+            g_free(h);
+            *err = g_strdup_printf(_(
+                "hash_after stale or wrong: line %u no longer holds what "
+                "you claim to have read. Run read(%u, %u) and replay the "
+                "hash you got."), to + 1, to + 1, to + 1);
+            return FALSE;
+        }
+        g_free(h);
+        h = NULL;
+    } else if (to < line_count) {
+        *err = g_strdup_printf(_(
+            "hash_after required: line %u exists below your block "
+            "(line_count=%u). Either read it with read(%u, %u) and replay "
+            "its hash, or extend the block to the end of the file."),
+            to + 1, line_count, to + 1, to + 1);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* ---- l'echo de ce qui est entierement du modele --------------------- */
+
+/* Frappe le hash des lignes que le modele a ecrites de bout en bout. Le
+ * contrat de replace (k lignes -> k lignes entieres) rend le cas general
+ * inutile ICI : la zone ecrite couvre toujours des lignes entieres. */
+static void
+cdb_echo_authored(GString *out, const char *fresh, GArray *noff,
+                  guint new_line_count, guint lo, guint hi)
+{
+    char *hblock, *hfirst, *hlast;
+
+    if (lo > hi || hi > new_line_count) {
+        g_string_append(out, _("authored_range: no whole line\n"));
+        return;
+    }
+    hblock = textops_hash4(fresh + g_array_index(noff, gsize, lo - 1),
+                           g_array_index(noff, gsize, hi) -
+                           g_array_index(noff, gsize, lo - 1));
+    hfirst = textops_hash4(fresh + g_array_index(noff, gsize, lo - 1),
+                           g_array_index(noff, gsize, lo) -
+                           g_array_index(noff, gsize, lo - 1));
+    hlast  = textops_hash4(fresh + g_array_index(noff, gsize, hi - 1),
+                           g_array_index(noff, gsize, hi) -
+                           g_array_index(noff, gsize, hi - 1));
+    g_string_append_printf(out,
+        "authored_range: %u-%u\nhash_block: %s\nhash_first: %s\n"
+        "hash_last: %s\n", lo, hi, hblock, hfirst, hlast);
+    g_free(hblock);
+    g_free(hfirst);
+    g_free(hlast);
+}
+
+/* remove : retire n lignes ENTIERES. Miroir de insert, en destructif.
+ *
+ * La zone retiree va de off[from-1] a off[to], terminaison comprise :
+ * ce n'est QUE jamais une demi-ligne, et c'est ce qui rend l'operation
+ * geometriquement propre. Aucun hash n'est frappe a la fin : le modele
+ * n'a ecrit aucun octet. */
+static void
+cdb_tool_file_remove(LlmCore *c, const char *tool_call_id,
+                     const char *args_json)
+{
+    CdbToolPlan plan;
+    char       *err = NULL;
+    char       *content = NULL, *fresh = NULL;
     GError     *gerr = NULL;
-    const char *path = NULL;
-    const char *text = NULL;
-    const char *block_hash = NULL;
-    long        from = -1, to = -1;
-    char       *content = NULL;
-    char       *fresh = NULL;
-    gsize       len = 0, cut_a = 0, cut_b = 0, tlen = 0, newlen = 0;
-    GArray     *off = NULL;
-    GArray     *noff = NULL;
-    guint       line_count = 0, new_line_count = 0, a = 0, b = 0;
-    guint       lo = 0, hi = 0;
-    char       *hash = NULL;
-    char       *hblock = NULL, *hfirst = NULL, *hlast = NULL;
+    GArray     *off = NULL, *noff = NULL;
+    gsize       len = 0, a = 0, b = 0, newlen = 0;
+    guint       line_count = 0, new_line_count = 0;
     GString    *out = NULL;
     char       *result = NULL;
-    char       *m = NULL;
 
-    parser = json_parser_new();
-    if (!json_parser_load_from_data(parser,
-            args_json != NULL ? args_json : "", -1, NULL) ||
-        json_parser_get_root(parser) == NULL ||
-        !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        m = g_strdup_printf(_("invalid JSON arguments for %s."), "cdb_replace");
+    if (!cdb_plan_parse(CDB_SPEC_REMOVE, args_json, &plan, &err)) {
+        result = err;
+        err = NULL;
         goto done;
     }
-    root = json_node_get_object(json_parser_get_root(parser));
-    path = cdb_json_str(root, "path");
-    text = cdb_json_str(root, "text");
-    block_hash = cdb_json_str(root, "block_hash");
-    from = llm_json_int(root, "from_line", -1);
-    to = llm_json_int(root, "to_line", -1);
 
-    if (path == NULL || path[0] == '\0') {
-        m = g_strdup(_("missing path."));
-        goto done;
-    }
-    if (path[0] != '/') {
-        m = g_strdup(_("absolute path required."));
-        goto done;
-    }
-    if (text == NULL) {
-        m = g_strdup(_("missing text: set text:\"\" to delete the range."));
-        goto done;
-    }
-    if (block_hash == NULL || block_hash[0] == '\0') {
-        m = g_strdup(_("block_hash required: read the range with "
-                       "cdb_read(from_line, to_line)."));
-        goto done;
-    }
-    if (from < 1 || to < from) {
-        m = g_strdup(_("from_line/to_line invalid (1-based, to >= from >= 1)."));
-        goto done;
-    }
-    tlen = strlen(text);
-
-    if (!g_file_get_contents(path, &content, &len, &gerr)) {
+    if (!g_file_get_contents(plan.path, &content, &len, &gerr)) {
         if (gerr != NULL && gerr->domain == G_FILE_ERROR &&
             gerr->code == G_FILE_ERROR_NOENT)
-            m = g_strdup(_("file absent: use cdb_create."));
+            err = g_strdup(_("file absent: use create."));
         else
-            m = g_strdup_printf(_("cannot read: %s"),
-                                gerr != NULL ? gerr->message : "?");
-        if (gerr != NULL) { g_error_free(gerr); gerr = NULL; }
+            err = g_strdup_printf(_("cannot read: %s"),
+                                  gerr != NULL ? gerr->message : "?");
         goto done;
     }
     if (!g_utf8_validate(content, (gssize)len, NULL)) {
-        m = g_strdup(_("binary file or non-UTF-8 encoding: refused."));
+        err = g_strdup(_("binary file or non-UTF-8 encoding: refused."));
         goto done;
     }
 
     off = g_array_new(FALSE, FALSE, sizeof(gsize));
-    cdb_line_offsets(content, len, off, &line_count);
-    if (line_count == 0) {
-        m = g_strdup(_("empty file: nothing to replace (use cdb_insert)."));
+    textops_line_offsets(content, len, off, &line_count);
+    if (!cdb_block_guard(content, len, off, line_count, &plan,
+                         &a, &b, &err))
         goto done;
-    }
-    if (to > (long)line_count) {
-        m = g_strdup_printf(
-            _("to_line outside the file: line_count=%u (got %ld). Give the "
-              "exact lines."), line_count, to);
-        goto done;
-    }
 
-    cut_a = g_array_index(off, gsize, (guint)from - 1);
-    cut_b = g_array_index(off, gsize, (guint)to);
-
-    /* SEULE preuve acceptee : le hash de LA plage, a l'instant present. */
-    hash = cdb_hash4(content + cut_a, cut_b - cut_a);
-    if (g_strcmp0(hash, block_hash) != 0) {
-        m = g_strdup_printf(
-            _("block_hash stale or missing: the range %ld-%ld no longer "
-              "holds the content you claim to have read. Run cdb_read(%ld, "
-              "%ld) and replay the hash you got."), from, to, from, to);
-        goto done;
-    }
-    g_free(hash);
-    hash = NULL;
-
+    newlen = len - (b - a);
     {
-        GString *nb = g_string_sized_new(len - (cut_b - cut_a) + tlen);
-        g_string_append_len(nb, content, cut_a);
-        g_string_append_len(nb, text, tlen);
-        g_string_append_len(nb, content + cut_b, len - cut_b);
+        GString *nb = g_string_sized_new(newlen);
+
+        g_string_append_len(nb, content, a);
+        g_string_append_len(nb, content + b, len - b);
         fresh = g_string_free(nb, FALSE);
     }
-    newlen = len - (cut_b - cut_a) + tlen;
 
-    if (!g_file_set_contents(path, fresh, (gssize)newlen, &gerr)) {
-        m = g_strdup_printf(_("cannot write: %s"),
-                            gerr != NULL ? gerr->message : "?");
-        if (gerr != NULL) { g_error_free(gerr); gerr = NULL; }
+    if (!g_file_set_contents(plan.path, fresh, (gssize)newlen, &gerr)) {
+        err = g_strdup_printf(_("cannot write: %s"),
+                              gerr != NULL ? gerr->message : "?");
         goto done;
     }
 
     noff = g_array_new(FALSE, FALSE, sizeof(gsize));
-    cdb_line_offsets(fresh, newlen, noff, &new_line_count);
+    textops_line_offsets(fresh, newlen, noff, &new_line_count);
 
     out = g_string_new(NULL);
     g_string_append_printf(out,
-        "replace: ok\npath: %s\nreplaced_range: %ld-%ld\nline_count: %u\n",
-        path, from, to, new_line_count);
-    /* cut_a tombe toujours sur un debut de ligne (on remplace des lignes
-     * entieres) : fusion possible seulement vers l'avant. */
-    if (tlen == 0) {
-        g_string_append(out,
-            _("authored_range: no whole line\n"
-              "note: range deleted without a rewrite, so no hash was "
-              "struck. Re-read the result before any new write.\n"));
-    } else {
-        a = cdb_line_at(noff, new_line_count, cut_a);
-        b = cdb_line_at(noff, new_line_count, cut_a + tlen - 1);
-        lo = (g_array_index(noff, gsize, a - 1) == cut_a) ? a : a + 1;
-        hi = (g_array_index(noff, gsize, b) <= cut_a + tlen) ? b : b - 1;
-        if (lo <= hi) {
-            hblock = cdb_hash4(fresh + g_array_index(noff, gsize, lo - 1),
-                               g_array_index(noff, gsize, hi) -
-                               g_array_index(noff, gsize, lo - 1));
-            hfirst = cdb_hash4(fresh + g_array_index(noff, gsize, lo - 1),
-                               g_array_index(noff, gsize, lo) -
-                               g_array_index(noff, gsize, lo - 1));
-            hlast  = cdb_hash4(fresh + g_array_index(noff, gsize, hi - 1),
-                               g_array_index(noff, gsize, hi) -
-                               g_array_index(noff, gsize, hi - 1));
-            g_string_append_printf(out,
-                "authored_range: %u-%u\nhash_block: %s\nhash_first: %s\n"
-                "hash_last: %s\n", lo, hi, hblock, hfirst, hlast);
-            if (lo != a || hi != b)
-                g_string_append(out,
-                    _("note: lines outside authored_range mix your text "
-                      "with existing content; no hash is attached to "
-                      "them.\n"));
-        } else {
-            g_string_append(out,
-                _("authored_range: no whole line\n"
-                  "note: no line is entirely yours (text without a trailing "
-                  "newline). Read with cdb_read(N,N) before any other "
-                  "write.\n"));
-        }
+        "remove: ok\npath: %s\nremoved_range: %ld-%ld\nremoved_lines: %ld\n"
+        "line_count: %u\n",
+        plan.path, plan.from_line, plan.to_line,
+        plan.to_line - plan.from_line + 1, new_line_count);
+    /* Le decalage est ANNONCE, pas devine : c'est la source directe des
+     * off-by-one quand le modele recite des numeros apres une suppression.
+     * Une seule condition fait foi : il restait une ligne sous le bloc. */
+    if (plan.to_line < (long)line_count) {
+        g_string_append_printf(out,
+            _("note: former line %ld is now line %ld (everything below the "
+              "block moved up by %ld). The hash of an untouched line does "
+              "not change — only its number.\n"),
+            plan.to_line + 1, plan.from_line,
+            (long)(plan.to_line - plan.from_line + 1));
     }
+    if (new_line_count == 0)
+        g_string_append(out,
+            _("note: the file is now empty. To write it again, insert with "
+              "before_line=0 and after_line=0.\n"));
+    g_string_append(out,
+        _("authored_range: no whole line\n"
+          "note: nothing was written, so no hash was struck. Read the new "
+          "neighbours before writing here.\n"));
     result = g_string_free(out, FALSE);
     out = NULL;
-    cdb_queue_text_result(c, tool_call_id, "replace", result, NULL, FALSE);
 
 done:
-    if (m != NULL) {
-        cdb_queue_text_result(c, tool_call_id, "replace", m, NULL, FALSE);
-        g_free(m);
-    }
+    cdb_queue_text_result(c, tool_call_id,
+                          cdb_kind_label(CDB_SPEC_REMOVE),
+                          result != NULL ? result : err, NULL, FALSE);
     g_free(result);
-    g_free(hblock);
-    g_free(hfirst);
-    g_free(hlast);
-    g_free(hash);
+    g_free(err);
     if (out != NULL)
         g_string_free(out, TRUE);
     if (noff != NULL)
@@ -2823,11 +3104,157 @@ done:
     g_free(content);
     if (gerr != NULL)
         g_error_free(gerr);
-    if (parser != NULL)
-        g_object_unref(parser);
+    cdb_plan_clear(&plan);
 }
 
-/* cdb_create : cree un fichier texte NEUF.
+/* replace : k lignes lues -> k lignes ecrites. JAMAIS plus, JAMAIS moins.
+ *
+ * Le modele renvoie le bloc qu'il a lu, ligne par ligne, SANS leurs
+ * terminateurs ; c'est CDB qui joint, avec le terminateur que le fichier
+ * utilisait deja. Le \n final n'est donc ni cree ni perdu, et une ligne
+ * vide demandee est une ligne vide ecrite : l'ancien contrat laissait ces
+ * trois decisions au modele, et c'est de la que venaient ses erreurs.
+ * La geometrie du fichier ne bouge pas : replace est le seul outil qui
+ * ne deplace rien. */
+static void
+cdb_tool_file_replace(LlmCore *c, const char *tool_call_id,
+                      const char *args_json)
+{
+    CdbToolPlan plan;
+    char       *err = NULL;
+    char       *content = NULL, *fresh = NULL, *block = NULL;
+    GError     *gerr = NULL;
+    GArray     *off = NULL, *noff = NULL;
+    gsize       len = 0, a = 0, b = 0, jlen = 0, newlen = 0;
+    guint       line_count = 0, new_line_count = 0;
+    TextopsEol  eol;
+    GString    *out = NULL;
+    char       *result = NULL;
+
+    if (!cdb_plan_parse(CDB_SPEC_REPLACE, args_json, &plan, &err)) {
+        result = err;
+        err = NULL;
+        goto done;
+    }
+
+    if (!g_file_get_contents(plan.path, &content, &len, &gerr)) {
+        if (gerr != NULL && gerr->domain == G_FILE_ERROR &&
+            gerr->code == G_FILE_ERROR_NOENT)
+            err = g_strdup(_("file absent: use create."));
+        else
+            err = g_strdup_printf(_("cannot read: %s"),
+                                  gerr != NULL ? gerr->message : "?");
+        goto done;
+    }
+    if (!g_utf8_validate(content, (gssize)len, NULL)) {
+        err = g_strdup(_("binary file or non-UTF-8 encoding: refused."));
+        goto done;
+    }
+
+    off = g_array_new(FALSE, FALSE, sizeof(gsize));
+    textops_line_offsets(content, len, off, &line_count);
+    if (!cdb_block_guard(content, len, off, line_count, &plan,
+                         &a, &b, &err))
+        goto done;
+
+    /* La politique de terminateur vit ICI, pas dans la tete du modele :
+     * CDB joint les lignes avec le style du fichier, et ne cree ni ne
+     * detruit le \n final. */
+    textops_scan_eol(content, len, &eol);
+
+    /* Le plan a deja refuse tout element portant un saut de ligne ; la
+     * rev ici est un garde-fou de dernier kilometre, pas la regle. */
+    TextopsJoinErr jerr = { 0, 0 };
+    block = textops_join_block((const char *const *)plan.lines,
+                               plan.n_lines, &eol,
+                               plan.to_line == (long)line_count,
+                               &jlen, &jerr);
+    if (block == NULL) {
+        err = g_strdup_printf(_(
+            "lines[%u] cannot be written as one line (found a %s)."),
+            jerr.bad_line,
+            jerr.bad_char == '\r' ? "carriage return" : "newline");
+        goto done;
+    }
+
+    /* No-op refuse : renvoyer le bloc qu'on vient de lire n'est pas une
+     * ecriture. Le signaler evite une approbation et un write pour rien,
+     * et attrape le modele qui rejoue sa lecture au lieu d'ecrire. */
+    if (jlen == b - a && memcmp(content + a, block, jlen) == 0) {
+        err = g_strdup_printf(_(
+            "no change: you sent back exactly the block at %ld-%ld. "
+            "replace must write something different — if nothing had to "
+            "change, that is read's job, not a write."),
+            plan.from_line, plan.to_line);
+        goto done;
+    }
+
+    newlen = len - (b - a) + jlen;
+    {
+        GString *nb = g_string_sized_new(newlen);
+
+        g_string_append_len(nb, content, a);
+        g_string_append_len(nb, block, jlen);
+        g_string_append_len(nb, content + b, len - b);
+        fresh = g_string_free(nb, FALSE);
+    }
+
+    if (!g_file_set_contents(plan.path, fresh, (gssize)newlen, &gerr)) {
+        err = g_strdup_printf(_("cannot write: %s"),
+                              gerr != NULL ? gerr->message : "?");
+        goto done;
+    }
+
+    noff = g_array_new(FALSE, FALSE, sizeof(gsize));
+    textops_line_offsets(fresh, newlen, noff, &new_line_count);
+
+    out = g_string_new(NULL);
+    g_string_append_printf(out,
+        "replace: ok\npath: %s\nreplaced_range: %ld-%ld\nwritten_lines: %u\n"
+        "line_count: %u\n",
+        plan.path, plan.from_line, plan.to_line, plan.n_lines,
+        new_line_count);
+    /* L'invariant est affirme a voix haute : s'il sautait jamais, le
+     * resultat le dirait au lieu de le cacher. */
+    if (new_line_count != line_count)
+        g_string_append_printf(out,
+            _("warning: line count moved from %u to %u on a k->k "
+              "replacement — this should be unreachable.\n"),
+            line_count, new_line_count);
+    /* Le map rend l'off-by-one visible : lines[i] EST la ligne N. */
+    g_string_append_printf(out,
+        _("mapping: lines[0-%u] -> file %ld-%ld\n"),
+        plan.n_lines - 1, plan.from_line, plan.to_line);
+    cdb_echo_authored(out, fresh, noff, new_line_count,
+                      (guint)plan.from_line, (guint)plan.to_line);
+    if (plan.to_line == (long)line_count && !eol.final_nl)
+        g_string_append(out,
+            _("note: the file has no trailing newline and the last line "
+              "kept it that way.\n"));
+    result = g_string_free(out, FALSE);
+    out = NULL;
+
+done:
+    cdb_queue_text_result(c, tool_call_id,
+                          cdb_kind_label(CDB_SPEC_REPLACE),
+                          result != NULL ? result : err, NULL, FALSE);
+    g_free(result);
+    g_free(err);
+    if (out != NULL)
+        g_string_free(out, TRUE);
+    if (noff != NULL)
+        g_array_free(noff, TRUE);
+    if (off != NULL)
+        g_array_free(off, TRUE);
+    g_free(block);
+    g_free(fresh);
+    g_free(content);
+    if (gerr != NULL)
+        g_error_free(gerr);
+    cdb_plan_clear(&plan);
+}
+
+/* create : cree un fichier texte NEUF.
  *
  * O_CREAT|O_EXCL n'est pas un raffinement : g_file_set_contents ferait
  * "existe-t-il ?" puis "j'ecris", deux gestes entre lesquels un autre
@@ -2894,7 +3321,7 @@ cdb_tool_file_create(LlmCore *c, const char *tool_call_id,
             args_json != NULL ? args_json : "", -1, NULL) ||
         json_parser_get_root(parser) == NULL ||
         !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        m = g_strdup_printf(_("invalid JSON arguments for %s."), "cdb_create");
+        m = g_strdup_printf(_("invalid JSON arguments for %s."), "create");
         goto done;
     }
     root = json_node_get_object(json_parser_get_root(parser));
@@ -2920,15 +3347,15 @@ cdb_tool_file_create(LlmCore *c, const char *tool_call_id,
     }
     dir = g_path_get_dirname(path);
     if (!g_file_test(dir, G_FILE_TEST_IS_DIR)) {
-        m = g_strdup_printf(_("parent folder absent: %s (cdb_create never "
+        m = g_strdup_printf(_("parent folder absent: %s (create never "
                             "creates a folder)."), dir);
         goto done;
     }
     if (!cdb_file_create_exclusive(path, content, clen, &gerr)) {
         if (gerr != NULL && gerr->domain == G_IO_ERROR &&
             gerr->code == G_IO_ERROR_EXISTS)
-            m = g_strdup(_("file already exists: use cdb_replace with its "
-                         "block_hash, or cdb_delete then cdb_create."));
+            m = g_strdup(_("file already exists: use replace with its "
+                         "block_hash, or delete then create."));
         else
             m = g_strdup_printf(_("cannot create: %s"),
                                 gerr != NULL ? gerr->message : "?");
@@ -2945,11 +3372,11 @@ cdb_tool_file_create(LlmCore *c, const char *tool_call_id,
               "note: empty file created; no hash struck.\n"), path);
     } else {
         off = g_array_new(FALSE, FALSE, sizeof(gsize));
-        cdb_line_offsets(content, clen, off, &line_count);
-        hblock = cdb_hash4(content, clen);
-        hfirst = cdb_hash4(content, g_array_index(off, gsize, 1) -
+        textops_line_offsets(content, clen, off, &line_count);
+        hblock = textops_hash4(content, clen);
+        hfirst = textops_hash4(content, g_array_index(off, gsize, 1) -
                                   g_array_index(off, gsize, 0));
-        hlast  = cdb_hash4(content +
+        hlast  = textops_hash4(content +
                            g_array_index(off, gsize, line_count - 1),
                            g_array_index(off, gsize, line_count) -
                            g_array_index(off, gsize, line_count - 1));
@@ -2982,7 +3409,7 @@ done:
         g_object_unref(parser);
 }
 
-/* cdb_delete : destruction en DEUX PASSES, comme demande par Eric.
+/* delete : destruction en DEUX PASSES, comme demande par Eric.
  *
  * Le file_hash rendu par la premiere passe n'est PAS une divulgation :
  * ici le modele n'a pas a prouver qu'il a lu le CONTENU, il doit etre sur
@@ -3014,7 +3441,7 @@ cdb_tool_file_delete(LlmCore *c, const char *tool_call_id,
             args_json != NULL ? args_json : "", -1, NULL) ||
         json_parser_get_root(parser) == NULL ||
         !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        m = g_strdup_printf(_("invalid JSON arguments for %s."), "cdb_delete");
+        m = g_strdup_printf(_("invalid JSON arguments for %s."), "delete");
         goto done;
     }
     root = json_node_get_object(json_parser_get_root(parser));
@@ -3059,14 +3486,14 @@ cdb_tool_file_delete(LlmCore *c, const char *tool_call_id,
         binary = TRUE;
 
     off = g_array_new(FALSE, FALSE, sizeof(gsize));
-    cdb_line_offsets(content, len, off, &line_count);
-    fh = cdb_hash4(content, len);
+    textops_line_offsets(content, len, off, &line_count);
+    fh = textops_hash4(content, len);
     out = g_string_new(NULL);
     if (file_hash == NULL || file_hash[0] == '\0') {
         g_string_append_printf(out,
             _("delete: confirmation required\npath: %s\nline_count: %u\n"
               "octets: %lu\nbinary: %s\nfile_hash: %s\n"
-              "note: re-run cdb_delete(path, file_hash) to destroy it. If "
+              "note: re-run delete(path, file_hash) to destroy it. If "
               "the file changes between the two calls, the second pass "
               "will be refused.\n"),
             path, line_count, (gulong)len, binary ? "yes" : "no", fh);
@@ -3076,7 +3503,7 @@ cdb_tool_file_delete(LlmCore *c, const char *tool_call_id,
         g_string_free(out, TRUE);
         out = NULL;
         m = g_strdup(_("file_hash stale: the file is no longer the one "
-                     "confirmed. Re-run cdb_delete without a hash for "
+                     "confirmed. Re-run delete without a hash for "
                      "the current fingerprint."));
         goto done;
     } else {
@@ -3121,22 +3548,18 @@ static void
 cdb_dispatch_file_tool(LlmCore *c, const LlmToolCall *tc,
                        CdbSpecKind kind, LlmToolMode mode)
 {
-    JsonParser *parser;
-    JsonObject *root;
-    const char *path;
+    /* Zero-init obligatoire : la porte NUL qui suit peut sortir par
+     * « goto done » AVANT que le plan soit parse, et cdb_plan_clear()
+     * doit alors trouver une structure propre.
+     *
+     * Le parseur local de cette fonction a disparu avec l'ancienne
+     * validation : c'est cdb_plan_parse qui ouvre l'arbre JSON, qui rend
+     * le meme « invalid JSON arguments for %s. » avec le nom canonique de
+     * l'outil (cdb_kind_label) plutot que celui, libre, que le modele a
+     * ecrit. Le plan le referme. */
+    CdbToolPlan plan = { 0 };
     char       *error = NULL;
     char       *summary = NULL;
-
-    parser = json_parser_new();
-    if (!json_parser_load_from_data(parser,
-            tc->arguments_json != NULL ? tc->arguments_json : "",
-            -1, NULL) ||
-        json_parser_get_root(parser) == NULL ||
-        !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        error = g_strdup_printf(_("invalid JSON arguments for %s."),
-                                tc->name != NULL ? tc->name : _("(unnamed)"));
-        goto done;
-    }
     /* Un nul intercalaire dans text/content serait tronque silencieusement
      * par strlen : json-glib n'expose pas la longueur reelle de ses chaines.
      * On le refuse a la porte, en detectant la sequence d'chappement JSON qui la produit. */
@@ -3145,155 +3568,99 @@ cdb_dispatch_file_tool(LlmCore *c, const LlmToolCall *tc,
         error = g_strdup(_("NUL sequence (\\u0000) refused in arguments."));
         goto done;
     }
-    root = json_node_get_object(json_parser_get_root(parser));
-    path = cdb_json_str(root, "path");
-    if (path == NULL || path[0] == '\0') {
-        error = g_strdup(_("missing path."));
+
+    /* Une seule regle, un seul endroit : le plan que l'execution
+     * re-verifiera a l'instant. Ce que la barre d'approbation annonce est
+     * donc, par construction, exactement ce qui sera ecrit. Avant, ces
+     * deux cotes validaient en copie collee et leurs compteurs avaient
+     * deja diverge. */
+    if (!cdb_plan_parse(kind, tc->arguments_json, &plan, &error))
         goto done;
+
+    switch (kind) {
+    case CDB_SPEC_READ:
+        summary = g_strdup_printf("read  %s  %ld-%ld",
+                                  plan.path, plan.from_line, plan.to_line);
+        break;
+
+    case CDB_SPEC_INSERT: {
+        guint n = textops_logical_lines(plan.text, strlen(plan.text));
+
+        summary = g_strdup_printf(
+            ngettext("insert  %s  after %ld / before %ld  (+%u line)",
+                     "insert  %s  after %ld / before %ld  (+%u lines)", n),
+            plan.path, plan.before_line, plan.after_line, n);
+        break;
     }
-    if (path[0] != '/') {
-        error = g_strdup(_("absolute path required."));
-        goto done;
+
+    case CDB_SPEC_REMOVE: {
+        guint n = (guint)(plan.to_line - plan.from_line + 1);
+
+        summary = g_strdup_printf(
+            ngettext("remove  %s  %ld-%ld  (-%u line)",
+                     "remove  %s  %ld-%ld  (-%u lines)", n),
+            plan.path, plan.from_line, plan.to_line, n);
+        break;
     }
 
-    if (kind == CDB_SPEC_READ) {
-        long from = llm_json_int(root, "from_line", -1);
-        long to   = llm_json_int(root, "to_line", -1);
+    case CDB_SPEC_REPLACE:
+        /* k -> k : le plan tient lines.length == to-from+1, donc les deux
+         * chiffres affiche ici sont le MEME nombre et ne peuvent plus
+         * s'ecarter de ce que la jointure produira. */
+        summary = g_strdup_printf(
+            ngettext("replace  %s  %ld-%ld  [%u line -> %u line]",
+                     "replace  %s  %ld-%ld  [%u lines -> %u lines]",
+                     plan.n_lines),
+            plan.path, plan.from_line, plan.to_line,
+            plan.n_lines, plan.n_lines);
+        break;
 
-        if (from < 1 || to < from) {
-            error = g_strdup(
-                _("from_line/to_line invalid (1-based, to >= from >= 1)."));
-            goto done;
-        }
-        summary = g_strdup_printf("cdb_read  %s  %ld-%ld", path, from, to);
-    } else if (kind == CDB_SPEC_REPLACE) {
-        long        from = llm_json_int(root, "from_line", -1);
-        long        to   = llm_json_int(root, "to_line", -1);
-        const char *text = cdb_json_str(root, "text");
-        const char *bh   = cdb_json_str(root, "block_hash");
-        guint       removed, added;
+    case CDB_SPEC_CREATE: {
+        guint added = textops_logical_lines(plan.content,
+                                            strlen(plan.content));
 
-        if (from < 1 || to < from) {
-            error = g_strdup(
-                _("from_line/to_line invalid (1-based, to >= from >= 1)."));
-            goto done;
-        }
-        if (text == NULL) {
-            error = g_strdup(
-                _("missing text: set text:\"\" to delete the range."));
-            goto done;
-        }
-        /* Pas de plafond, mais hash obligatoire : c'est lui qui prouve la
-         * lecture des lignes precises que le modele va detruire. */
-        if (bh == NULL || bh[0] == '\0') {
-            error = g_strdup(
-                _("block_hash required: read the range with "
-                  "cdb_read(from_line, to_line)."));
-            goto done;
-        }
-        removed = (guint)(to - from + 1);
-        added   = cdb_logical_lines(text, strlen(text));
-        {
-            /* Deux compteurs, donc deux pluriels : chaque moitie vient
-             * de son propre ngettext, assemblee par le separateur '/'
-             * (un symbole, pas de la prose). */
-            char *rmv = g_strdup_printf(ngettext("-%u line", "-%u lines",
-                                                 removed), removed);
-            char *add = g_strdup_printf(ngettext("+%u line", "+%u lines",
-                                                 added), added);
-
-            summary = g_strdup_printf("cdb_replace  %s  %ld-%ld  %s / %s%s",
-                                      path, from, to, rmv, add,
-                                      added == 0
-                                          ? _("   [DELETION WITHOUT REWRITE]")
-                                          : "");
-            g_free(rmv);
-            g_free(add);
-        }
-    } else if (kind == CDB_SPEC_CREATE) {
-        const char *content = cdb_json_str(root, "content");
-        guint       added;
-
-        if (content == NULL) {
-            error = g_strdup(
-                _("missing content: set content empty to create an "
-                  "empty file."));
-            goto done;
-        }
-        added = cdb_logical_lines(content, strlen(content));
         /* Un seul compteur : le pluriel porte la ligne entiere, donc
          * l'ordre des mots reste libre pour chaque langue. */
         summary = g_strdup_printf(
-            ngettext("cdb_create  %s  +%u line  (new file)",
-                     "cdb_create  %s  +%u lines  (new file)", added),
-            path, added);
-    } else if (kind == CDB_SPEC_DELETE) {
-        const char *fh = cdb_json_str(root, "file_hash");
-        char       *cnt = NULL;
-        gsize       cl = 0;
-        guint       removed = 0;
-        gboolean    absent = TRUE;
+            ngettext("create  %s  +%u line  (new file)",
+                     "create  %s  +%u lines  (new file)", added),
+            plan.path, added);
+        break;
+    }
 
-        /* Compter les lignes detruites ici, pour qu'Eric voie la taille du "
+    case CDB_SPEC_DELETE: {
+        char     *cnt = NULL;
+        gsize     cl = 0;
+        guint     removed = 0;
+        gboolean  absent = TRUE;
+
+        /* Compter les lignes detruites ici, pour qu'Eric voie la taille du
          * degat dans la barre d'approbation. Lecture seule. */
-        if (g_file_get_contents(path, &cnt, &cl, NULL) && cnt != NULL) {
+        if (g_file_get_contents(plan.path, &cnt, &cl, NULL) && cnt != NULL) {
             GArray *o = g_array_new(FALSE, FALSE, sizeof(gsize));
             guint   lc = 0;
 
             absent = FALSE;
-            cdb_line_offsets(cnt, cl, o, &lc);
+            textops_line_offsets(cnt, cl, o, &lc);
             removed = lc;
             g_array_free(o, TRUE);
             g_free(cnt);
         }
         summary = g_strdup_printf(
-            ngettext("cdb_delete  %s  -%u line%s%s",
-                     "cdb_delete  %s  -%u lines%s%s", removed),
-            path, removed,
+            ngettext("delete  %s  -%u line%s%s",
+                     "delete  %s  -%u lines%s%s", removed),
+            plan.path, removed,
             absent ? _("   [ABSENT OR UNREADABLE]") : "",
-            (fh != NULL && fh[0] != '\0') ? _("   [DESTRUCTION CONFIRMED]")
-                                          : "");
-    } else {
-        long        before = llm_json_int(root, "before_line", -1);
-        long        after  = llm_json_int(root, "after_line", -1);
-        const char *text   = cdb_json_str(root, "text");
-        const char *bh     = cdb_json_str(root, "before_hash");
-        const char *ah     = cdb_json_str(root, "after_hash");
-        guint       nlines;
+            (plan.file_hash != NULL && plan.file_hash[0] != '\0')
+                ? _("   [DESTRUCTION CONFIRMED]") : "");
+        break;
+    }
 
-        if (before < 0 || after < 0) {
-            error = g_strdup(
-                _("before_line/after_line required (0 = file bound)."));
-            goto done;
-        }
-        if (text == NULL || text[0] == '\0') {
-            error = g_strdup(_("missing or empty text."));
-            goto done;
-        }
-        if (before > 0 && (bh == NULL || bh[0] == '\0')) {
-            error = g_strdup(
-                _("before_hash required: read the line with "
-                  "cdb_read(before_line, before_line)."));
-            goto done;
-        }
-        if (after > 0 && (ah == NULL || ah[0] == '\0')) {
-            error = g_strdup(
-                _("after_hash required: read the line with "
-                  "cdb_read(after_line, after_line)."));
-            goto done;
-        }
-        if (before > 0 && after > 0 && after != before + 1) {
-            error = g_strdup_printf(
-                _("non-adjacent bounds: after_line must be before_line + 1 "
-                  "(got %ld/%ld)."), before, after);
-            goto done;
-        }
-        nlines = cdb_logical_lines(text, strlen(text));
-        summary = g_strdup_printf(
-            ngettext("cdb_insert  %s  after %ld / before %ld  (+%u line)",
-                     "cdb_insert  %s  after %ld / before %ld  (+%u lines)",
-                     nlines),
-            path, before, after, nlines);
+    case CDB_SPEC_BASH:
+        /* Inatteignable : cdb_dispatch_native_call ne route vers cette
+         * fonction qu'un kind != BASH. Pas de default — un kind neuf
+         * doit etre traite ici, pas absorbe en silence. */
+        break;
     }
 
     {
@@ -3318,7 +3685,7 @@ done:
         g_free(error);
     }
     g_free(summary);
-    g_object_unref(parser);
+    cdb_plan_clear(&plan);
 }
 
 /* Valide un appel natif et le place soit dans la file bash, soit dans une
@@ -3351,6 +3718,8 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
         kind = CDB_SPEC_READ;
     else if (g_strcmp0(tc->name, CDB_TOOL_NAME_INSERT) == 0)
         kind = CDB_SPEC_INSERT;
+    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_REMOVE) == 0)
+        kind = CDB_SPEC_REMOVE;
     else if (g_strcmp0(tc->name, CDB_TOOL_NAME_REPLACE) == 0)
         kind = CDB_SPEC_REPLACE;
     else if (g_strcmp0(tc->name, CDB_TOOL_NAME_CREATE) == 0)
@@ -3389,7 +3758,7 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
                                     -1, NULL) ||
         json_parser_get_root(parser) == NULL ||
         !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
-        error = g_strdup_printf(_("invalid JSON arguments for %s."), "cdb_bash");
+        error = g_strdup_printf(_("invalid JSON arguments for %s."), "bash");
         goto done;
     }
     root = json_node_get_object(json_parser_get_root(parser));
@@ -4524,6 +4893,9 @@ cdb_run_spec(LlmCore *c, CdbCmdSpec *sp, gboolean allowplus)
     case CDB_SPEC_INSERT:
         cdb_tool_file_insert(c, sp->tool_call_id, sp->args_json);
         break;
+    case CDB_SPEC_REMOVE:
+        cdb_tool_file_remove(c, sp->tool_call_id, sp->args_json);
+        break;
     case CDB_SPEC_REPLACE:
         cdb_tool_file_replace(c, sp->tool_call_id, sp->args_json);
         break;
@@ -4646,7 +5018,7 @@ llm_cdb_next(LlmCore *c)
     core_sync_buttons(c);
 }
 
-/* Schéma de l'outil cdb_bash (canal natif). */
+/* Schéma de l'outil bash (canal natif). */
 static void
 tools_schema_cdb_bash(JsonBuilder *builder)
 {
@@ -4656,7 +5028,7 @@ tools_schema_cdb_bash(JsonBuilder *builder)
     json_builder_set_member_name(builder, "function");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "name");
-    json_builder_add_string_value(builder, "cdb_bash");
+    json_builder_add_string_value(builder, "bash");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(
         builder,
@@ -4702,7 +5074,7 @@ tools_schema_cdb_bash(JsonBuilder *builder)
     json_builder_end_object(builder);
 }
 
-/* Schéma de l'outil cdb_read. */
+/* Schéma de l'outil read. */
 static void
 tools_schema_cdb_read(JsonBuilder *builder)
 {
@@ -4712,13 +5084,13 @@ tools_schema_cdb_read(JsonBuilder *builder)
     json_builder_set_member_name(builder, "function");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "name");
-    json_builder_add_string_value(builder, "cdb_read");
+    json_builder_add_string_value(builder, "read");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
         _("Reads an exact range of lines from a text file on disk "
           "(absolute path). from_line/to_line are 1-based, inclusive. "
           "Returns the lines and a short hash (4 base36 chars) of the "
-          "exact octets of the range, to replay in cdb_insert/cdb_replace."));
+          "exact octets of the range, to replay in insert/replace."));
     json_builder_set_member_name(builder, "parameters");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "type");
@@ -4760,7 +5132,7 @@ tools_schema_cdb_read(JsonBuilder *builder)
     json_builder_end_object(builder); /* tool */
 }
 
-/* Schéma de l'outil cdb_insert. */
+/* Schéma de l'outil insert. */
 static void
 tools_schema_cdb_insert(JsonBuilder *builder)
 {
@@ -4770,12 +5142,12 @@ tools_schema_cdb_insert(JsonBuilder *builder)
     json_builder_set_member_name(builder, "function");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "name");
-    json_builder_add_string_value(builder, "cdb_insert");
+    json_builder_add_string_value(builder, "insert");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
         _("Insert text verbatim between two ADJACENT lines of a text file "
           "on disk (absolute path). The model must have read the line "
-          "before and the line after SEPARATELY (cdb_read with "
+          "before and the line after SEPARATELY (read with "
           "from_line==to_line) and replay their two hashes. before_line=0 "
           "or after_line=0 denotes a file bound: no real line, so no hash. "
           "The newlines of text belong to the model. Does not create "
@@ -4805,14 +5177,14 @@ tools_schema_cdb_insert(JsonBuilder *builder)
         _("Real line after which to insert; 0 = file head."));
     json_builder_end_object(builder);
 
-    json_builder_set_member_name(builder, "before_hash");
+    json_builder_set_member_name(builder, "hash_before");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "type");
     json_builder_add_string_value(builder, "string");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
-        _("Hash returned by cdb_read(before_line,before_line). Omit only "
-          "when before_line=0."));
+        _("Hash returned by read(before_line,before_line). Omit only when "
+          "before_line=0 — giving it at the head of the file is refused."));
     json_builder_end_object(builder);
 
     json_builder_set_member_name(builder, "after_line");
@@ -4827,14 +5199,14 @@ tools_schema_cdb_insert(JsonBuilder *builder)
           "to insert at the end of the file."));
     json_builder_end_object(builder);
 
-    json_builder_set_member_name(builder, "after_hash");
+    json_builder_set_member_name(builder, "hash_after");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "type");
     json_builder_add_string_value(builder, "string");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
-        _("Hash returned by cdb_read(after_line,after_line). Omit only "
-          "when after_line=0."));
+        _("Hash returned by read(after_line,after_line). Omit only when "
+          "after_line=0 — giving it at the tail is refused."));
     json_builder_end_object(builder);
 
     json_builder_set_member_name(builder, "text");
@@ -4843,7 +5215,8 @@ tools_schema_cdb_insert(JsonBuilder *builder)
     json_builder_add_string_value(builder, "string");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
-        _("Text inserted verbatim, newlines included."));
+        _("Text inserted verbatim, newlines included. Unlike replace, "
+          "insert may add any number of lines."));
     json_builder_end_object(builder);
 
     json_builder_end_object(builder); /* properties */
@@ -4859,7 +5232,107 @@ tools_schema_cdb_insert(JsonBuilder *builder)
     json_builder_end_object(builder); /* tool */
 }
 
-/* Schéma de l'outil cdb_replace. */
+/* Schéma de l'outil remove. Miroir destructif de insert : il retire des
+ * lignes ENTIERES et n'en écrit aucune. */
+static void
+tools_schema_cdb_remove(JsonBuilder *builder)
+{
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "function");
+    json_builder_set_member_name(builder, "function");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "name");
+    json_builder_add_string_value(builder, "remove");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        _("Removes n WHOLE lines (from_line..to_line, inclusive, 1-based) "
+          "from a text file on disk. Nothing is written, nothing is "
+          "fused: the lines and their newlines go away together. Like "
+          "insert, you must prove the context: hash_before is the line "
+          "above the block (omit it when from_line is 1), hash_target is "
+          "read(from_line,to_line) itself, hash_after is the line below "
+          "(omit it ONLY when the block ends at the last line). To drop "
+          "10 lines, read those 10 lines and remove them in one call. "
+          "The result announces how the following lines shifted. Never "
+          "touches the editor's dirty buffer."));
+    json_builder_set_member_name(builder, "parameters");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "object");
+    json_builder_set_member_name(builder, "properties");
+    json_builder_begin_object(builder);
+
+    json_builder_set_member_name(builder, "path");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "from_line");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "integer");
+    json_builder_set_member_name(builder, "minimum");
+    json_builder_add_int_value(builder, 1);
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "to_line");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "integer");
+    json_builder_set_member_name(builder, "minimum");
+    json_builder_add_int_value(builder, 1);
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        _("Last line removed, inclusive. Must exist."));
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "hash_before");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        _("Hash of line from_line-1, from read(N,N). Omit when "
+          "from_line is 1."));
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "hash_target");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        _("Hash of the block itself, from read(from_line, to_line). "
+          "This is the proof you read the very lines you destroy."));
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "hash_after");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        _("Hash of line to_line+1, from read(N,N). Omit only when the "
+          "block ends at the last line — omitting it elsewhere is "
+          "refused."));
+    json_builder_end_object(builder);
+
+    json_builder_end_object(builder); /* properties */
+    json_builder_set_member_name(builder, "required");
+    json_builder_begin_array(builder);
+    json_builder_add_string_value(builder, "path");
+    json_builder_add_string_value(builder, "from_line");
+    json_builder_add_string_value(builder, "to_line");
+    json_builder_add_string_value(builder, "hash_target");
+    json_builder_end_array(builder);
+    json_builder_end_object(builder); /* parameters */
+    json_builder_end_object(builder); /* function */
+    json_builder_end_object(builder); /* tool */
+}
+
+/* Schéma de l'outil replace. Contrat k -> k, lignes entieres. */
 static void
 tools_schema_cdb_replace(JsonBuilder *builder)
 {
@@ -4869,16 +5342,23 @@ tools_schema_cdb_replace(JsonBuilder *builder)
     json_builder_set_member_name(builder, "function");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "name");
-    json_builder_add_string_value(builder, "cdb_replace");
+    json_builder_add_string_value(builder, "replace");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
-        _("Replaces a WHOLE range of lines (from_line..to_line, inclusive, "
-          "1-based) of a text file on disk with verbatim text. The "
-          "block_hash must be the hash returned by a cdb_read carrying "
-          "exactly the same from_line and to_line: it is proof the range "
-          "was read. Empty text deletes the range. No size limit, but a "
-          "missing hash, a wrong hash or a range outside the file = "
-          "refusal. Never writes into the editor's dirty buffer."));
+        _("Replaces a block of whole lines (from_line..to_line, inclusive, "
+          "1-based) of a text file on disk, ONE LINE FOR ONE LINE: send "
+          "exactly as many entries in lines as the block has. replace "
+          "never changes the file's line count — that is the whole point. "
+          "To shrink, use remove; to grow, use insert; to rewrite a whole "
+          "file, remove it then insert it. Each element is the full new "
+          "content of one line WITHOUT its newline: an empty string \"\" "
+          "writes an EMPTY line, it does not delete one. CDB joins the "
+          "lines with the newline style the file already uses and never "
+          "adds or removes the file's final newline. Proof required: "
+          "hash_target is read(from_line,to_line), plus hash_before "
+          "(line above, omit at line 1) and hash_after (line below, omit "
+          "only at the last line). Writing back the block unchanged is "
+          "refused. Never touches the editor's dirty buffer."));
     json_builder_set_member_name(builder, "parameters");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "type");
@@ -4911,22 +5391,51 @@ tools_schema_cdb_replace(JsonBuilder *builder)
         _("Last line replaced, inclusive. Must exist."));
     json_builder_end_object(builder);
 
-    json_builder_set_member_name(builder, "block_hash");
+    json_builder_set_member_name(builder, "hash_before");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "type");
     json_builder_add_string_value(builder, "string");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
-        _("Hash (4 base36 chars) returned by cdb_read of the SAME range."));
+        _("Hash of line from_line-1, from read(N,N). Omit when from_line "
+          "is 1."));
     json_builder_end_object(builder);
 
-    json_builder_set_member_name(builder, "text");
+    json_builder_set_member_name(builder, "hash_target");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "type");
     json_builder_add_string_value(builder, "string");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
-        _("New text, inserted verbatim. Empty string = deletion."));
+        _("Hash of the block itself, from read(from_line, to_line). A "
+          "refusal never gives it back: re-read."));
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "hash_after");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        _("Hash of line to_line+1, from read(N,N). Omit only when the "
+          "block ends at the last line."));
+    json_builder_end_object(builder);
+
+    json_builder_set_member_name(builder, "lines");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "array");
+    json_builder_set_member_name(builder, "items");
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_string_value(builder, "string");
+    json_builder_end_object(builder);
+    json_builder_set_member_name(builder, "description");
+    json_builder_add_string_value(builder,
+        _("The new lines, one element per line, WITHOUT newlines. The "
+          "count must equal to_line - from_line + 1 exactly. A single "
+          "element may be \"\" (an empty line) but may not contain \\n or "
+          "\\r."));
     json_builder_end_object(builder);
 
     json_builder_end_object(builder); /* properties */
@@ -4935,15 +5444,15 @@ tools_schema_cdb_replace(JsonBuilder *builder)
     json_builder_add_string_value(builder, "path");
     json_builder_add_string_value(builder, "from_line");
     json_builder_add_string_value(builder, "to_line");
-    json_builder_add_string_value(builder, "block_hash");
-    json_builder_add_string_value(builder, "text");
+    json_builder_add_string_value(builder, "hash_target");
+    json_builder_add_string_value(builder, "lines");
     json_builder_end_array(builder);
     json_builder_end_object(builder); /* parameters */
     json_builder_end_object(builder); /* function */
     json_builder_end_object(builder); /* tool */
 }
 
-/* Schéma de l'outil cdb_create. */
+/* Schéma de l'outil create. */
 static void
 tools_schema_cdb_create(JsonBuilder *builder)
 {
@@ -4953,12 +5462,12 @@ tools_schema_cdb_create(JsonBuilder *builder)
     json_builder_set_member_name(builder, "function");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "name");
-    json_builder_add_string_value(builder, "cdb_create");
+    json_builder_add_string_value(builder, "create");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
         _("Creates a NEW text file on disk (absolute path) with this "
           "content verbatim. Refuses if the file already exists (use "
-          "cdb_replace) and if the parent folder is missing (never creates "
+          "replace) and if the parent folder is missing (never creates "
           "folders). The write is exclusive (O_EXCL): no race can overwrite "
           "a file that appeared in the meantime. Empty content creates an "
           "empty file."));
@@ -4996,7 +5505,7 @@ tools_schema_cdb_create(JsonBuilder *builder)
     json_builder_end_object(builder);
 }
 
-/* Schéma de l'outil cdb_delete. */
+/* Schéma de l'outil delete. */
 static void
 tools_schema_cdb_delete(JsonBuilder *builder)
 {
@@ -5006,7 +5515,7 @@ tools_schema_cdb_delete(JsonBuilder *builder)
     json_builder_set_member_name(builder, "function");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "name");
-    json_builder_add_string_value(builder, "cdb_delete");
+    json_builder_add_string_value(builder, "delete");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
         _("Destroys a file on disk (absolute path) in TWO passes. Without "
@@ -5033,7 +5542,7 @@ tools_schema_cdb_delete(JsonBuilder *builder)
     json_builder_add_string_value(builder, "string");
     json_builder_set_member_name(builder, "description");
     json_builder_add_string_value(builder,
-        _("Fingerprint returned by the first cdb_delete(path). Omit for the "
+        _("Fingerprint returned by the first delete(path). Omit for the "
           "confirmation request."));
     json_builder_end_object(builder);
 
@@ -5062,19 +5571,19 @@ llm_body_build(LlmTile *t)
         "A tool result with content:null means there is no new "
         "content compared with the previous results of the same "
         "terminal.\n\n"
-        "## cdb_bash\n"
+        "## bash\n"
         "Runs a shell command in a CDB terminal (0-9).\n\n"
-        "## cdb_read\n"
+        "## read\n"
         "Reads an exact range of lines (absolute path, 1-based inclusive). "
         "Returns the lines + a short hash (4 base36 chars) covering "
         "the exact octets of the range read. That hash proves you read the "
         "zone and must be replayed by the writing tools. To get "
         "the hash of ONE line, read exactly that line "
         "(from_line==to_line).\n\n"
-        "## cdb_insert\n"
+        "## insert\n"
         "Inserts text between two adjacent lines of a file on the "
         "disk. You MUST have read the line before and the line after, "
-        "each by its own cdb_read(N,N), and replay their two "
+        "each by its own read(N,N), and replay their two "
         "hashes. before_line=0 or after_line=0 denotes a bound of the "
         "file: there, no hash. The text is inserted verbatim, like "
         "cat: the newlines are yours, and text that does "
@@ -5083,21 +5592,21 @@ llm_body_build(LlmTile *t)
         "lines entirely provided by you (authored_range): "
         "a line mixing your text with existing content stays "
         "without a hash, so without an immediate right to write.\n\n"
-        "## cdb_replace\n"
+        "## replace\n"
         "Replaces the lines from_line..to_line (inclusive, 1-based) with your "
         "text verbatim. block_hash is MANDATORY and must come from a "
-        "cdb_read of that exact range: without it, or if it no longer "
+        "read of that exact range: without it, or if it no longer "
         "matches, refusal. The replaced range includes the trailing newline "
         "of to_line. Empty text deletes the lines. A refusal will never "
         "give you the current hash: re-read.\n\n"
-        "## cdb_create\n"
+        "## create\n"
         "Creates a NEW file (absolute path) with content verbatim. Refuses "
         "if the file exists or if the parent is missing; never creates a "
         "folder. All content coming from you, authored_range covers the "
         "whole file.\n\n"
-        "## cdb_delete\n"
-        "TWO passes, mandatory: cdb_delete(path) deletes nothing and "
-        "returns file_hash; cdb_delete(path, file_hash) deletes only if "
+        "## delete\n"
+        "TWO passes, mandatory: delete(path) deletes nothing and "
+        "returns file_hash; delete(path, file_hash) deletes only if "
         "the fingerprint is still the right one. That hash is not proof of "
         "reading: it certifies that the file did not change between your "
         "discovery and its destruction. folder and symlink = refusal.\n");
@@ -5123,32 +5632,37 @@ llm_body_build(LlmTile *t)
         LlmToolProfile     prof = llm_config_active_profile();
         GPtrArray         *prefs = llm_tools_prefs_load();
         const LlmToolPref *bash_pref = llm_tools_pref_find(prefs,
-                                                           "cdb_bash");
+                                                           "bash");
         LlmToolMode        bash_mode = llm_tool_pref_mode(bash_pref, prof);
         gboolean           announce_bash = (bash_mode != LLM_TOOL_OFF);
         const LlmToolPref *read_pref = llm_tools_pref_find(prefs,
-                                                           "cdb_read");
+                                                           "read");
         LlmToolMode        read_mode = llm_tool_pref_mode(read_pref, prof);
         gboolean           announce_read = (read_mode != LLM_TOOL_OFF);
         const LlmToolPref *ins_pref = llm_tools_pref_find(prefs,
-                                                         "cdb_insert");
+                                                         "insert");
         LlmToolMode        ins_mode = llm_tool_pref_mode(ins_pref, prof);
         gboolean           announce_insert = (ins_mode != LLM_TOOL_OFF);
+        const LlmToolPref *rem_pref = llm_tools_pref_find(prefs,
+                                                          "remove");
+        LlmToolMode        rem_mode = llm_tool_pref_mode(rem_pref, prof);
+        gboolean           announce_remove = (rem_mode != LLM_TOOL_OFF);
         const LlmToolPref *rep_pref = llm_tools_pref_find(prefs,
-                                                          "cdb_replace");
+                                                          "replace");
         LlmToolMode        rep_mode = llm_tool_pref_mode(rep_pref, prof);
         gboolean           announce_replace = (rep_mode != LLM_TOOL_OFF);
         const LlmToolPref *cre_pref = llm_tools_pref_find(prefs,
-                                                          "cdb_create");
+                                                          "create");
         LlmToolMode        cre_mode = llm_tool_pref_mode(cre_pref, prof);
         gboolean           announce_create = (cre_mode != LLM_TOOL_OFF);
         const LlmToolPref *del_pref = llm_tools_pref_find(prefs,
-                                                          "cdb_delete");
+                                                          "delete");
         LlmToolMode        del_mode = llm_tool_pref_mode(del_pref, prof);
         gboolean           announce_delete = (del_mode != LLM_TOOL_OFF);
         guint              n_enabled = (announce_bash ? 1 : 0) +
                                        (announce_read ? 1 : 0) +
                                        (announce_insert ? 1 : 0) +
+                                       (announce_remove ? 1 : 0) +
                                        (announce_replace ? 1 : 0) +
                                        (announce_create ? 1 : 0) +
                                        (announce_delete ? 1 : 0);
@@ -5162,13 +5676,21 @@ llm_body_build(LlmTile *t)
                 tools_schema_cdb_read(builder);
             if (announce_insert)
                 tools_schema_cdb_insert(builder);
+            if (announce_remove)
+                tools_schema_cdb_remove(builder);
             if (announce_replace)
                 tools_schema_cdb_replace(builder);
             if (announce_create)
                 tools_schema_cdb_create(builder);
             if (announce_delete)
                 tools_schema_cdb_delete(builder);
-            /* futurs outils : autres schémas + tests de mode ici */
+            /* futurs outils : autres schémas + tests de mode ici.
+             * Note pour la passe suivante : ces sept blocs de quatre
+             * lignes sont la derniere copie collee du fichier. Une table
+             * { nom, schema } les remplacerait, mais le garde
+             * n_enabled > 0 est imbrique avec l'ouverture de "messages"
+             * (un provider qui refuse les outils doit quand meme recevoir
+             * sa persona) : a refondre ensemble, pas a moitie. */
             json_builder_end_array(builder);
 
             json_builder_set_member_name(builder, "tool_choice");
@@ -5183,7 +5705,6 @@ llm_body_build(LlmTile *t)
                                       ? base_persona : "",
                                   _(tools_policy), NULL);
             g_free(base_persona);
-
             json_builder_begin_object(builder);
             json_builder_set_member_name(builder, "role");
             json_builder_add_string_value(builder, "system");

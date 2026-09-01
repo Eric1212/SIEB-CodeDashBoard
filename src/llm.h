@@ -474,16 +474,27 @@ typedef struct {
     gboolean shown;      /* déjà affiché localement (refus/erreur immédiat) */
 } CdbResult;
 
-/* Ce que la file agentique sait exécuter. */
+/* Ce que la file agentique sait exécuter. Un effet par kind : chaque
+ * valeur designe UNE operation, jamais deux.
+ *   READ    lire            rien ne bouge
+ *   INSERT  + n lignes      la geometrie du fichier s'allonge
+ *   REMOVE  - n lignes      la geometrie du fichier se raccourcit
+ *   REPLACE k -> k lignes   la geometrie NE BOUGE PAS (invariant voulu)
+ *   CREATE  fichier neuf       DELETE  fichier detruit
+ * L'ordre des valeurs n'est nulle part persiste : CdbSpecKind ne quitte
+ * jamais la memoire. llm_live.json serialise un "kind", mais c'est
+ * LlmMsgKind (texte / tool_calls / tool_result) et le NOM de l'outil —
+ * jamais celui-ci. inserer REMOVE au milieu est donc sans effet sur les
+ * sessions existantes. */
 typedef enum {
     CDB_SPEC_BASH = 0,
     CDB_SPEC_READ,
     CDB_SPEC_INSERT,
+    CDB_SPEC_REMOVE,
     CDB_SPEC_REPLACE,
     CDB_SPEC_CREATE,
     CDB_SPEC_DELETE
 } CdbSpecKind;
-
 /* Spécification d'un appel d'outil natif en file d'attente.
  *   bash    : tab + cmd.
  *   fichiers: args_json, re-parse a l'EXECUTION — c'est ce qui garantit
