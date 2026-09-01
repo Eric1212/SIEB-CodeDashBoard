@@ -25,6 +25,29 @@ static const char *cdb_css =
     "@define-color ibox_out_sel   #3a3f4b;\n"
     "@define-color ibox_border    #7a7a7a;\n"
     /* --- Base générale --- */
+    /* L'anneau de focus du thème est coupé ICI, une fois pour toutes, et non
+     * contrôle par contrôle. Décision d'Éric (31 août) : c'est un indicateur
+     * hors norme CDB. Libadwaita le peint en couleur d'accent, il n'apparaît
+     * que sur certains widgets (les boutons plats des tuiles n'en ont jamais
+     * eu, ceux de la barre de recherche en avaient un), et GTK le retire de
+     * son propre chef 1 à 2 s plus tard sans aucun mouvement de focus —
+     * mesuré : même widget, mappé, sensible, fenêtre active, seul le drapeau
+     * :focus-visible tombait. Un état ni contrôlé ni stable ne rend service
+     * à personne.
+     *
+     * CDB marque l'état par un signe, pas par une teinte (CLAUDE.md) : le ✓
+     * dans la colonne de l'actif, le chevron du sélecteur, le point de
+     * statut. Le focus clavier reste visible où il l'a toujours été : le
+     * curseur de texte d'un champ, la ligne courante de l'éditeur.
+     *
+     * Règle universelle, sans lutte de spécificité : ce provider est chargé
+     * en PRIORITY_APPLICATION, au-dessus du thème. Deux vérifications avant
+     * de couper — le projet n'a aucun glisser-déposer qui aurait eu cet
+     * anneau pour témoin, et rien dans CDB ne peignait volontairement
+     * d'outline : les deux seules occurrences du mot étaient des suppressions
+     * locales (section recherche, ibox-half), retirées ici pour que la règle
+     * reste la seule. */
+    "* { outline: none; }\n"
     ".tile-title { font-size: 10pt; }\n"
     ".initprompt-editor text { font-family: monospace; font-size: 10pt; }\n"
     "button.llm-configure { font-size: 10pt; font-weight: normal; padding: 2px 6px; }\n"
@@ -111,6 +134,34 @@ static const char *cdb_css =
     /* --- Sélecteur de modèle : précisions --- */
     "popover.llm-model-pop searchentry { margin: 4px 8px; }\n"
     "popover.llm-model-pop scrolledwindow { margin: 0; }\n"
+
+    /* --- Recherche / remplacement de l'éditeur ---
+     * Grammaire CDB (les mêmes classes que les tuiles : flat + cdb-flat
+     * seront posées sur les boutons) : PAS de hover peint par ici — les
+     * boutons plats de CDB n'ont pas de feedback de survol, et le choix
+     * actif se marque par le signe ✓ dans le libellé (pattern du
+     * sélecteur de modèles), pas par une teinte de fond. Champs = boîtes
+     * bordées discrètes (pas le look formulaire libadwaita), sélection
+     * en @ibox_border (pas de bleu), anneau de focus supprimé. Tout en
+     * 10pt, min-height 0, icônes 12px, compteur en chiffres tabulaires. */
+    "searchbar { background-color: @view_bg_color; "
+    "border-bottom: 1px solid @borders; }\n"
+    "searchbar > revealer > box { padding: 2px 6px; }\n"
+    "searchbar entry { min-height: 0; padding: 2px 8px; font-size: 10pt; "
+    "background-color: alpha(shade(@view_bg_color, 0.92), 1); "
+    "border: 1px solid @borders; border-radius: 6px; }\n"
+    "searchbar entry text selection { background-color: @ibox_border; "
+    "color: @view_fg_color; }\n"
+    "searchbar entry > image { min-height: 0; min-width: 0; "
+    "-gtk-icon-size: 12px; }\n"
+    "searchbar button { background: none; border: none; box-shadow: none; "
+    "min-height: 0; min-width: 0; padding: 2px 6px; font-size: 10pt; "
+    "font-weight: normal; }\n"
+    "searchbar button > image { min-height: 0; min-width: 0; "
+    "-gtk-icon-size: 12px; }\n"
+    "searchbar label.cdb-search-count { font-variant-numeric: tabular-nums; "
+    "font-size: 9pt; opacity: 0.85; }\n"
+
     /* --- Boîtes interactives (ibox) ---
      * Couleurs ABSOLUES (@ibox_*, définis en tête de feuille),
      * volontairement hors thème : la boîte est un instrument, pas du
@@ -173,7 +224,7 @@ static const char *cdb_css =
      * Aucun état :disabled ici, et c'est volontaire — le gagnant reste
      * SENSIBLE (voir choice_set_final). Je l'avais rendu insensible, et
      * Adwaita l'assombrissait : c'était la pâleur du verdict. */
-    "button.ibox-half { border: none; box-shadow: none; outline: none; "
+    "button.ibox-half { border: none; box-shadow: none; "
     "margin: 0; border-radius: 0; background-image: none; "
     "padding: 7px 8px; font-weight: bold; color: @ibox_choice_fg; "
     "opacity: 1; cursor: pointer; }\n"

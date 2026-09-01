@@ -32,7 +32,6 @@ extern char **environ;
 #include "llmlive.h"
 #include "llm.h"
 #include "layout.h"
-#include "layout.h"
 #include "i18n.h"
 #include "sfx.h"
 
@@ -48,6 +47,18 @@ typedef struct {
     GtkPaned          *paned;
     GtkSourceBuffer   *buffer;    /* buffer courant (dérivé de files[]) */
     GtkWidget         *source_view; /* la GtkSourceView (change de buffer) */
+    /* Recherche/remplacement (Ctrl+F / Ctrl+H) : deux objets, deux durées
+     * de vie. Le settings (requête, casse, wrap_around) est UNIQUE pour la
+     * session — c'est lui qui tient toutes les barres cohérentes entre les
+     * tuiles, et qui fait survivre le mot cherché au changement de
+     * fichier. Le contexte, lui, est lié au buffer reçu à sa construction
+     * (GtkSourceView ne prévoit pas de setter) : un par buffer courant,
+     * refait à chaque bascule par search_ensure_ctx(). Les barres et les
+     * entrées restent des vues GTK. */
+    GtkSourceSearchSettings *search_settings; /* partagé, une seule fois */
+    GtkSourceSearchContext  *search_ctx;  /* moteur, suit le buffer courant */
+    GPtrArray               *search_bars; /* barres vivantes, refs faibles */
+    gint                     search_pos;  /* occurrence courante (1-based) */
     GHashTable        *files;     /* chemin -> PerFile* (buffer + baseline) */
     Layout            *layout;    /* modèle du tiling (source de vérité) */
     GtkWidget         *layout_holder; /* conteneur du rendu paned */
@@ -179,6 +190,7 @@ static void update_style_scheme(App *app);
 static void render_layout(App *app);
 static void set_paned_positions(App *app);
 static GtkWidget *build_editor(App *app);
+static void search_ensure_ctx(App *app); /* recherche : recouple le moteur */
 static GtkWidget *build_roots_panel(App *app);
 
 /* ------------------------------------------------------------------ */
@@ -335,6 +347,11 @@ load_file(App *app, const char *path)
     if (app->source_view != NULL)
         gtk_text_view_set_buffer(GTK_TEXT_VIEW(app->source_view),
                                  GTK_TEXT_BUFFER(pf->buffer));
+    /* Nouveau buffer = nouveau moteur : le contexte ne sait pas suivre un
+     * buffer, son lien est figé à la construction. Le settings partagé,
+     * lui, traverse les fichiers — c'est lui qui garde la requête et la
+     * casse, donc le mot cherché reste quand on change de fichier. */
+    search_ensure_ctx(app);
     /* Le buffer (neuf ou réutilisé) doit suivre le thème clair/sombre. */
     update_style_scheme(app);
 
@@ -2676,15 +2693,777 @@ on_theme_notify(GObject G_GNUC_UNUSED *obj, GParamSpec G_GNUC_UNUSED *pspec, gpo
     update_style_scheme((App *)data);
 }
 
+/* ------------------------------------------------------------------ */
+/* Recherche / remplacement (Ctrl+F / Ctrl+H)                          */
+/* ------------------------------------------------------------------ */
+/*
+ * Deux objets, deux durées de vie — c'est tout le nœud du dispositif.
+ *
+ *   GtkSourceSearchSettings — porté par App, UNE SEULE INSTANCE pour la
+ *   session. Il porte la requête, la casse et le wrap_around : c'est lui
+ *   qui rend toutes les barres cohérentes entre les tuiles, et qui fait
+ *   qu'un mot cherché survit au changement de fichier (on ne retape pas
+ *   pour reprendre la même chasse ailleurs).
+ *
+ *   GtkSourceSearchContext — le moteur. Il est lié AU BUFFER reçu à sa
+ *   construction : GtkSourceView expose get_buffer(), pas de setter.
+ *   Comme CDB donne un buffer à chaque fichier, le contexte doit renaître
+ *   à chaque bascule — voir search_ensure_ctx().
+ *
+ * La barre, elle, reste une vue par tuile : GtkSearchBar, GtkSearchEntry,
+ * GtkRevealer et le moteur GtkSourceView portent tout l'état — aucune
+ * struct maison.
+ */
+
+static void     search_create_ctx(App *app);
+static gboolean search_ctx_ready(App *app, const char *where);
+static void     search_refresh_count(GtkWidget *bar, App *app);
+static void     search_refresh_all(App *app);
+static void     on_search_count_notify(GObject G_GNUC_UNUSED *obj,
+                                       GParamSpec G_GNUC_UNUSED *pspec,
+                                       gpointer data);
+
+/* Barre détruite (tuile retirée, pavage re-rendu) : elle sort de la table
+ * des vivantes. Appelé par la référence faible posée à sa construction. */
+static void
+on_search_bar_weak_destroyed(gpointer data, GObject *bar)
+{
+    App *app = data;
+
+    if (app != NULL && app->search_bars != NULL)
+        g_ptr_array_remove(app->search_bars, bar);
+}
+
+/* Au moins une barre est-elle ouverte ? Le surlignage est un état du
+ * moteur, donc GLOBAL, alors que les barres sont plusieurs : il ne
+ * s'éteint que quand la dernière se ferme. Le code d'origine éteignait
+ * tout depuis la seule barre qui venait de se fermer. */
+static gboolean
+search_any_bar_active(App *app)
+{
+    guint i;
+
+    if (app->search_bars == NULL)
+        return FALSE;
+    for (i = 0; i < app->search_bars->len; i++)
+        if (gtk_search_bar_get_search_mode(
+                GTK_SEARCH_BAR(g_ptr_array_index(app->search_bars, i))))
+            return TRUE;
+    return FALSE;
+}
+
+/* Le moteur porte-t-il bien le buffer courant ? Il ne le peut pas tout
+ * seul (pas de setter) : seul search_create_ctx() les accouple. Un
+ * désaccord veut dire qu'un chemin de bascule a oublié de rebinder — et ce
+ * n'est pas une recherche approximative mais un comportement indéfini : des
+ * GtkTextIter d'un buffer passés au moteur d'un autre. On recouple sur
+ * place et on le dit, au lieu de chercher un texte fantôme en silence. */
+static gboolean
+search_ctx_ready(App *app, const char *where)
+{
+    GtkSourceBuffer *bound;
+
+    if (app == NULL || app->buffer == NULL || app->search_ctx == NULL)
+        return FALSE;
+
+    bound = gtk_source_search_context_get_buffer(app->search_ctx);
+    if (G_UNLIKELY(bound != app->buffer)) {
+        g_printerr("CDB: search: moteur désaccordé (%s) — buffer %p contre "
+                   "%p, rebind\n", where, (void *) bound, (void *) app->buffer);
+        search_create_ctx(app);
+    }
+    return TRUE;
+}
+
+/* Crée le moteur sur le buffer courant, depuis le settings partagé.
+ * L'ancien contexte meurt avec ses connexions : chaque barre vivante doit
+ * être rebranchée sur le nouveau, sinon plus un seul compteur ne bouge.
+ * (La table des barres n'est parcourue qu'ici et dans search_refresh_all ;
+ * elle ne change que par destruction d'une tuile, jamais pendant.) */
+static void
+search_create_ctx(App *app)
+{
+    guint i;
+
+    if (app->buffer == NULL)
+        return;
+
+    if (app->search_settings == NULL) {
+        app->search_settings = gtk_source_search_settings_new();
+        gtk_source_search_settings_set_wrap_around(app->search_settings,
+                                                   TRUE);
+    }
+
+    if (app->search_ctx != NULL) {
+        g_object_unref(app->search_ctx);
+        app->search_ctx = NULL;
+    }
+    app->search_ctx = gtk_source_search_context_new(app->buffer,
+                                                    app->search_settings);
+    app->search_pos = 0;
+
+    /* Un fichier qui arrive ne doit pas être déjà couvert de jaune : le
+     * surlignage ne suit que les barres réellement ouvertes. */
+    gtk_source_search_context_set_highlight(app->search_ctx,
+                                            search_any_bar_active(app));
+
+    for (i = 0; app->search_bars != NULL && i < app->search_bars->len; i++)
+        g_signal_connect_object(app->search_ctx, "notify::occurrences-count",
+                                G_CALLBACK(on_search_count_notify),
+                                g_ptr_array_index(app->search_bars, i), 0);
+    search_refresh_all(app);
+
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB: search: moteur %p couplé au buffer %p\n",
+                   (void *) app->search_ctx, (void *) app->buffer);
+}
+
+/* Coupler le moteur au buffer courant. Sans-opération quand c'est déjà
+ * fait : render_layout() repasse par build_editor() à chaque re-rendu du
+ * pavage, et un contexte recréé à tort jetterait le scan en cours. */
+static void
+search_ensure_ctx(App *app)
+{
+    if (app->buffer == NULL)
+        return;
+    if (app->search_ctx != NULL
+        && gtk_source_search_context_get_buffer(app->search_ctx)
+           == app->buffer)
+        return;
+    search_create_ctx(app);
+}
+
+/* Rafraîchit le compteur « x / y » d'une barre. total < 0 : le scan du
+ * contexte n'est pas terminé (GtkSourceView le fait en tâche de fond) —
+ * le notify::occurrences-count nous fera recalculer. 0 / 0 est signalé
+ * par la classe « warning » (libadwaita) quand la requête est non vide. */
+static void
+search_refresh_count(GtkWidget *bar, App *app)
+{
+    GtkLabel   *label;
+    const char *q;
+    GtkTextIter ms, me;
+    gint        total, pos = 0;
+    char        txt[64];
+
+    label = g_object_get_data(G_OBJECT(bar), "cdb-count-label");
+    if (label == NULL || app == NULL || app->search_settings == NULL)
+        return;
+
+    /* La requête vit dans le settings partagé : c'est elle qui décide si
+     * le compteur a quelque chose à dire, même sans moteur. */
+    q = gtk_source_search_settings_get_search_text(app->search_settings);
+    if (q == NULL || *q == '\0' || !search_ctx_ready(app, "compteur")) {
+        gtk_label_set_text(label, "");
+        gtk_widget_remove_css_class(GTK_WIDGET(label), "warning");
+        return;
+    }
+
+    total = gtk_source_search_context_get_occurrences_count(app->search_ctx);
+    if (total < 0) { /* scan en cours */
+        gtk_label_set_text(label, "…");
+        gtk_widget_remove_css_class(GTK_WIDGET(label), "warning");
+        return;
+    }
+    if (total == 0) {
+        gtk_label_set_text(label, "0 / 0");
+        gtk_widget_add_css_class(GTK_WIDGET(label), "warning");
+        return;
+    }
+
+    /* L'occurrence courante EST la sélection du buffer (posée par
+     * search_navigate) ; sa position peut rester inconnue le temps du
+     * scan — on retombe sur la dernière connue. */
+    if (gtk_text_buffer_get_selection_bounds(GTK_TEXT_BUFFER(app->buffer),
+                                             &ms, &me))
+        pos = gtk_source_search_context_get_occurrence_position(
+                  app->search_ctx, &ms, &me);
+    if (pos < 1)
+        pos = app->search_pos;
+
+    gtk_widget_remove_css_class(GTK_WIDGET(label), "warning");
+    if (pos < 1)
+        g_snprintf(txt, sizeof txt, "… / %d", total);
+    else
+        g_snprintf(txt, sizeof txt, "%d / %d", pos, total);
+    gtk_label_set_text(label, txt);
+}
+
+/* Le moteur n'émet AUCUN notify quand l'occurrence COURANTE bouge — il
+ * n'expose que occurrences-count. La position est pourtant un état partagé
+ * entre les tuiles : chaque navigation doit le dire elle-même aux
+ * compteurs, sinon le « x / y » reste figé pendant que le curseur saute.
+ * C'est ce qui remplaçait les g_object_notify() manuels du code d'origine
+ * (émettre un notify pour une propriété qui n'a pas changé). */
+static void
+search_refresh_all(App *app)
+{
+    guint i;
+
+    if (app->search_bars == NULL)
+        return;
+    for (i = 0; i < app->search_bars->len; i++)
+        search_refresh_count(g_ptr_array_index(app->search_bars, i), app);
+}
+
+/* notify::occurrences-count du moteur : chaque barre met à jour son label
+ * (g_signal_connect_object → la connexion meurt avec la barre, et le
+ * contexte emporte les siennes avec lui en mourant). */
+static void
+on_search_count_notify(GObject G_GNUC_UNUSED *obj,
+                       GParamSpec G_GNUC_UNUSED *pspec, gpointer data)
+{
+    GtkWidget *bar = data;
+    App       *app = g_object_get_data(G_OBJECT(bar), "cdb-app");
+
+    search_refresh_count(bar, app);
+}
+
+/* Pose la sélection sur le match et le fait apparaître dans la vue qui a
+ * déclenché la navigation. Une vue absente (tuile retirée entre-temps) ne
+ * bloque pas la sélection, qui est l'état partagé. Le statut suit le
+ * curseur via le notify::cursor-position existant. */
+static void
+search_select_match(GtkWidget *view, App *app, GtkTextIter *ms, GtkTextIter *me)
+{
+    gtk_text_buffer_select_range(GTK_TEXT_BUFFER(app->buffer), ms, me);
+    if (view != NULL)
+        gtk_text_view_scroll_to_iter(GTK_TEXT_VIEW(view), ms, 0.0, TRUE,
+                                     0.0, 0.5);
+}
+
+/* Occurrence suivante (backward = FALSE) ou précédente. L'occurrence
+ * courante EST la sélection du buffer : on repart de sa fin (ou de son
+ * début pour « précédent ») ; sans sélection, du curseur. Le wrap_around
+ * du settings rend la navigation cyclique. */
+static void
+search_navigate(GtkWidget *bar, App *app, gboolean backward)
+{
+    GtkTextBuffer *buf;
+    GtkWidget     *view;
+    GtkTextIter    s, e, from, ms, me;
+    gboolean       found, wrapped = FALSE;
+
+    if (!search_ctx_ready(app, "navigation"))
+        return;
+    buf  = GTK_TEXT_BUFFER(app->buffer);
+    view = bar != NULL ? g_object_get_data(G_OBJECT(bar), "cdb-view") : NULL;
+
+    if (gtk_text_buffer_get_selection_bounds(buf, &s, &e))
+        from = backward ? s : e;
+    else
+        gtk_text_buffer_get_iter_at_mark(buf, &from,
+                                         gtk_text_buffer_get_insert(buf));
+
+    if (backward)
+        found = gtk_source_search_context_backward(app->search_ctx, &from,
+                                                   &ms, &me, &wrapped);
+    else
+        found = gtk_source_search_context_forward(app->search_ctx, &from,
+                                                  &ms, &me, &wrapped);
+    (void) wrapped; /* le cycle se lit dans le compteur, pas de message */
+
+    if (!found) {
+        app->search_pos = 0;
+        search_refresh_all(app);
+        return;
+    }
+
+    /* Position notée ici, propagateur des compteurs juste après : le
+     * moteur ne notifie pas le déplacement (voir search_refresh_all). */
+    app->search_pos =
+        gtk_source_search_context_get_occurrence_position(app->search_ctx,
+                                                          &ms, &me);
+    search_select_match(view, app, &ms, &me);
+    search_refresh_all(app);
+}
+
+/* Requête changée : la reporte dans le settings partagé puis pose la
+ * sélection sur la première occurrence — en gardant celle en cours si elle
+ * correspond déjà au nouveau texte (lettre ajoutée sur une recherche
+ * ouverte : on ne saute pas l'occurrence où l'on est). */
+static void
+on_search_entry_changed(GtkSearchEntry *entry, gpointer data)
+{
+    App        *app = data;
+    GtkWidget  *bar;
+    const char *text;
+    GtkTextIter s, e;
+
+    if (app->search_settings == NULL)
+        return;
+    bar = gtk_widget_get_ancestor(GTK_WIDGET(entry), GTK_TYPE_SEARCH_BAR);
+    if (bar == NULL)
+        return;
+
+    text = gtk_editable_get_text(GTK_EDITABLE(entry));
+    gtk_source_search_settings_set_search_text(app->search_settings, text);
+
+    if (text == NULL || *text == '\0') {
+        app->search_pos = 0;
+        search_refresh_all(app);
+        return;
+    }
+    if (!search_ctx_ready(app, "requête"))
+        return;
+
+    /* La sélection courante correspond-elle déjà à la nouvelle requête ? */
+    if (gtk_text_buffer_get_selection_bounds(GTK_TEXT_BUFFER(app->buffer),
+                                             &s, &e)) {
+        char     *slice = gtk_text_buffer_get_slice(GTK_TEXT_BUFFER(app->buffer),
+                                                    &s, &e, TRUE);
+        gboolean  keeps = (g_strcmp0(slice, text) == 0);
+
+        g_free(slice);
+        if (keeps) {
+            search_select_match(g_object_get_data(G_OBJECT(bar), "cdb-view"),
+                                app, &s, &e);
+            search_refresh_all(app);
+            return;
+        }
+    }
+
+    search_navigate(bar, app, FALSE);
+}
+
+static void
+on_search_next(GtkSearchEntry G_GNUC_UNUSED *entry, gpointer data)
+{
+    GtkWidget *bar = gtk_widget_get_ancestor(GTK_WIDGET(entry),
+                                             GTK_TYPE_SEARCH_BAR);
+
+    if (bar != NULL)
+        search_navigate(bar, data, FALSE);
+}
+
+static void
+on_search_previous(GtkSearchEntry G_GNUC_UNUSED *entry, gpointer data)
+{
+    GtkWidget *bar = gtk_widget_get_ancestor(GTK_WIDGET(entry),
+                                             GTK_TYPE_SEARCH_BAR);
+
+    if (bar != NULL)
+        search_navigate(bar, data, TRUE);
+}
+
+/* Échap (GtkSearchEntry::stop-search) ou bouton ✕ : fermer la barre —
+ * le notify::search-mode-enabled fait le reste. */
+static void
+on_search_stop(GtkSearchEntry G_GNUC_UNUSED *entry, gpointer data)
+{
+    gtk_search_bar_set_search_mode(GTK_SEARCH_BAR(data), FALSE);
+}
+
+static void
+on_search_prev_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    GtkWidget *bar = gtk_widget_get_ancestor(GTK_WIDGET(btn),
+                                             GTK_TYPE_SEARCH_BAR);
+
+    if (bar != NULL)
+        search_navigate(bar, data, TRUE);
+}
+
+static void
+on_search_next_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    GtkWidget *bar = gtk_widget_get_ancestor(GTK_WIDGET(btn),
+                                             GTK_TYPE_SEARCH_BAR);
+
+    if (bar != NULL)
+        search_navigate(bar, data, FALSE);
+}
+
+/* « Aa » : la casse est une propriété du settings partagé — toutes les
+ * tuiles, et tous les fichiers, reflètent le changement d'un coup. Sur un
+ * bouton plat, l'état actif ne se peint pas (norme CLAUDE.md) : il se
+ * marque par le signe ✓ dans le libellé lui-même. */
+static void
+on_search_case_toggled(GtkToggleButton *btn, gpointer data)
+{
+    App *app = data;
+
+    gtk_button_set_label(GTK_BUTTON(btn),
+                         gtk_toggle_button_get_active(btn)
+                             ? "\u2713 Aa" : "Aa");
+    if (app->search_settings == NULL)
+        return;
+    gtk_source_search_settings_set_case_sensitive(
+        app->search_settings, gtk_toggle_button_get_active(btn));
+}
+
+/* Remplace l'occurrence courante — ou y va d'abord si la sélection n'est
+ * pas un match (le clic suivant remplacera). Passant par le buffer, le
+ * remplacement est undo-able (Ctrl+Z).
+ *
+ * Helper commun au bouton ET à l'activation du champ : le code d'origine
+ * appelait le handler du bouton avec btn == NULL, gtk_widget_get_ancestor()
+ * renvoyait donc NULL et « Entrée » dans « Remplacer par » ne faisait
+ * strictement rien, alors que le commentaire promettait le contraire. */
+static void
+replace_one(GtkWidget *bar, App *app)
+{
+    GtkTextIter s, e;
+    GError     *err = NULL;
+    GtkWidget  *rep_entry;
+    const char *rep;
+
+    if (!search_ctx_ready(app, "remplacer"))
+        return;
+    rep_entry = g_object_get_data(G_OBJECT(bar), "cdb-replace-entry");
+    if (rep_entry == NULL)
+        return;
+    rep = gtk_editable_get_text(GTK_EDITABLE(rep_entry));
+
+    /* Remplace uniquement une sélection qui est le match courant. */
+    if (!gtk_text_buffer_get_selection_bounds(GTK_TEXT_BUFFER(app->buffer),
+                                              &s, &e)
+        || gtk_source_search_context_get_occurrence_position(app->search_ctx,
+                                                             &s, &e) < 1) {
+        search_navigate(bar, app, FALSE);
+        return;
+    }
+
+    if (!gtk_source_search_context_replace(app->search_ctx, &s, &e,
+                                           rep, -1, &err)) {
+        g_printerr(_("Replace failed: %s\n"),
+                   err != NULL ? err->message : _("unknown error"));
+        g_clear_error(&err);
+        return;
+    }
+    search_navigate(bar, app, FALSE);
+}
+
+static void
+on_replace_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    GtkWidget *bar = gtk_widget_get_ancestor(GTK_WIDGET(btn),
+                                             GTK_TYPE_SEARCH_BAR);
+
+    if (bar != NULL)
+        replace_one(bar, data);
+}
+
+/* Entrée dans le champ « Remplacer par » : même chemin que le bouton, la
+ * barre étant résolue depuis le champ lui-même. */
+static void
+on_replace_entry_activate(GtkEntry *entry, gpointer data)
+{
+    GtkWidget *bar = gtk_widget_get_ancestor(GTK_WIDGET(entry),
+                                             GTK_TYPE_SEARCH_BAR);
+
+    if (bar != NULL)
+        replace_one(bar, data);
+}
+
+/* Tout remplacer : une seule action d'undo (le contexte enveloppe dans
+ * begin/end-user-action). Le nombre rendu n'est pas affiché — le compteur
+ * qui tombe à « 0 / 0 » est le retour attendu (décision Éric B.). */
+static void
+on_replace_all_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    App        *app = data;
+    GtkWidget  *bar, *rep_entry;
+    GError     *err = NULL;
+    const char *rep;
+
+    if (!search_ctx_ready(app, "tout remplacer"))
+        return;
+    bar = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_SEARCH_BAR);
+    if (bar == NULL)
+        return;
+    rep_entry = g_object_get_data(G_OBJECT(bar), "cdb-replace-entry");
+    if (rep_entry == NULL)
+        return;
+    rep = gtk_editable_get_text(GTK_EDITABLE(rep_entry));
+
+    gtk_source_search_context_replace_all(app->search_ctx, rep, -1, &err);
+    if (err != NULL) {
+        g_printerr(_("Replace failed: %s\n"), err->message);
+        g_error_free(err);
+        return;
+    }
+    app->search_pos = 0;
+    search_refresh_all(app);
+}
+
+/* Pose le focus dans le champ demandé et pré-sélectionne la requête (le
+ * premier caractère tapé remplace l'ancienne).
+ *
+ * Garde-fou : on ne cède le passage qu'à un choix VRAI, c'est-à-dire un
+ * membre non éditable de cette barre — un bouton ▲ ▼ Aa touché par la main
+ * pendant qu'on attendait la map. Aller du champ Find au champ de
+ * remplacement n'est PAS un choix à respecter : c'est exactement ce que
+ * Ctrl+H vient de demander, et céder là serait ne jamais y arriver. */
+static void
+search_focus_set(GtkWidget *field)
+{
+    GtkWidget *bar   = gtk_widget_get_ancestor(field, GTK_TYPE_SEARCH_BAR);
+    GtkRoot   *root  = bar != NULL ? gtk_widget_get_root(bar) : NULL;
+    GtkWidget *focus = (root != NULL && GTK_IS_WINDOW(root))
+                     ? gtk_window_get_focus(GTK_WINDOW(root)) : NULL;
+
+    if (focus != NULL && focus != field && bar != NULL
+        && gtk_widget_is_ancestor(focus, bar)
+        && !GTK_IS_EDITABLE(focus))
+        return;
+
+    gtk_widget_grab_focus(field);
+    gtk_editable_select_region(GTK_EDITABLE(field), 0, -1);
+}
+
+/* Une seule fois : après la première map, le signal se retire. Laissé
+ * branché, chaque re-map de la tuile (layout re-rendu, split) reprendrait
+ * le focus de son propre chef, sans que personne ait rien demandé. */
+static void
+on_search_focus_map(GtkWidget *field, gpointer data)
+{
+    g_signal_handlers_disconnect_by_func(field, on_search_focus_map, data);
+    search_focus_set(field);
+}
+
+/* Début / fin de recherche : le surlignage est l'état d UN moteur partagé,
+ * il ne s'éteint donc que quand la dernière barre se ferme — pas quand
+ * CELLE-CI se ferme. La requête reste en mémoire (le settings partagé)
+ * pour la prochaine ouverture, comme pour le prochain fichier. */
+static void
+on_search_mode_notify(GObject *obj, GParamSpec G_GNUC_UNUSED *pspec,
+                      gpointer data)
+{
+    App       *app = data;
+    GtkWidget *view = g_object_get_data(obj, "cdb-view");
+    gboolean   on = gtk_search_bar_get_search_mode(GTK_SEARCH_BAR(obj));
+
+    if (app->search_ctx != NULL)
+        gtk_source_search_context_set_highlight(app->search_ctx,
+                                                search_any_bar_active(app));
+    if (!on && view != NULL)
+        gtk_widget_grab_focus(view);
+}
+
+/* Ctrl+F / Ctrl+H : montre la barre de recherche de cette tuile.
+ * with_replace révèle le panneau de remplacement ; une sélection du
+ * buffer (une ligne max) préremplit la requête. */
+static void
+show_search_bar(GtkWidget *view, App *app, gboolean with_replace)
+{
+    GtkSearchBar   *bar = g_object_get_data(G_OBJECT(view), "cdb-search-bar");
+    GtkSearchEntry *entry;
+    GtkTextIter     s, e;
+    char           *sel;
+    GtkWidget      *focus;
+
+    if (bar == NULL)
+        return;
+
+    /* Filet de sécurité : un Ctrl+F ne doit jamais tomber sur un moteur
+     * qui cherche un autre buffer que celui sous les yeux. */
+    search_ensure_ctx(app);
+
+    gtk_search_bar_set_search_mode(bar, TRUE);
+
+    /* Le panneau remplacement suit le bouton lié au revealer. */
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(
+        g_object_get_data(G_OBJECT(bar), "cdb-expander")), with_replace);
+
+    entry = g_object_get_data(G_OBJECT(bar), "cdb-find-entry");
+
+    /* Préremplit avec la sélection courante : l'entry émet search-changed
+     * et la navigation reprend l'occurrence en cours. À vide de sélection,
+     * la requête qui survit reste dans le champ. */
+    if (gtk_text_buffer_get_selection_bounds(GTK_TEXT_BUFFER(app->buffer),
+                                             &s, &e)) {
+        sel = gtk_text_buffer_get_slice(GTK_TEXT_BUFFER(app->buffer),
+                                        &s, &e, TRUE);
+        if (sel != NULL && *sel != '\0' && strchr(sel, '\n') == NULL)
+            gtk_editable_set_text(GTK_EDITABLE(entry), sel);
+        g_free(sel);
+    }
+
+    /* La requête a pu survivre sans que RIEN ne change : pas de
+     * search-changed, donc pas de notify — le compteur se rafraîchit à la
+     * main, sinon la barre s'ouvrirait muette sur « ». */
+    search_refresh_count(GTK_WIDGET(bar), app);
+
+    focus = GTK_WIDGET(entry);
+    if (with_replace && *gtk_editable_get_text(GTK_EDITABLE(entry)) != '\0')
+        focus = g_object_get_data(G_OBJECT(bar), "cdb-replace-entry");
+
+    /* Le focus attend la map du champ — jamais un idle. Une source idle est
+     * de priorité la plus basse (G_PRIORITY_DEFAULT_IDLE) : le flux SSE du
+     * chat, la sortie d'un terminal ou une animation l'affament, et le grab
+     * partait 1 à 2 s en retard — assez pour voler le focus au bouton que la
+     * main venait de toucher. « map » est l'événement réellement attendu
+     * (set_search_mode est asynchrone) et il ne s'aligne pas derrière la
+     * file. Le champ est déjà mappé ? on pose le focus tout de suite. */
+    if (gtk_widget_get_mapped(focus))
+        search_focus_set(focus);
+    else
+        g_signal_connect(focus, "map", G_CALLBACK(on_search_focus_map), NULL);
+}
+
+/* Construit la barre (vue) d'une tuile : requête + compteur + navigation
+ * + casse, et le panneau de remplacement révélé par le bouton ou Ctrl+H.
+ * Tout est branché sur le moteur et le settings d'App. */
+static GtkWidget *
+build_search_bar(GtkWidget *view, App *app)
+{
+    GtkWidget *bar, *outer, *row, *entry, *count;
+    GtkWidget *btn, *case_btn, *expander, *revealer, *rrow, *replace_entry;
+    gboolean   case_on;   /* casse déjà active ? (état du settings partagé) */
+
+    row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+
+    entry = gtk_search_entry_new();
+    /* GtkSearchEntry n'est PAS un GtkEntry en GTK4 : il dérive de GtkWidget
+     * et implémente GtkEditable. gtk_entry_set_placeholder_text() échouait
+     * donc son assertion GTK_IS_ENTRY et le libellé n'a jamais été posé.
+     * L'API propre existe, et le msgid « Find » ne change pas. */
+    gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(entry), _("Find"));
+    gtk_widget_set_hexpand(entry, TRUE);
+    gtk_box_append(GTK_BOX(row), entry);
+
+    count = gtk_label_new("");
+    gtk_label_set_width_chars(GTK_LABEL(count), 10);
+    gtk_widget_add_css_class(count, "cdb-search-count");
+    gtk_widget_set_valign(count, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(row), count);
+
+    btn = gtk_button_new_from_icon_name("go-up-symbolic");
+    gtk_widget_set_tooltip_text(btn, _("Find the previous match"));
+    g_signal_connect(btn, "clicked", G_CALLBACK(on_search_prev_clicked), app);
+    gtk_box_append(GTK_BOX(row), btn);
+
+    btn = gtk_button_new_from_icon_name("go-down-symbolic");
+    gtk_widget_set_tooltip_text(btn, _("Find the next match"));
+    g_signal_connect(btn, "clicked", G_CALLBACK(on_search_next_clicked), app);
+    gtk_box_append(GTK_BOX(row), btn);
+
+    /* Le crochet est l'état du settings PARTAGÉ, pas celui de la vue : une
+     * tuile recréée (layout re-rendu) sur une casse déjà active doit arriver
+     * marquée, sinon le bouton ment sur ce que le moteur fait vraiment.
+     * L'état se pose AVANT le signal : set_active émet "toggled", qui
+     * réécrirait le libellé. */
+    case_on = (app->search_settings != NULL
+               && gtk_source_search_settings_get_case_sensitive(
+                      app->search_settings));
+    case_btn = gtk_toggle_button_new_with_label(case_on ? "\u2713 Aa" : "Aa");
+    gtk_widget_set_tooltip_text(case_btn, _("Match case"));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(case_btn), case_on);
+    g_signal_connect(case_btn, "toggled",
+                     G_CALLBACK(on_search_case_toggled), app);
+    gtk_box_append(GTK_BOX(row), case_btn);
+
+    btn = gtk_toggle_button_new();
+    gtk_button_set_icon_name(GTK_BUTTON(btn), "view-more-symbolic");
+    gtk_widget_set_tooltip_text(btn, _("Show replace options"));
+    gtk_box_append(GTK_BOX(row), btn);
+    expander = btn;
+
+    rrow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    replace_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(replace_entry),
+                                   _("Replace with"));
+    gtk_widget_set_hexpand(replace_entry, TRUE);
+    gtk_box_append(GTK_BOX(rrow), replace_entry);
+
+    btn = gtk_button_new_with_label(_("Replace"));
+    g_signal_connect(btn, "clicked", G_CALLBACK(on_replace_clicked), app);
+    gtk_box_append(GTK_BOX(rrow), btn);
+
+    btn = gtk_button_new_with_label(_("Replace all"));
+    g_signal_connect(btn, "clicked", G_CALLBACK(on_replace_all_clicked), app);
+    gtk_box_append(GTK_BOX(rrow), btn);
+
+    revealer = gtk_revealer_new();
+    gtk_revealer_set_transition_type(GTK_REVEALER(revealer),
+                                     GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+    gtk_revealer_set_child(GTK_REVEALER(revealer), rrow);
+    g_object_bind_property(expander, "active", revealer, "reveal-child",
+                           G_BINDING_BIDIRECTIONAL);
+
+    outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(outer), row);
+    gtk_box_append(GTK_BOX(outer), revealer);
+
+    bar = gtk_search_bar_new();
+    gtk_search_bar_set_child(GTK_SEARCH_BAR(bar), outer);
+    gtk_search_bar_set_show_close_button(GTK_SEARCH_BAR(bar), TRUE);
+    /* Pas de key-capture-widget. GTK ne le destine qu'au « taper pour
+     * chercher » — sa doc renvoie explicitement Ctrl+F aux actions de
+     * l'application, ce que nous faisons déjà (on_editor_key_pressed, en
+     * phase capture). Installé sur la vue éditeur, ce contrôleur de phase
+     * bubble est appelé sur CHAQUE touche pressée et relâchée tant que la
+     * barre est fermée ; sans entrée connectée, il émettait un Gtk-WARNING à
+     * chaque fois. Ne pas l'installer rend le message impossible, au lieu
+     * de seulement le taire. Le « taper pour chercher » reste disponible si
+     * on le veut : brancher l'entrée (gtk_search_bar_connect_entry) ET ce
+     * porteur — les deux ensemble, pas l'un sans l'autre. */
+
+    /* Les références AVANT les signaux : un notify qui arriverait entre
+     * les deux trouverait une barre sans son app, donc un compteur qui ne
+     * se rafraîchit pas. */
+    g_object_set_data(G_OBJECT(bar), "cdb-view", view);
+    g_object_set_data(G_OBJECT(bar), "cdb-find-entry", entry);
+    g_object_set_data(G_OBJECT(bar), "cdb-replace-entry", replace_entry);
+    g_object_set_data(G_OBJECT(bar), "cdb-expander", expander);
+    g_object_set_data(G_OBJECT(bar), "cdb-count-label", count);
+    g_object_set_data(G_OBJECT(bar), "cdb-app", app);
+    /* Et la barre s'inscrit sur SA vue : Ctrl+F/Ctrl+H (contrôleur de la
+     * vue) la retrouve par cette data. */
+    g_object_set_data(G_OBJECT(view), "cdb-search-bar", bar);
+
+    /* La barre s'inscrit aussi auprès d'App, en référence FAIBLE : le jour
+     * où le moteur change de buffer, c'est cette table qui permet de la
+     * rebrancher sur le nouveau contexte. */
+    if (app->search_bars == NULL)
+        app->search_bars = g_ptr_array_new();
+    g_ptr_array_add(app->search_bars, bar);
+    g_object_weak_ref(G_OBJECT(bar), on_search_bar_weak_destroyed, app);
+    /* Les signaux viennent APRÈS les données : le notify::search-mode-enabled
+     * que la barre peut émettre doit trouver son app, ses entrées et son
+     * label. Les boutons, eux, se branchent à leur création plus haut. */
+    g_signal_connect(entry, "search-changed",
+                     G_CALLBACK(on_search_entry_changed), app);
+    g_signal_connect(entry, "activate", G_CALLBACK(on_search_next), app);
+    g_signal_connect(entry, "next-match", G_CALLBACK(on_search_next), app);
+    g_signal_connect(entry, "previous-match",
+                     G_CALLBACK(on_search_previous), app);
+    g_signal_connect(entry, "stop-search", G_CALLBACK(on_search_stop), bar);
+    g_signal_connect(replace_entry, "activate",
+                     G_CALLBACK(on_replace_entry_activate), app);
+    g_signal_connect(bar, "notify::search-mode-enabled",
+                     G_CALLBACK(on_search_mode_notify), app);
+
+    if (app->search_ctx != NULL)
+        g_signal_connect_object(app->search_ctx, "notify::occurrences-count",
+                                G_CALLBACK(on_search_count_notify), bar, 0);
+    /* Une requête déjà là (tuile recréée, fichier changé) ne déclenche
+     * aucun signal : le compteur se pose à la main. */
+    search_refresh_count(bar, app);
+    return bar;
+}
+
 /* Ctrl+Z : undo standard du buffer ; quand plus rien à défaire mais que le
  * fichier est encore sale (ex: dirty restauré via set_text, historique vide),
  * un dernier Ctrl+Z revient au baseline et efface tout le dirty. */
 static gboolean
-on_editor_key_pressed(GtkEventControllerKey G_GNUC_UNUSED *controller,
+on_editor_key_pressed(GtkEventControllerKey *controller,
                       guint keyval, guint G_GNUC_UNUSED keycode,
                       GdkModifierType state, gpointer data)
 {
     App *app = data;
+
+    /* Ctrl+F / Ctrl+H : recherche, avec ou sans panneau remplacer. Le
+     * contrôleur est attaché à la vue, on en tire la barre de la tuile. */
+    if ((state & GDK_CONTROL_MASK) != 0
+        && (state & (GDK_SHIFT_MASK | GDK_ALT_MASK)) == 0
+        && (keyval == GDK_KEY_f || keyval == GDK_KEY_h)) {
+        show_search_bar(gtk_event_controller_get_widget(
+                            GTK_EVENT_CONTROLLER(controller)),
+                        app, keyval == GDK_KEY_h);
+        return TRUE;
+    }
 
     if (keyval != GDK_KEY_z)
         return FALSE;
@@ -2692,7 +3471,6 @@ on_editor_key_pressed(GtkEventControllerKey G_GNUC_UNUSED *controller,
         || (state & GDK_ALT_MASK) != 0
         || (state & GDK_SHIFT_MASK) != 0) /* Ctrl+Shift+Z = redo, laisser */
         return FALSE;
-
     if (gtk_text_buffer_get_can_undo(GTK_TEXT_BUFFER(app->buffer))) {
         gtk_text_buffer_undo(GTK_TEXT_BUFFER(app->buffer));
         return TRUE; /* consommé, l'undo standard a fait le boulot */
@@ -2774,7 +3552,7 @@ build_editor(App *app)
     GtkWidget                *scrolled;
     GtkWidget                *overlay;
     GtkWidget                *view;
-
+    GtkWidget                *bar, *col;
     /* ÉTAT : le buffer (contenu + undo) vit dans App, créé une seule fois.
      * Chaque tuile « editor » n'est qu'une vue sur ce buffer ; retirer une
      * tuile ne détruit pas l'éditeur (le buffer survit). */
@@ -2813,7 +3591,13 @@ build_editor(App *app)
                          G_CALLBACK(on_cursor_notify), app);
         g_signal_connect(app->buffer, "changed",
                          G_CALLBACK(on_buffer_changed), app);
+
     }
+
+    /* Moteur : un contexte par buffer courant. Appelé HORS du « premier
+     * buffer » : niché dedans, il ne naissait jamais quand un fichier était
+     * ouvert avant la première tuile — Ctrl+F restait muet, sans un mot. */
+    search_ensure_ctx(app);
 
     /* VUE : une par tuile, attachée au buffer partagé. */
     view = gtk_source_view_new_with_buffer(app->buffer);
@@ -2853,7 +3637,19 @@ build_editor(App *app)
     gtk_widget_set_halign(app->diffbar, GTK_ALIGN_END);
     gtk_widget_set_valign(app->diffbar, GTK_ALIGN_FILL);
     gtk_overlay_add_overlay(GTK_OVERLAY(overlay), app->diffbar);
-    return overlay;
+
+    /* La barre de recherche vit au-dessus de la vue (GtkSearchBar révèle
+     * son espace) ; la boîte verticale devient la tuile — create_piece()
+     * accepte n'importe quel widget. Le GtkPaned donnait tout l'espace à
+     * l'overlay quand il était direct : dans une GtkBox, c'est à lui de
+     * réclamer la place restante (vexpand), sinon la vue reste à sa
+     * hauteur naturelle et la tuile est vide en dessous. */
+    bar = build_search_bar(view, app);
+    col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(col), bar);
+    gtk_widget_set_vexpand(overlay, TRUE);
+    gtk_box_append(GTK_BOX(col), overlay);
+    return col;
 }
 
 /* ------------------------------------------------------------------ */
@@ -5679,6 +6475,23 @@ main(int argc, char **argv)
     bash_panel_shutdown();
     if (app->diff_timer != 0)
         g_source_remove(app->diff_timer);
+    if (app->search_ctx != NULL)
+        g_object_unref(app->search_ctx);
+    if (app->search_settings != NULL)
+        g_object_unref(app->search_settings);
+    /* Les barres de recherche vivantes portent une notification faible sur
+     * app, pour sortir de la liste à leur mort : on la retire AVANT que app
+     * ne meure, sinon le notifier tomberait sur un contexte libéré. */
+    if (app->search_bars != NULL) {
+        guint i;
+
+        for (i = 0; i < app->search_bars->len; i++)
+            g_object_weak_unref(G_OBJECT(g_ptr_array_index(app->search_bars,
+                                                            i)),
+                                on_search_bar_weak_destroyed, app);
+        g_ptr_array_free(app->search_bars, TRUE);
+        app->search_bars = NULL;
+    }
     if (app->tree_model != NULL)
         g_object_unref(app->tree_model);
     if (app->selection != NULL)

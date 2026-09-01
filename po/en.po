@@ -11,7 +11,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-31 04:13-0400\n"
+"POT-Creation-Date: 2026-08-31 17:09-0400\n"
 "PO-Revision-Date: 2025-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -82,11 +82,11 @@ msgstr ""
 msgid "Editor"
 msgstr ""
 
-#: src/layout.c:355 src/main.c:1885
+#: src/layout.c:355 src/main.c:1891
 msgid "Explorer"
 msgstr ""
 
-#: src/layout.c:361 src/main.c:5199
+#: src/layout.c:361 src/main.c:5709
 msgid "Settings"
 msgstr ""
 
@@ -789,7 +789,7 @@ msgstr ""
 msgid "image paste failed: %s"
 msgstr ""
 
-#: src/llmtile.c:1032
+#: src/llmtile.c:1032 src/main.c:2950
 msgid "unknown error"
 msgstr ""
 
@@ -797,8 +797,8 @@ msgstr ""
 msgid "image paste failed: PNG encoding."
 msgstr ""
 
-#: src/llmtile.c:1184 src/llmtile.c:1253 src/llmtile.c:1803 src/main.c:1120
-#: src/main.c:1241 src/main.c:1551 src/main.c:1637 src/session.c:328
+#: src/llmtile.c:1184 src/llmtile.c:1253 src/llmtile.c:1803 src/main.c:1126
+#: src/main.c:1247 src/main.c:1557 src/main.c:1643 src/session.c:328
 msgid "Cancel"
 msgstr ""
 
@@ -1099,7 +1099,7 @@ msgstr ""
 msgid "CDB: failed to write active profile: %s\n"
 msgstr ""
 
-#: src/main.c:299
+#: src/main.c:305
 #, c-format
 msgid ""
 "Binary file or non-UTF-8 encoding:\n"
@@ -1108,111 +1108,111 @@ msgstr ""
 
 #. TRANSLATORS: CodeDashBoard and SIEB are the product and the company
 #. * names — keep them untouched, translate only the linking word.
-#: src/main.c:413
+#: src/main.c:419
 msgid "CodeDashBoard by SIEB"
 msgstr ""
 
-#: src/main.c:840
+#: src/main.c:846
 #, c-format
 msgid "CDB: removing \"%s\"\n"
 msgstr ""
 
-#: src/main.c:871
+#: src/main.c:877
 msgid "CDB: right-click on no row\n"
 msgstr ""
 
-#: src/main.c:921
+#: src/main.c:927
 #, c-format
 msgid "Delete %u item"
 msgid_plural "Delete %u items"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/main.c:934
+#: src/main.c:940
 msgid "New file…"
 msgstr ""
 
-#: src/main.c:940
+#: src/main.c:946
 msgid "New folder…"
 msgstr ""
 
-#: src/main.c:952
+#: src/main.c:958
 msgid "Rename…"
 msgstr ""
 
-#: src/main.c:958
+#: src/main.c:964
 msgid "Delete folder"
 msgstr ""
 
-#: src/main.c:959 src/main.c:1242
+#: src/main.c:965 src/main.c:1248
 msgid "Delete"
 msgstr ""
 
-#: src/main.c:969
+#: src/main.c:975
 msgid "Add a project…"
 msgstr ""
 
-#: src/main.c:979
+#: src/main.c:985
 msgid "Delete this project…"
 msgstr ""
 
-#: src/main.c:985
+#: src/main.c:991
 msgid "Delete this root"
 msgstr ""
 
-#: src/main.c:1006
+#: src/main.c:1012
 #, c-format
 msgid "CDB: popover requested for \"%s\"\n"
 msgstr ""
 
-#: src/main.c:1032
+#: src/main.c:1038
 msgid "Project name is empty."
 msgstr ""
 
-#: src/main.c:1035 src/main.c:1442
+#: src/main.c:1041 src/main.c:1448
 msgid "Invalid name (no \"/\", no \".\", no \"..\")."
 msgstr ""
 
-#: src/main.c:1037
+#: src/main.c:1043
 msgid "A hidden project (starting with \".\") is not allowed."
 msgstr ""
 
-#: src/main.c:1041
+#: src/main.c:1047
 msgid "This folder already exists."
 msgstr ""
 
-#: src/main.c:1043 src/main.c:1463
+#: src/main.c:1049 src/main.c:1469
 msgid "Cannot create the folder."
 msgstr ""
 
-#: src/main.c:1088
+#: src/main.c:1094
 msgid "New project"
 msgstr ""
 
-#: src/main.c:1100 src/main.c:1528
+#: src/main.c:1106 src/main.c:1534
 #, c-format
 msgid ""
 "Create a folder in:\n"
 "%s"
 msgstr ""
 
-#: src/main.c:1108
+#: src/main.c:1114
 msgid "project name"
 msgstr ""
 
-#: src/main.c:1121 src/main.c:1552
+#: src/main.c:1127 src/main.c:1558
 msgid "Create"
 msgstr ""
 
-#: src/main.c:1169
+#: src/main.c:1175
 msgid "Cannot delete the folder (permissions?)."
 msgstr ""
 
-#: src/main.c:1206
+#: src/main.c:1212
 msgid "Delete project"
 msgstr ""
 
-#: src/main.c:1219
+#: src/main.c:1225
 #, c-format
 msgid ""
 "The folder and all its contents will be permanently deleted:\n"
@@ -1221,358 +1221,395 @@ msgid ""
 "Retype DELETE to confirm."
 msgstr ""
 
-#: src/main.c:1439
+#: src/main.c:1445
 msgid "Name is empty."
 msgstr ""
 
-#: src/main.c:1455 src/main.c:1460
+#: src/main.c:1461 src/main.c:1466
 msgid "This name already exists."
 msgstr ""
 
-#: src/main.c:1457
+#: src/main.c:1463
 msgid "Cannot rename."
 msgstr ""
 
-#: src/main.c:1468
+#: src/main.c:1474
 msgid "Cannot create the file."
 msgstr ""
 
-#: src/main.c:1474
+#: src/main.c:1480
 #, c-format
 msgid "CDB: created \"%s\" in \"%s\"\n"
 msgstr ""
 
-#: src/main.c:1515
+#: src/main.c:1521
 msgid "New folder"
 msgstr ""
 
-#: src/main.c:1516
+#: src/main.c:1522
 msgid "New file"
 msgstr ""
 
-#: src/main.c:1529
+#: src/main.c:1535
 #, c-format
 msgid ""
 "Create a file in:\n"
 "%s"
 msgstr ""
 
-#: src/main.c:1538
+#: src/main.c:1544
 msgid "folder name"
 msgstr ""
 
-#: src/main.c:1538
+#: src/main.c:1544
 msgid "file name"
 msgstr ""
 
-#: src/main.c:1602 src/main.c:1638
+#: src/main.c:1608 src/main.c:1644
 msgid "Rename"
 msgstr ""
 
-#: src/main.c:1614
+#: src/main.c:1620
 #, c-format
 msgid ""
 "Rename:\n"
 "%s"
 msgstr ""
 
-#: src/main.c:1714
+#: src/main.c:1720
 msgid "Some items could not be deleted."
 msgstr ""
 
-#: src/main.c:1731
+#: src/main.c:1737
 msgid "Cannot delete."
 msgstr ""
 
-#: src/main.c:1772
+#: src/main.c:1778
 msgid "This folder is already a root or a project of a structure."
 msgstr ""
 
-#: src/main.c:1793
+#: src/main.c:1799
 msgid "Choose a structure root"
 msgstr ""
 
-#: src/main.c:1794
+#: src/main.c:1800
 msgid "Choose a project root"
 msgstr ""
 
-#: src/main.c:1853
+#: src/main.c:1859
 msgid "Structure root…"
 msgstr ""
 
-#: src/main.c:1854
+#: src/main.c:1860
 msgid "Project root…"
 msgstr ""
 
-#: src/main.c:1865
+#: src/main.c:1871
 msgid "Add a root"
 msgstr ""
 
-#: src/main.c:1904
+#: src/main.c:1910
 msgid "Reload the projects tree"
 msgstr ""
 
-#: src/main.c:1944
+#: src/main.c:1950
 #, c-format
 msgid "CDB: selection -> %lu item(s) (changed pos=%u n=%u)\n"
 msgstr ""
 
-#: src/main.c:2093
+#: src/main.c:2099
 #, c-format
 msgid "CDB: pick=%s — no row position\n"
 msgstr ""
 
-#: src/main.c:2140
+#: src/main.c:2146
 msgid "CDB: Ctrl+click outside any item\n"
 msgstr ""
 
-#: src/main.c:2155
+#: src/main.c:2161
 #, c-format
 msgid "CDB: Shift+click range [%u, %u] (unselect_rest=%d)\n"
 msgstr ""
 
-#: src/main.c:2169
+#: src/main.c:2175
 #, c-format
 msgid "CDB: Ctrl+click toggle pos=%u before: size=%lu is_selected=%d"
 msgstr ""
 
-#: src/main.c:2198
+#: src/main.c:2204
 #, c-format
 msgid "CDB: Ctrl+click full bitset size=%lu:"
 msgstr ""
 
-#: src/main.c:2611
+#: src/main.c:2617
 #, c-format
 msgid "CDB: rebuild_explorer (open folders=%u)\n"
 msgstr ""
 
-#: src/main.c:2630
+#: src/main.c:2636
 #, c-format
 msgid "CDB: rebuild_explorer view built (n_items=%u)\n"
 msgstr ""
 
-#: src/main.c:2669
+#: src/main.c:2675
 #, c-format
 msgid "CDB: style scheme = %s (dark=%d)\n"
 msgstr ""
 
-#: src/main.c:3020 src/main.c:3998
+#: src/main.c:2949 src/main.c:2985
+#, c-format
+msgid "Replace failed: %s\n"
+msgstr ""
+
+#: src/main.c:3071
+msgid "Find"
+msgstr ""
+
+#: src/main.c:3081
+msgid "Find the previous match"
+msgstr ""
+
+#: src/main.c:3086
+msgid "Find the next match"
+msgstr ""
+
+#: src/main.c:3091
+msgid "Match case"
+msgstr ""
+
+#: src/main.c:3098
+msgid "Show replace options"
+msgstr ""
+
+#: src/main.c:3105
+msgid "Replace with"
+msgstr ""
+
+#: src/main.c:3108
+msgid "Replace"
+msgstr ""
+
+#: src/main.c:3112
+msgid "Replace all"
+msgstr ""
+
+#: src/main.c:3524 src/main.c:4502
 msgid "Saved ✓"
 msgstr ""
 
-#: src/main.c:3477
+#: src/main.c:3981
 msgid "Tool"
 msgstr ""
 
-#: src/main.c:3542
+#: src/main.c:4046
 msgid ""
 "Applied at once to everything created from now on: new tiles, dialogs, and "
 "what CDB sends to the model. Screens already open keep their language."
 msgstr ""
 
-#: src/main.c:3643
+#: src/main.c:4147
 msgid ""
 "No locale is installed for this language. Install it (locale-gen), then "
 "restart CDB."
 msgstr ""
 
-#: src/main.c:3680
+#: src/main.c:4184
 msgid "current language"
 msgstr ""
 
-#: src/main.c:3758
+#: src/main.c:4262
 msgid "Play this sound"
 msgstr ""
 
-#: src/main.c:3799
+#: src/main.c:4303
 #, c-format
 msgid "%s (system)"
 msgstr ""
 
-#: src/main.c:3837
+#: src/main.c:4341
 msgid "End-of-turn sound (when the wait ends):"
 msgstr ""
 
-#: src/main.c:3842
+#: src/main.c:4346
 msgid "Change sound (a choice, a save):"
 msgstr ""
 
-#: src/main.c:3847
+#: src/main.c:4351
 msgid ""
 "▶ plays the sound as a test, even when the switch is off. Silent if no audio "
 "player is installed."
 msgstr ""
 
-#: src/main.c:3862
+#: src/main.c:4366
 msgid "Retry on HTTP 429:"
 msgstr ""
 
-#: src/main.c:3864 src/main.c:3872
+#: src/main.c:4368 src/main.c:4376
 msgid "Retries (0 = infinite):"
 msgstr ""
 
-#: src/main.c:3865 src/main.c:3873
+#: src/main.c:4369 src/main.c:4377
 msgid "Delay between attempts (ms):"
 msgstr ""
 
-#: src/main.c:3870
+#: src/main.c:4374
 msgid "Retry on HTTP 5xx:"
 msgstr ""
 
-#: src/main.c:4048
+#: src/main.c:4552
 #, c-format
 msgid "CDB: Init-Prompt scheme=%s found=%d\n"
 msgstr ""
 
-#: src/main.c:4093 src/main.c:4129
+#: src/main.c:4597 src/main.c:4633
 msgid "Save"
 msgstr ""
 
-#: src/main.c:4125
+#: src/main.c:4629
 msgid "API key:"
 msgstr ""
 
-#: src/main.c:4127
+#: src/main.c:4631
 msgid "Allowed models:"
 msgstr ""
 
-#: src/main.c:4141
+#: src/main.c:4645
 msgid "(optional)"
 msgstr ""
 
-#: src/main.c:4143 src/main.c:4148 src/main.c:4152
+#: src/main.c:4647 src/main.c:4652 src/main.c:4656
 msgid "(empty: all models)"
 msgstr ""
 
-#: src/main.c:4146
+#: src/main.c:4650
 msgid "HyperCharm key…"
 msgstr ""
 
-#: src/main.c:4219
+#: src/main.c:4723
 msgid "(to come: endpoint, model, API key…)"
 msgstr ""
 
-#: src/main.c:4225
+#: src/main.c:4729
 msgid "Retry on error"
 msgstr ""
 
-#: src/main.c:4226
+#: src/main.c:4730
 msgid "Init-Prompt"
 msgstr ""
 
-#: src/main.c:4229
+#: src/main.c:4733
 msgid "Harness"
 msgstr ""
 
-#: src/main.c:4230
+#: src/main.c:4734
 msgid "Tools"
 msgstr ""
 
-#: src/main.c:4231
+#: src/main.c:4735
 msgid "Providers"
 msgstr ""
 
-#: src/main.c:4237
+#: src/main.c:4741
 msgid "Language"
 msgstr ""
 
-#: src/main.c:4238
+#: src/main.c:4742
 msgid "Sounds"
 msgstr ""
 
-#: src/main.c:4241
+#: src/main.c:4745
 msgid "General"
 msgstr ""
 
-#: src/main.c:4241
+#: src/main.c:4745
 msgid "(to come: theme, font, indentation…)"
 msgstr ""
 
-#: src/main.c:4242
+#: src/main.c:4746
 msgid "(to come: token, user, repo defaults…)"
 msgstr ""
 
-#: src/main.c:4243
+#: src/main.c:4747
 msgid "LLM"
 msgstr ""
 
-#: src/main.c:4278
+#: src/main.c:4782
 msgid ""
 "Empty\n"
 "(reserved slot)"
 msgstr ""
 
-#: src/main.c:4373
+#: src/main.c:4877
 msgid "Split horizontally"
 msgstr ""
 
-#: src/main.c:4374
+#: src/main.c:4878
 msgid "Split vertically"
 msgstr ""
 
-#: src/main.c:4410
+#: src/main.c:4914
 msgid "Remove this tile"
 msgstr ""
 
-#: src/main.c:4420
+#: src/main.c:4924
 msgid "Group"
 msgstr ""
 
-#: src/main.c:4430
+#: src/main.c:4934
 msgid "Split group horizontally"
 msgstr ""
 
-#: src/main.c:4431
+#: src/main.c:4935
 msgid "Split group vertically"
 msgstr ""
 
-#: src/main.c:4445
+#: src/main.c:4949
 msgid "Collapse group to this piece"
 msgstr ""
 
-#: src/main.c:4455
+#: src/main.c:4959
 msgid "Remove group"
 msgstr ""
 
-#: src/main.c:4742
+#: src/main.c:5246
 msgid "CDB: window.json merged into layout.json\n"
 msgstr ""
 
-#: src/main.c:4873
+#: src/main.c:5377
 #, c-format
 msgid "CDB: modal limit of %d reached"
 msgstr ""
 
-#: src/main.c:4907
+#: src/main.c:5411
 msgid "Settings — CodeDashBoard"
 msgstr ""
 
-#: src/main.c:4951
+#: src/main.c:5455
 msgid "CDB: readlink /proc/self/exe failed"
 msgstr ""
 
-#: src/main.c:4984
+#: src/main.c:5488
 msgid "CDB: failed to spawn the new session"
 msgstr ""
 
-#: src/main.c:5132
+#: src/main.c:5642
 #, c-format
 msgid "CDB: no locale installed for language %s\n"
 msgstr ""
 
-#: src/main.c:5198
+#: src/main.c:5708
 msgid "About CDB"
 msgstr ""
 
-#: src/main.c:5200
+#: src/main.c:5710
 msgid "Exit"
 msgstr ""
 
-#: src/main.c:5224
+#: src/main.c:5734
 msgid "New window"
 msgstr ""
 
-#: src/main.c:5225
+#: src/main.c:5735
 msgid "New session…"
 msgstr ""
 
