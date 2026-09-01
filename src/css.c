@@ -144,9 +144,30 @@ static const char *cdb_css =
      * bordées discrètes (pas le look formulaire libadwaita), sélection
      * en @ibox_border (pas de bleu), anneau de focus supprimé. Tout en
      * 10pt, min-height 0, icônes 12px, compteur en chiffres tabulaires. */
-    "searchbar { background-color: @view_bg_color; "
+    /* Le fond d'une barre se peint sur le BOX INTERNE, pas sur le noeud
+     * « searchbar ». Le thème (GtkSearchBar, adwaita.css) donne au box le
+     * fond, la couleur et une ombre de barre d'en-tête — soit
+     * @headerbar_bg_color — et le box recouvre entièrement le noeud externe :
+     * peindre celui-ci ne se voit pas du tout. Il faut écraser le noeud qui
+     * peint, et c'est la seule règle qui compte à l'écran.
+     *
+     * Effet de bord, voulu : notre provider est en PRIORITY_APPLICATION, il
+     * bat le thème quelle que soit la spécificité, donc il bat aussi le
+     * « :backdrop » du thème — celui-ci repeignait la barre en
+     * @window_bg_color dès que la fenêtre perdait le focus, et la barre
+     * sautait de couleur quand on cliquait ailleurs. Elle tient désormais la
+     * même teinte en tout temps.
+     *
+     * Loi : la barre est du CHROME, elle porte le fond du titre de sa tuile
+     * (@window_bg_color), pas le fond du texte en dessous (@view_bg_color).
+     * Peinte en view, elle se fondait dans l'éditeur et se lisait comme une
+     * ligne de code. Mesuré, capture du 1er septembre : titre #222226, barre
+     * #2e2e32, texte #1d1d20. Le champ, lui, garde shade(@view_bg_color,
+     * 0.92) = #1b1b1d : un champ doit rester sous le chrome qui le porte,
+     * c'est déjà la recette de .llm-compose. */
+    "searchbar { background-color: @window_bg_color; "
     "border-bottom: 1px solid @borders; }\n"
-    "searchbar > revealer > box { padding: 2px 6px; }\n"
+    "searchbar > revealer > box { padding: 2px 6px; background-color: @window_bg_color; }\n"
     "searchbar entry { min-height: 0; padding: 2px 8px; font-size: 10pt; "
     "background-color: alpha(shade(@view_bg_color, 0.92), 1); "
     "border: 1px solid @borders; border-radius: 6px; }\n"
