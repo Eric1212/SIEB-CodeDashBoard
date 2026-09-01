@@ -4227,18 +4227,24 @@ on_harness_spin_changed(GtkEditable *editable, gpointer G_GNUC_UNUSED data)
 
 /* Formulaire Harness : politiques de retry sur HTTP 429 (rapide) et
  * 5xx (lent). Défauts : 429 = oui / 200 / 250 ms ; 5xx = oui / 120 / 1 s. */
-/* Libellés courts des modes (index = LlmToolMode). */
-static const char *const TOOL_MODE_LABELS[4] = {
-    "OFF", "ASK", "ALLOW", "ALLOW+"
+/* Libellés courts des modes (index = LlmToolMode) : jetons, pas msgids. */
+static const char *const TOOL_MODE_LABELS[LLM_TOOL_MODE_COUNT] = {
+    "OFF", "ASK", "ASK+", "ALLOW", "ALLOW+"
 };
+/* Même garde que pour LLM_TOOL_MODE_NAMES : un libellé de moins se lirait
+ * sur le mode voisin — « ALLOW+ » affiché à la place de « ASK+ » promettrait
+ * à Éric une propreté d'onglet que son réglage ne donne pas. */
+static_assert(G_N_ELEMENTS(TOOL_MODE_LABELS) == LLM_TOOL_MODE_COUNT,
+              "TOOL_MODE_LABELS doit avoir exactement un libellé par mode");
 
-/* Les modes proposés par outil, dans l'ordre de cycle. Permet d'outils
- * sans effet « plus » : leur cycle s'arrête à ALLOW. */
+/* Les modes proposés par outil, dans l'ordre de cycle (échelle monotone :
+ * un clic = une concession de plus). Seul bash a un « + », ASK+ et ALLOW+. */
 static const LlmToolMode *
 tool_mode_cycle(const char *name, guint *n_out)
 {
-    static const LlmToolMode bash_cycle[] = {
-        LLM_TOOL_OFF, LLM_TOOL_ASK, LLM_TOOL_ALLOW, LLM_TOOL_ALLOWPLUS
+    static const LlmToolMode bash_cycle[] = {   /* echelle monotone */
+        LLM_TOOL_OFF, LLM_TOOL_ASK, LLM_TOOL_ASKPLUS,
+        LLM_TOOL_ALLOW, LLM_TOOL_ALLOWPLUS
     };
     static const LlmToolMode plain_cycle[] = {
         LLM_TOOL_OFF, LLM_TOOL_ASK, LLM_TOOL_ALLOW
@@ -4268,7 +4274,7 @@ static void
 tool_button_set_mode(GtkButton *btn, LlmToolMode mode)
 {
     gtk_button_set_label(GTK_BUTTON(btn),
-                         TOOL_MODE_LABELS[mode <= LLM_TOOL_ALLOWPLUS
+                         TOOL_MODE_LABELS[mode < LLM_TOOL_MODE_COUNT
                                               ? mode : LLM_TOOL_OFF]);
 }
 
@@ -4288,8 +4294,8 @@ on_tool_mode_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
 
     if (name == NULL || n == 0)
         return;
-    /* position courante dans le cycle (ALLOWPLUS hors cycle d'un outil
-     * simple retombe sur OFF). */
+    /* position courante dans le cycle (un mode « + » hors cycle d'un outil
+     * simple — askplus ou allowplus — retombe sur OFF). */
     next = cycle[0];
     for (i = 0; i < n; i++) {
         if (cycle[i] == cur) {
@@ -4303,8 +4309,8 @@ on_tool_mode_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
 }
 
 /* Grille Tools : outils en lignes, trois profils en colonnes. Chaque
- * intersection est un bouton cyclable OFF -> ASK -> ALLOW (-> ALLOW+
- * pour bash). Effectif à la prochaine requête. */
+ * intersection est un bouton cyclable OFF -> ASK -> ASK+ -> ALLOW -> ALLOW+
+ * pour bash. Effectif à la prochaine requête. */
 static GtkWidget *
 build_tools_form(void)
 {

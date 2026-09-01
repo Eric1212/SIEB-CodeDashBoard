@@ -10,7 +10,7 @@
  * sans aucune tuile « bash » affichée. bash_panel_new() n'est qu'une VUE qui
  * EMPRUNTE ce notebook ; le retirer du layout le dé-arente mais ne tue rien
  * (sonde VTE : un terminal unrealized garde son PTY et sa sortie). Seuls les
- * ACTES humains ferment un terminal : le « x » et le reset ALLOW+ passent
+ * ACTES humains ferment un terminal : le « x » et le reset des modes « + »
  * par gtk_notebook_remove_page(), qui finalise le VteTerminal et ferme son
  * PTY (SIGHUP).
  */
@@ -201,8 +201,8 @@ bash_panel_exec_tab_possible(void)
 
 /* Reset d'un onglet : remplace le terminal par un FRAIS au même index —
  * l'équivalent programmatique du clic « x » suivi d'un nouvel onglet,
- * résolu dans le projet courant au spawn. Usager : mode AllowPlus, où
- * chaque commande doit repartir d'un shell propre. */
+ * résolu dans le projet courant au spawn. Deux usagers, les modes « + » :
+ * AllowPlus (toute commande) et AskPlus (ce qu'Éric a accordé). */
 void
 bash_panel_reset_tab(guint index)
 {

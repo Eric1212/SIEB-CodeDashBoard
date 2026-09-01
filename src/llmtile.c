@@ -2867,14 +2867,14 @@ on_box_choice(GtkWidget G_GNUC_UNUSED *box, IboxChoice choice,
     sfx_play_feedback();
 }
 
-/* Pose une boîte au bas du fil. Chemin COMMUN des deux sortes de demande :
- *   auto = FALSE → demande A TRANCHER : zone grise, deux boutons.
- *   auto = TRUE  → demande ACCEPTÉE D'AVANCE (outil en ALLOW / ALLOW+) :
- *                  même boîte, zone déjà verte, libellée « autorisé ».
- * Personne n'a cliqué ici — dire « exécuté » ferait croire une décision
- * d'Éric qui n'a pas eu lieu. C'est la correction d'Éric : allow n'est
- * pas une absence de demande, c'est une demande accordée d'avance, et
- * elle reste une demande, donc elle reste VISIBLE. */
+/* Pose une boîte au bas du fil. Chemin COMMUN des deux sortes de demande,
+ * sur DEUX axes independants : auto = TRUE → demande ACCEPTÉE D'AVANCE
+ * (ALLOW / ALLOW+), zone deja verte, libellee « autorisé » ; auto = FALSE →
+ * demande A TRANCHER, zone grise, deux boutons. allowplus est l'AUTRE axe :
+ * l'effet propre de l'outil, porte aussi bien par ASK+ que par ALLOW+.
+ * Personne n'a cliqué dans la branche auto — dire « exécuté » ferait croire
+ * une decision d'Eric qui n'a pas eu lieu : une demande accordee d'avance
+ * reste une demande, donc elle reste VISIBLE. */
 static GtkWidget *
 box_open(LlmTile *t, const char *summary, const char *tool_call_id,
          gboolean auto_allowed, gboolean allowplus)
@@ -2895,8 +2895,8 @@ box_open(LlmTile *t, const char *summary, const char *tool_call_id,
     if (auto_allowed) {
         /* Même glyphe que « ✔ exécuté » : le ✚ tranchait avec le reste de
          * l'échelle de décision (✔ / ✖). Le « + » final reste, lui — il
-         * marque l'effet propre d'ALLOW+ (reset du terminal), pas un état
-         * de la boîte. */
+         * marque l'effet propre du mode (bash : reset du terminal), pas un
+         * état de la boîte. Le même « + » se retrouve côté ASK+, ci-dessous. */
         ibox_set_choice_label(box, allowplus ? _("✔ allowed +")
                                              : _("✔ allowed"));
         /* animate = FALSE : rien ne se décide sous les yeux d'Éric, la
@@ -2910,6 +2910,17 @@ box_open(LlmTile *t, const char *summary, const char *tool_call_id,
     } else {
         /* Demande A TRANCHER : elle reste dépliée, il faut pouvoir lire
          * ce qu'on approuve. */
+        /* Un ASK+ porte deja son effet propre dans la demande : le « + »
+         * n'attend pas le clic pour etre ecrit, il n'attend que le OUI.
+         * Refus et annulation retrouveront leur mot tout seuls. */
+        if (allowplus)
+            /* TRANSLATORS: caption of the green bar when Éric approves a
+               bash call made in ASK+ mode: his click decided, and the tool
+               adds its own clean effect (the tab is rebuilt once the output
+               is captured). Keep the trailing "+", it names the mode, not
+               the verdict. Distinct from "✔ executed" (plain ASK) and from
+               "✔ allowed +" (nobody clicked). */
+            ibox_set_choice_label(box, _("✔ executed +"));
         ibox_on_choice(box, on_box_choice, t);
     }
     ibox_register(t, box, tool_call_id);
@@ -2933,7 +2944,7 @@ box_open(LlmTile *t, const char *summary, const char *tool_call_id,
     ibox_apply_width(t);
     return box;
 }
-/* ASK : la décision en attente, rendue dans cette vue. */
+/* ASK / ASK+ : la décision en attente, rendue dans cette vue. */
 void
 llm_tile_decision_render(LlmTile *t)
 {
@@ -2949,7 +2960,7 @@ llm_tile_decision_render(LlmTile *t)
     t->shown_decision = d;
     box_open(t, (d->spec != NULL) ? d->spec->summary : NULL,
              (d->spec != NULL) ? d->spec->tool_call_id : NULL,
-             FALSE, FALSE);
+             FALSE, d->spec != NULL && llm_tool_mode_has_plus(d->spec->mode));
 }
 
 /* ALLOW / ALLOWPLUS : la demande acceptée d'avance. Appelée par le core

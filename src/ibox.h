@@ -94,11 +94,11 @@ void       ibox_set_choice(GtkWidget *box, IboxChoice choice,
                            gboolean animate);
 IboxChoice ibox_get_choice(GtkWidget *box);
 
-/* Libellé de la barre résolue. À poser AVANT ibox_set_choice().
- * Par défaut la boîte dit « ✔ exécuté » ou « ✖ refusé » — ce qui décrit
- * un clic d'Éric. Une demande ACCEPTÉE D'AVANCE (outil en ALLOW ou
- * ALLOW+) n'a été cliquée par personne : la tuile y met « autorisé ».
- * NULL ou "" revient au libellé par défaut. */
+/* Libellé de l'issue OUI, à poser AVANT ibox_set_choice(). Deux cas :
+ * la demande ACCEPTÉE D'AVANCE (ALLOW / ALLOW+, personne n'a cliqué :
+ * « autorisé ») et ASK+ (« exécuté + » : le clic est d'Éric, l'effet
+ * propre de l'outil aussi). Loi : ce texte n'arbitre QUE le OUI — nommer
+ * un accord ne renomme jamais un refus. NULL = libellé par défaut. */
 void ibox_set_choice_label(GtkWidget *box, const char *text);
 /* Pliage des zones input/output (jamais la zone choix). */
 void ibox_set_expanded(GtkWidget *box, gboolean input_open,

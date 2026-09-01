@@ -4281,9 +4281,9 @@ cdb_poll_finish(CdbPoll *pl, const char *text, gboolean is_output)
         pl->core->cdb_results = g_queue_new();
     g_queue_push_tail(pl->core->cdb_results, r);
 
-    /* AllowPlus (bash) : la capture est faite, on remplace l'onglet par
-     * un shell FRAIS — la prochaine commande repart d'un environnement
-     * propre, comme si Éric avait cliqué « x » puis r ouvert. */
+    /* Le « plus » (bash : ALLOW+ et ASK+) : la capture est faite, on
+     * remplace l'onglet par un shell FRAIS — la prochaine commande repart
+     * d'un environnement propre, comme si Éric avait cliqué « x » puis rouvert. */
     if (pl->allowplus)
         bash_panel_reset_tab((guint)pl->tab);
 
@@ -4822,8 +4822,8 @@ cdb_decision_refuse(LlmCore *c, CdbDecision *d)
     llm_cdb_next(c);
 }
 
-/* Lance l'exécution d'une commande déjà validée. Chemin unique pour
- * ASK (après clic « Exécuter ») et ALLOW/ALLOWPLUS (auto, sans UI).
+/* Lance l'exécution d'une commande déjà validée. Chemin unique pour ASK
+ * et ASK+ (après clic) comme pour ALLOW et ALLOW+ (auto, sans UI).
  * Ne touche pas à la décision : l'appelant s'en charge. En cas d'échec
  * synchrone (terminal absent), répond au tool_call_id et rappelle
  * llm_cdb_next ; sinon le poll actif le fera à la fin. */
@@ -4876,13 +4876,18 @@ cdb_execute(LlmCore *c, const char *tool_call_id, int tab,
     }
 }
 
-/* Exécuter une spec déjà validée. Chemin unique pour ASK (après clic) et
- * ALLOW/ALLOWPLUS (direct). Ne libère rien : l'appelant possède la spec.
- * Bash est asynchrone ; les outils fichiers sont synchrones et ont déjà
- * rendu leur résultat en revenant ici. */
+/* Exécuter une spec déjà validée. Chemin unique pour ASK/ASK+ (après clic)
+ * et ALLOW/ALLOW+ (direct). Ne libère rien : l'appelant possède la spec, et
+ * c'est sp->mode — jamais un booléen apporté — qui désigne l'effet « plus ».
+ * Bash est asynchrone ; les outils fichiers ont déjà rendu leur résultat. */
 static void
-cdb_run_spec(LlmCore *c, CdbCmdSpec *sp, gboolean allowplus)
+cdb_run_spec(LlmCore *c, CdbCmdSpec *sp)
 {
+    /* Le « plus » se LIT ici, dans le mode effectif pose au dispatch : ni
+     * ASK-apres-clic ni le dispatch n'ont a le connaitre avant. Seul bash
+     * honore l'effet ; un outil fichier en ASK+ s'execute pareil. */
+    gboolean allowplus = llm_tool_mode_has_plus(sp->mode);
+
     switch (sp->kind) {
     case CDB_SPEC_BASH:
         cdb_execute(c, sp->tool_call_id, sp->tab, sp->cmd, allowplus);
@@ -4928,10 +4933,10 @@ cdb_decision_approve(LlmCore *c, CdbDecision *d)
         llm_tile_decision_resolve(g_ptr_array_index(c->views, vi),
                                   d->spec->tool_call_id, CDB_A_APPROVED);
 
-    /* ASK approuvé = exécution sans effet « plus » (le reset n'a de sens
-     * qu'en mode AllowPlus, décidé au dispatch, pas ici). */
+    /* ASK / ASK+ approuvé : la boîte a verdit, puis l'action part. Le « plus »
+     * ne se décide pas ici — cdb_run_spec le lit dans d->spec->mode. */
     is_bash = (d->spec != NULL && d->spec->kind == CDB_SPEC_BASH);
-    cdb_run_spec(c, d->spec, FALSE);
+    cdb_run_spec(c, d->spec);
     cdb_decision_free(d);
     c->decision = NULL;
     /* Bash : asynchrone, cdb_execute (ou son poll) avancera la file.
@@ -4962,28 +4967,28 @@ cdb_next_step(LlmCore *c)
         sp = g_queue_pop_head(c->cmd_queue);
         is_bash = (sp->kind == CDB_SPEC_BASH);
 
-        /* ALLOW / ALLOWPLUS : demande ACCEPTEE D'AVANCE. Elle s'exécute
-         * sans attendre Éric, mais ce n'est pas une absence de demande :
-         * c'est une demande accordée d'avance, et elle reste une demande.
-         * Chaque vue la montre donc dans SA boîte — zone déjà verte,
-         * libellée « autorisé » (personne n'a cliqué : « exécuté » serait
-         * un mensonge) — et l'output y entrera par le même chemin que pour
-         * un ASK, sous le même tool_call_id. */
-        if (sp->mode != LLM_TOOL_ASK) {
-            gboolean allowplus = (sp->mode == LLM_TOOL_ALLOWPLUS);
+        /* ALLOW / ALLOW+ : demande ACCEPTEE D'AVANCE : elle s'exécute sans
+         * attendre Éric, mais ce n'est pas une absence de demande — c'est une
+         * demande accordée d'avance, et elle reste visible : chaque vue la met
+         * dans SA boîte, zone déjà verte, libellée « autorisé » (dire
+         * « exécuté » mentirait : personne n'a cliqué). L'output y entrera
+         * comme pour un ASK. Is_auto ENUMERE les permissifs : nier ASK
+         * rendrait auto tout mode ajoute demain — ASK+ compris, un ASK. */
+        if (llm_tool_mode_is_auto(sp->mode)) {
+            gboolean allowplus = llm_tool_mode_has_plus(sp->mode);
 
             for (guint vi = 0; vi < c->views->len; vi++)
                 llm_tile_box_auto(g_ptr_array_index(c->views, vi),
                                   sp->summary, sp->tool_call_id, allowplus);
-            cdb_run_spec(c, sp, allowplus);
+            cdb_run_spec(c, sp);   /* le « plus » se relit dans sp->mode */
             cdb_cmd_spec_free(sp);
             if (is_bash)
                 return;   /* le poll rappellera llm_cdb_next */
             continue;     /* fichier : déjà fini, on enchaîne */
         }
 
-        /* ASK : la décision POSSÈDE la spec. Rien n'est copié ici, donc
-         * rien ne peut être oublié à la libération. */
+        /* ASK et ASK+ : la décision POSSÈDE la spec — rien n'est copié ici,
+         * donc rien ne s'oublie à la libération. sp->mode porte le « plus ». */
         c->decision = g_new0(CdbDecision, 1);
         c->decision->spec = sp;
         c->decision->state = CDB_A_PENDING;

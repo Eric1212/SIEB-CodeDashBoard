@@ -38,7 +38,7 @@ typedef struct {
     GtkWidget *ch_box;
     GtkWidget *ch_yes;
     GtkWidget *ch_no;
-    char      *choice_text;   /* libellé résolu imposé (« autorisé ») */
+    char      *choice_text;   /* libellé imposé : n'arbitre que le OUI  */
     gboolean   decided;       /* décision prise : la boîte est repliée et
                                * ne se redéplie plus toute seule */
     gulong     ch_anim;       /* tick de l'animation, 0 si aucune */
@@ -244,15 +244,15 @@ choice_band_toggle(Ibox *b)
 /* ----- choix -------------------------------------------------------- */
 
 /* Le mot que dit le gagnant. Par défaut le fait d'Éric (« exécuté »
- * / « refusé ») ; pour une demande acceptée d'avance la tuile impose son
- * libellé (« autorisé ») — ce n'est pas le même événement et la boîte ne
- * doit pas le faire croire. */
+ * / « refusé ») ; un libellé imposé ne nomme que l'issue OUI — le refus a
+ * déjà son mot, écrit une seule fois ici. Un setter de libellé ne doit
+ * jamais renommer l'issue qu'il ne décrit pas (ASK+ l'a révélé). */
 static const char *
-choice_caption(Ibox *b)
+choice_caption(Ibox *b, IboxChoice winner)
 {
-    if (b->choice_text != NULL)
+    if (winner == IB_CHOICE_YES && b->choice_text != NULL)
         return b->choice_text;
-    return b->choice == IB_CHOICE_YES ? _("✔ executed") : _("✖ refused");
+    return winner == IB_CHOICE_YES ? _("✔ executed") : _("✖ refused");
 }
 
 /* État final de la barre : le gagnant occupe 100 % de la largeur et porte
@@ -271,7 +271,7 @@ choice_set_final(Ibox *b, IboxChoice c)
     /* Le gagnant ne dit plus « Exécuter » (ce qu'on lui a demandé) mais le
      * verdict (ce qui s'est passé) — maintenant seulement qu'il a toute la
      * place de le dire. */
-    gtk_button_set_label(GTK_BUTTON(winner), choice_caption(b));
+    gtk_button_set_label(GTK_BUTTON(winner), choice_caption(b, c));
     /* Le gagnant RESTE SENSIBLE, et c'est la correction d'un défaut que
      * j'avais introduit ici même. J'y avais mis set_sensitive(FALSE) pour
      * que le clic remonte à la boîte et la fasse plier — mais un widget
@@ -720,10 +720,11 @@ ibox_set_choice(GtkWidget *box, IboxChoice choice, gboolean animate)
         apply_choice(b, choice, animate);
 }
 
-/* Libellé de la zone quand elle est résolue. À poser AVANT
- * ibox_set_choice(). Sert aux demandes acceptées d'avance (ALLOW /
- * ALLOW+) : ici personne n'a cliqué, écrire « exécuté » serait un
- * mensonge — on écrit « autorisé ». NULL = libellé par défaut. */
+/* Libellé de l'issue OUI, à poser AVANT ibox_set_choice(). Deux usages,
+ * un seul sens : la demande acceptée d'avance (ALLOW / ALLOW+) écrit
+ * « autorisé » — personne n'a cliqué, « exécuté » serait un mensonge —
+ * et ASK+ écrit « exécuté + » pour que le clic porte l'effet propre.
+ * Aucun des deux n'atteint le rouge : « refused » est écrit plus haut. */
 void
 ibox_set_choice_label(GtkWidget *box, const char *text)
 {
@@ -738,7 +739,7 @@ ibox_set_choice_label(GtkWidget *box, const char *text)
     if (b->choice != IB_CHOICE_NONE)
         gtk_button_set_label(GTK_BUTTON(b->choice == IB_CHOICE_YES
                                             ? b->ch_yes : b->ch_no),
-                             choice_caption(b));
+                             choice_caption(b, b->choice));
 }
 IboxChoice
 ibox_get_choice(GtkWidget *box)

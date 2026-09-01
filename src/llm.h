@@ -171,12 +171,22 @@ void  llm_persona_save(const char *text);
 /* Charge la config de retry ; applique les défauts si absente/invalide. */
 /* Modes d'exposition d'un outil natif. OFF signifie tout simplement que
  * l'outil n'est PAS dans le tableau « tools » envoyé au modèle : de son
- * point de vue, l'outil n'existe pas. Aucun message d'erreur à renvoyer. */
+ * point de vue, l'outil n'existe pas. Aucun message d'erreur à renvoyer.
+ *
+ * Le « + » est un MODIFICATEUR de l'issue, pas une issue : ASK+ et ALLOW+
+ * reclament le meme effet propre (bash : onglet remplace par un frais
+ * apres la capture), seul differe celui qui tranche. D'ou deux predicats,
+ * llm_tool_mode_is_auto() et llm_tool_mode_has_plus() : aucun appelant ne
+ * compare un mode a un nom de mode ecrit en dur — c'est la regle, pas une
+ * convenience. Un mode ajoute ici doit etre classe par eux, sinon il est
+ * auto par defaut (le defaut de != LLM_TOOL_ASK) : le pire des silences. */
 typedef enum {
     LLM_TOOL_OFF = 0,
     LLM_TOOL_ASK,       /* annoncé ; approbation d'Éric avant exécution */
+    LLM_TOOL_ASKPLUS,   /* ASK + effet propre (bash : onglet refait) */
     LLM_TOOL_ALLOW,     /* annoncé ; exécution directe */
-    LLM_TOOL_ALLOWPLUS  /* ALLOW + effet propre à l'outil (bash : reset) */
+    LLM_TOOL_ALLOWPLUS, /* ALLOW + effet propre (bash : onglet refait) */
+    LLM_TOOL_MODE_COUNT /* borne des tables ; n'est jamais un mode */
 } LlmToolMode;
 
 /* Les trois profils, jamais plus. Colonnes de la grille Settings. */
@@ -191,7 +201,14 @@ extern const char *const LLM_PROFILE_NAMES[LLM_PROFILE_COUNT];
 /* Libellés affichables : distincts des NOMS ci-dessus, qui sont des CLES
  * persistées (llm.json active.profile) et comparées en code. */
 extern const char *const LLM_PROFILE_LABELS[LLM_PROFILE_COUNT];
-extern const char *const LLM_TOOL_MODE_NAMES[4];
+extern const char *const LLM_TOOL_MODE_NAMES[LLM_TOOL_MODE_COUNT];
+/* Les DEUX seules questions qu'un appelant a le droit de poser a un mode.
+ * Elles vivent la ou vit la table des noms (llmtoolpref.c), seule source :
+ * un mode neuf est classe dans ces deux predicats ou n'existe pas. is_auto
+ * enumere les modes permissifs — il ne nie jamais ASK, sans quoi tout mode
+ * ajoute ici deviendrait auto par etourderie du compilateur, pas du code. */
+gboolean llm_tool_mode_is_auto(LlmToolMode m);    /* ALLOW ou ALLOW+      */
+gboolean llm_tool_mode_has_plus(LlmToolMode m);   /* ASK+ ou ALLOW+       */
 
 /* Préférence d'un outil natif : un mode PAR profil. */
 typedef struct {
@@ -509,7 +526,7 @@ typedef struct CdbCmdSpec {
     char        *cmd;
     char        *args_json;
     char        *summary;
-    LlmToolMode  mode;  /* ASK / ALLOW / ALLOWPLUS au moment du dispatch */
+    LlmToolMode  mode;  /* mode EFFECTIF au dispatch : source du « + » */
 } CdbCmdSpec;
 
 /* Une section de provider dans le sélecteur : en-tête + listbox. */

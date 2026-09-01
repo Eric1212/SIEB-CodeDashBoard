@@ -28,9 +28,32 @@ const char *const LLM_PROFILE_LABELS[LLM_PROFILE_COUNT] = {
        A universal acronym: leave the msgstr empty. */
     N_("YOLO")
 };
-const char *const LLM_TOOL_MODE_NAMES[4] = {
-    "off", "ask", "allow", "allowplus"
+const char *const LLM_TOOL_MODE_NAMES[LLM_TOOL_MODE_COUNT] = {
+    "off", "ask", "askplus", "allow", "allowplus"
 };
+
+/* L'enum et sa table ne peuvent pas diverger : les deux sont indexes par
+ * LlmToolMode, et un decalage d'un seul rang lirait "allow" la ou Eric a
+ * pose "askplus" — une decision de permissivite lue a l'envers, sans le
+ * moindre message. La borne est donc verifiee par le compilateur, pas par
+ * une relecture. (C23 : static_assert est un mot-cle, pas une macro.) */
+static_assert(G_N_ELEMENTS(LLM_TOOL_MODE_NAMES) == LLM_TOOL_MODE_COUNT,
+              "LLM_TOOL_MODE_NAMES doit avoir exactement une entree par mode");
+
+/* Les deux predicats jumeaux, declares dans llm.h : toute la politique de
+ * dispatch tient ici et nulle part ailleurs. Chacun ENUMERE ses modes —
+ * aucun ne nie l'autre camp, ce qui rendrait auto un mode ajoute demain. */
+gboolean
+llm_tool_mode_is_auto(LlmToolMode m)
+{
+    return m == LLM_TOOL_ALLOW || m == LLM_TOOL_ALLOWPLUS;
+}
+
+gboolean
+llm_tool_mode_has_plus(LlmToolMode m)
+{
+    return m == LLM_TOOL_ASKPLUS || m == LLM_TOOL_ALLOWPLUS;
+}
 
 /* Défaults par profil pour un outil neuf : MINIMAL silencieux,
  * DEFAULT = le comportement historique (ASK), YOLO = exécution directe. */
@@ -53,7 +76,7 @@ mode_from_wire(const char *s, LlmToolMode fallback)
 {
     if (s == NULL)
         return fallback;
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < LLM_TOOL_MODE_COUNT; i++)
         if (g_strcmp0(s, LLM_TOOL_MODE_NAMES[i]) == 0)
             return (LlmToolMode)i;
     return fallback;
@@ -76,7 +99,7 @@ llm_profile_label(LlmToolProfile p)
 const char *
 llm_tool_mode_name(LlmToolMode m)
 {
-    return (m >= 0 && m <= LLM_TOOL_ALLOWPLUS)
+    return (m >= 0 && m < LLM_TOOL_MODE_COUNT)
                ? LLM_TOOL_MODE_NAMES[m] : "off";
 }
 LlmToolMode

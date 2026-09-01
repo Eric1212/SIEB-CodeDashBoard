@@ -2,11 +2,12 @@
  * llmtoolpref.h : préfs des outils natifs par PROFIL.
  *
  * llm.json porte :
- *   "tools" : [ { "name" : "cdb_bash",
- *                 "modes" : [ "off", "ask", "allow" ] } ]   // par profil
+ *   "tools" : [ { "name" : "bash",
+ *                 "modes" : [ "off", "ask", "askplus", "allow",
+ *                 "allowplus" ] } ]   // un nom par profil
  *   "active" : { ..., "profile" : "DEFAULT" }
  *
- * Trois profils fixes (MINIMAL, DEFAULT, YOLO), quatre modes par outil.
+ * Trois profils fixes (MINIMAL, DEFAULT, YOLO), cinq modes par outil.
  * OFF = l'outil n'est pas annoncé au modèle (il n'existe pas pour lui).
  *
  * En-tête inclus PAR llm.h (les types LlmToolMode/LlmToolPref y vivent).
