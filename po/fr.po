@@ -14,7 +14,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-01 12:38-0400\n"
+"POT-Creation-Date: 2026-09-01 13:34-0400\n"
 "PO-Revision-Date: 2026-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -585,11 +585,11 @@ msgstr "commande manquante ou vide."
 msgid "incomplete tool call ignored: id or function.name absent."
 msgstr "appel d'outil incomplet ignoré : id ou function.name absent."
 
-#: src/llmcore.c:3550 src/llmcore.c:3571 src/llmcore.c:3587
+#: src/llmcore.c:3568 src/llmcore.c:3589 src/llmcore.c:3605
 msgid "Cancelled by the user."
 msgstr "Annulé par l'utilisateur."
 
-#: src/llmcore.c:3720 src/llmcore.c:3741
+#: src/llmcore.c:3738 src/llmcore.c:3759
 msgid ""
 "\n"
 "〔cancelled〕\n"
@@ -597,7 +597,7 @@ msgstr ""
 "\n"
 "〔annulé〕\n"
 
-#: src/llmcore.c:3769
+#: src/llmcore.c:3787
 msgid ""
 "\n"
 "[CDB] Stream timeout — retries in progress…\n"
@@ -605,21 +605,21 @@ msgstr ""
 "\n"
 "[CDB] Délai dépassé sur le flux — nouvelles tentatives en cours…\n"
 
-#: src/llmcore.c:3890
+#: src/llmcore.c:3908
 msgid "(no error message)"
 msgstr "(erreur sans message)"
 
-#: src/llmcore.c:3946
+#: src/llmcore.c:3964
 #, c-format
 msgid "shell %s does not start (spawn failed?)."
 msgstr "le shell %s ne démarre pas (spawn en échec ?)."
 
-#: src/llmcore.c:3983
+#: src/llmcore.c:4001
 #, c-format
 msgid "terminal %s was closed during execution."
 msgstr "le terminal %s a été fermé pendant l'exécution."
 
-#: src/llmcore.c:4113
+#: src/llmcore.c:4131
 msgid ""
 "\n"
 "[CDB] Timeout — retries in progress…\n"
@@ -627,7 +627,7 @@ msgstr ""
 "\n"
 "[CDB] Délai dépassé — nouvelles tentatives en cours…\n"
 
-#: src/llmcore.c:4122
+#: src/llmcore.c:4140
 #, c-format
 msgid ""
 "\n"
@@ -636,7 +636,7 @@ msgstr ""
 "\n"
 "[erreur : %s]\n"
 
-#: src/llmcore.c:4170
+#: src/llmcore.c:4188
 #, c-format
 msgid ""
 "\n"
@@ -645,7 +645,7 @@ msgstr ""
 "\n"
 "[CDB] HTTP %u — nouvelles tentatives en cours…\n"
 
-#: src/llmcore.c:4226
+#: src/llmcore.c:4244
 msgid ""
 "\n"
 "[error: invalid provider URL]\n"
@@ -653,7 +653,7 @@ msgstr ""
 "\n"
 "[erreur : URL de fournisseur invalide]\n"
 
-#: src/llmcore.c:4420
+#: src/llmcore.c:4438
 msgid ""
 "Éric has REFUSED this tool call. This is not a bug: it is a decision. Adapt "
 "and propose something else."
@@ -661,13 +661,13 @@ msgstr ""
 "Éric a REFUSÉ cet appel d'outil. Ce n'est pas un bug : c'est une décision. "
 "Adapte-toi et propose autre chose."
 
-#: src/llmcore.c:4460 src/llmcore.c:4481
+#: src/llmcore.c:4478 src/llmcore.c:4499
 #, c-format
 msgid "terminal %s unavailable (bash panel absent?)"
 msgstr "terminal %s indisponible (panneau bash absent ?)"
 
 # --- descriptions des schemas d'outils (canal natif) ---
-#: src/llmcore.c:4645
+#: src/llmcore.c:4663
 msgid ""
 "Runs a shell command in a CDB terminal. The command is submitted to Éric for "
 "approval before execution."
@@ -675,15 +675,15 @@ msgstr ""
 "Exécute une commande shell dans un terminal CDB. La commande est soumise à "
 "l'approbation d'Éric avant exécution."
 
-#: src/llmcore.c:4664
+#: src/llmcore.c:4682
 msgid "CDB terminal number (0 to 9)."
 msgstr "Numéro du terminal CDB (0 à 9)."
 
-#: src/llmcore.c:4673
+#: src/llmcore.c:4691
 msgid "Full shell command to run."
 msgstr "Commande shell complète à exécuter."
 
-#: src/llmcore.c:4700
+#: src/llmcore.c:4718
 msgid ""
 "Reads an exact range of lines from a text file on disk (absolute path). "
 "from_line/to_line are 1-based, inclusive. Returns the lines and a short hash "
@@ -695,7 +695,7 @@ msgstr ""
 "court (4 caractères base36) des octets exacts de la plage, à rejouer dans "
 "cdb_insert/cdb_replace."
 
-#: src/llmcore.c:4758
+#: src/llmcore.c:4776
 msgid ""
 "Insert text verbatim between two ADJACENT lines of a text file on disk "
 "(absolute path). The model must have read the line before and the line after "
@@ -711,11 +711,11 @@ msgstr ""
 "ligne réelle, donc pas de hash. Les sauts de ligne de text appartiennent au "
 "modèle. Ne crée pas le fichier et n'écrit jamais dans le dirty de l'éditeur."
 
-#: src/llmcore.c:4787
+#: src/llmcore.c:4805
 msgid "Real line after which to insert; 0 = file head."
 msgstr "Ligne réelle après laquelle insérer ; 0 = tête du fichier."
 
-#: src/llmcore.c:4796
+#: src/llmcore.c:4814
 msgid ""
 "Hash returned by cdb_read(before_line,before_line). Omit only when "
 "before_line=0."
@@ -723,7 +723,7 @@ msgstr ""
 "Hash rendu par cdb_read(before_line,before_line). À omettre seulement si "
 "before_line=0."
 
-#: src/llmcore.c:4808
+#: src/llmcore.c:4826
 msgid ""
 "Real line before which to insert; equals before_line+1, or 0 to insert at "
 "the end of the file."
@@ -731,7 +731,7 @@ msgstr ""
 "Ligne réelle avant laquelle insérer ; vaut before_line+1, ou 0 pour insérer "
 "en fin de fichier."
 
-#: src/llmcore.c:4818
+#: src/llmcore.c:4836
 msgid ""
 "Hash returned by cdb_read(after_line,after_line). Omit only when "
 "after_line=0."
@@ -739,11 +739,11 @@ msgstr ""
 "Hash rendu par cdb_read(after_line,after_line). À omettre seulement si "
 "after_line=0."
 
-#: src/llmcore.c:4828
+#: src/llmcore.c:4846
 msgid "Text inserted verbatim, newlines included."
 msgstr "Texte inséré tel quel, sauts de ligne compris."
 
-#: src/llmcore.c:4857
+#: src/llmcore.c:4875
 msgid ""
 "Replaces a WHOLE range of lines (from_line..to_line, inclusive, 1-based) of "
 "a text file on disk with verbatim text. The block_hash must be the hash "
@@ -759,19 +759,19 @@ msgstr ""
 "plage. Aucun plafond de taille, mais aucun hash, hash faux ou plage hors "
 "fichier = refus. N'écrit jamais dans le dirty de l'éditeur."
 
-#: src/llmcore.c:4893
+#: src/llmcore.c:4911
 msgid "Last line replaced, inclusive. Must exist."
 msgstr "Dernière ligne remplacée, inclusive. Doit exister."
 
-#: src/llmcore.c:4902
+#: src/llmcore.c:4920
 msgid "Hash (4 base36 chars) returned by cdb_read of the SAME range."
 msgstr "Hash (4 caractères base36) rendu par cdb_read de la MÊME plage."
 
-#: src/llmcore.c:4911
+#: src/llmcore.c:4929
 msgid "New text, inserted verbatim. Empty string = deletion."
 msgstr "Nouveau texte, inséré tel quel. Chaîne vide = suppression."
 
-#: src/llmcore.c:4941
+#: src/llmcore.c:4959
 msgid ""
 "Creates a NEW text file on disk (absolute path) with this content verbatim. "
 "Refuses if the file already exists (use cdb_replace) and if the parent "
@@ -785,12 +785,12 @@ msgstr ""
 "exclusive (O_EXCL) : aucune course ne peut écraser un fichier apparu entre-"
 "temps. content vide crée un fichier vide."
 
-#: src/llmcore.c:4966
+#: src/llmcore.c:4984
 msgid "Content written verbatim, newlines included. Empty string = empty file."
 msgstr ""
 "Contenu écrit tel quel, sauts de ligne compris. Chaîne vide = fichier vide."
 
-#: src/llmcore.c:4994
+#: src/llmcore.c:5012
 msgid ""
 "Destroys a file on disk (absolute path) in TWO passes. Without file_hash: "
 "deletes NOTHING and returns the file's current fingerprint. With a file_hash "
@@ -803,7 +803,7 @@ msgstr ""
 "Refuse les répertoires, les liens symboliques et tout ce qui n'est pas un "
 "fichier régulier."
 
-#: src/llmcore.c:5018
+#: src/llmcore.c:5036
 msgid ""
 "Fingerprint returned by the first cdb_delete(path). Omit for the "
 "confirmation request."
@@ -811,7 +811,7 @@ msgstr ""
 "Empreinte rendue par le premier cdb_delete(path). Omettre pour la demande de "
 "confirmation."
 
-#: src/llmcore.c:5042
+#: src/llmcore.c:5060
 msgid ""
 "\n"
 "\n"

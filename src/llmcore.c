@@ -3484,7 +3484,15 @@ llm_finalize_pending_tools(LlmCore *c)
  * stop_requested domine tout : une boucle annulée est morte même si sa
  * requête n'est pas encore libérée (le callback de lecture la jettera).
  * Les polls sont globaux et partagés par tous les cores : filtrer sur
- * pl->core et ignorer ceux que l'annulation a déjà répondus. */
+ * pl->core et ignorer ceux que l'annulation a déjà répondus.
+ *
+ * Quatre choses tiennent la boucle vivante, et la liste est fermée : une
+ * requête en vol, une décision ASK à trancher, une commande à exécuter, un
+ * résultat à livrer. Les deux dernières se ressemblent et ne se recouvrent
+ * pas — cmd_queue est l'outil qu'on va faire, cdb_results est la réponse
+ * qu'on doit au modèle. Les tool calls malformés ne touchent jamais la
+ * première et remplissent la seconde : omettre l'une des deux fait sonner
+ * une fin de tour qui n'a pas eu lieu. */
 gboolean
 core_agent_loop_alive(LlmCore *c)
 {
@@ -3493,6 +3501,16 @@ core_agent_loop_alive(LlmCore *c)
     if (c->cur_req != NULL || c->decision != NULL)
         return TRUE;
     if (c->cmd_queue != NULL && !g_queue_is_empty(c->cmd_queue))
+        return TRUE;
+    /* Un résultat d'outil qui attend sa livraison EST la boucle : il reste
+     * à le rendre au modèle, qui répondra par-dessus. Cette clause est là
+     * pour les tool calls MALFORMÉS — arguments JSON invalides, chemin
+     * relatif refusé, hash absent : leur refus part du « done: » du dispatch,
+     * donc directement en cdb_results, SANS jamais entrer en cmd_queue. Le
+     * prédicat les voyait donc mourir à la libération de la requête : chrono
+     * re-basé et ding d'une fin qui n'a pas eu lieu, deux lignes avant que
+     * llm_cdb_next ne relance la requête. */
+    if (c->cdb_results != NULL && !g_queue_is_empty(c->cdb_results))
         return TRUE;
     if (cdb_polls != NULL) {
         for (guint i = 0; i < cdb_polls->len; i++) {
