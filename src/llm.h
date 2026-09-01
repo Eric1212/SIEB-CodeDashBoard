@@ -17,6 +17,12 @@
  *     "last_file": "…"                          <- explorateur (roots.c)
  *   }
  *
+ * Le fichier est SEEDÉ au premier lancement (llm_config_seed_if_absent) :
+ * « providers » y figure d'office, avec l'URL de base et une clé vide pour
+ * chaque provider du catalogue. Jamais « active » — le seed donne une forme,
+ * pas une config, et ne choisit personne à la place de l'utilisateur. La
+ * liste des providers vit dans LLM_PROVIDERS (llmcore.c), source unique de
+ * l'URL de base comme du seed. *
  * « active » est le SEUL couple provider/modèle utilisé pour le chat ;
  * il est écrit par switch_active (menu de la tuile), jamais par les
  * formulaires Settings. Pas de « default_model » : aucun repli.

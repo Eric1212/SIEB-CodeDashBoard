@@ -184,7 +184,7 @@ static const char *cdb_css =
      * prendraient la couleur d'un bouton au lieu de celle de leur zone. */
     "button.ibox-head { background: none; border: none; box-shadow: none; "
     "margin: 0; padding: 0; min-height: 0; min-width: 0; "
-    "border-radius: 0; color: inherit; cursor: pointer; }\n"
+    "border-radius: 0; color: inherit; }\n"
     "button.ibox-head:hover, button.ibox-head:active, "
     "button.ibox-head:checked, button.ibox-head:disabled { "
     "background: none; border: none; box-shadow: none; color: inherit; }\n"
@@ -227,7 +227,7 @@ static const char *cdb_css =
     "button.ibox-half { border: none; box-shadow: none; "
     "margin: 0; border-radius: 0; background-image: none; "
     "padding: 7px 8px; font-weight: bold; color: @ibox_choice_fg; "
-    "opacity: 1; cursor: pointer; }\n"
+    "opacity: 1; }\n"
     "button.ibox-half label { color: @ibox_choice_fg; font-weight: bold; }\n"
     /* ibox-eaten : posée sur le perdant pendant qu'il se rétracte (voir
      * apply_choice). Elle n'annule que l'horizontale — les 7px verticaux
@@ -252,11 +252,15 @@ static const char *cdb_css =
     "button.ibox-no { background-color: @ibox_no_bg; }\n"
     "button.ibox-no:hover, button.ibox-no:active { "
     "background-color: @ibox_no_hi; }\n"
-    /* Le curseur ne dit « clique ici » que quand cliquer ici fait quelque
-     * chose : .ibox-resolved n'apparaît qu'une fois la décision prise.
-     * Tant que la demande est en attente, la barre reste au curseur
-     * normal et seules ses deux moitiés répondent. */
-    ".ibox-resolved { cursor: pointer; }\n"
+    /* La barre ne devient cliquable qu'une fois la décision prise : c'est ce
+     * que marque .ibox-resolved (ibox.c:353), en vis-à-vis de .ibox-ask, qui
+     * lui est habillée. Aucune règle ici, et pas par oubli : GTK4 n'a pas de
+     * propriété CSS « cursor ». Les trois déclarations « cursor: pointer »
+     * que portait ce fichier étaient refusées par le parser et n'atteignaient
+     * jamais leur cible — c'étaient les Gtk-WARNING « No property named
+     * "cursor" » du démarrage. La classe reste posée comme marqueur d'état ;
+     * rendre l'affordance visible relèverait de gtk_widget_set_cursor(), et
+     * c'est un sujet, pas un reste de celui-ci. */
     /* Zone 3 — output : texte BLANC sur NOIR, un terminal dans la boîte.
      * color est porté par le CONTENEUR, pas seulement par le texte :
      * sans lui, l'étiquette « output », le digest et les chevrons

@@ -132,16 +132,33 @@ llm_config_merge_members(JsonObject *members)
     g_free(path);
 }
 
+/* Catalogue des providers connus : LA source unique. Le seed (plus bas) en
+ * remplit llm.json, llm_provider_default_url y puise l'URL de base, et le
+ * formulaire Settings a sa liste. Un provider sans URL — OpenAi-Compatible,
+ * qui n'a pas encore de formulaire et n'est voué à terme à rien d'autre
+ * qu'à être un fourre-tout de providers — n'a qu'à ne pas figurer ici.
+ * Ajouter un provider, muni d'une clé ou sans (OpenCode Zen en est la
+ * première preuve), est désormais UNE ligne, et plus trois fichiers. */
+static const struct {
+    const char *name;
+    const char *url;
+} LLM_PROVIDERS[] = {
+    { "OpenRouter", "https://openrouter.ai/api/v1"      },
+    { "OpenCode",   "https://opencode.ai/zen/v1"        },
+    { "HyperCharm", "https://hyper.charm.land/v1"       },
+};
+
 /* URL de base d'un provider connu ; NULL si inconnu. */
 const char *
 llm_provider_default_url(const char *provider)
 {
-    if (g_strcmp0(provider, "OpenRouter") == 0)
-        return "https://openrouter.ai/api/v1";
-    if (g_strcmp0(provider, "OpenCode") == 0)
-        return "https://opencode.ai/zen/v1";
-    if (g_strcmp0(provider, "HyperCharm") == 0)
-        return "https://hyper.charm.land/v1";
+    gsize i;
+
+    if (provider == NULL)
+        return NULL;
+    for (i = 0; i < G_N_ELEMENTS(LLM_PROVIDERS); i++)
+        if (g_strcmp0(provider, LLM_PROVIDERS[i].name) == 0)
+            return LLM_PROVIDERS[i].url;
     return NULL;
 }
 
@@ -1294,9 +1311,12 @@ llm_config_free(LlmConfig *cfg)
     g_free(cfg);
 }
 
-LlmConfig *
-llm_config_load(void)
-{
+/* Lectrice seule : toute lecture de llm.json passe par ici, et elle rend
+ * toujours une config NEUVE. La mise à jour de la config vivante est
+ * llm_config_reload, plus bas — les deux ne sont pas interchangeables,
+ * parce que la vivante est pointée directement par le core et les tuiles. */
+static LlmConfig *
+llm_config_read(void){
     char       *path = llm_config_path();
     JsonParser *parser;
     LlmConfig  *cfg = NULL;
@@ -1365,6 +1385,45 @@ out:
     g_object_unref(parser);
     g_free(path);
     return cfg;
+}
+
+/* Relit llm.json DANS la config vivante, sans réallouer. Contrainte : le
+ * core (llm_core_new) et chaque tuile (llm_tile_new) gardent un POINTEUR
+ * direct sur cfg — réallouer serait un use-after-free assuré. On déplace
+ * donc les membres au lieu de déplacer l'objet, qui est exactement le geste
+ * que fait déjà llm_config_switch_active au terme de sa bascule.
+ *
+ * Renvoie cfg (le MÊME pointeur) quand la recharge a réussi ; NULL si
+ * llm.json ne décrit aucune config exploitable — auquel cas l'état vivant
+ * est laissé tel quel : un fichier illisible ne doit pas éteindre un chat en
+ * cours. cfg == NULL : renvoie une config neuve, ou NULL. */
+LlmConfig *
+llm_config_reload(LlmConfig *cfg)
+{
+    LlmConfig *fresh = llm_config_read();
+
+    if (fresh == NULL)
+        return NULL;
+    if (cfg == NULL)
+        return fresh;
+
+    g_free(cfg->provider);
+    cfg->provider = fresh->provider;   /* possession transférée */
+    g_free(cfg->model);
+    cfg->model = fresh->model;
+    g_free(cfg->api_url);
+    cfg->api_url = fresh->api_url;
+    g_free(cfg->api_key);
+    cfg->api_key = fresh->api_key;
+    g_free(fresh);                     /* coquille : plus rien dedans */
+    return cfg;
+}
+
+/* Lecture simple, au démarrage : une config neuve, ou NULL. */
+LlmConfig *
+llm_config_load(void)
+{
+    return llm_config_reload(NULL);
 }
 
 /* Sauvegarde (création/màj) d'un provider dans llm.json : la clé.
@@ -1446,6 +1505,81 @@ llm_config_save_provider(const char *provider, const char *api_key)
     g_object_unref(gen);
     json_node_unref(root_node);
     g_object_unref(parser);
+    g_free(path);
+}
+
+/* Matérialise llm.json au premier lancement : le catalogue des providers,
+ * leur URL de base et une clé VIDE. Une clé vide est une information (« ce
+ * provider est connu, il n'a pas encore été muni »), pas une absence : c'est
+ * elle qui rend llm_config_get_api_key homogène ("" plutôt que NULL) et qui
+ * fait qu'un provider ne peut plus « apparaître » à l'exécution — le seul
+ * membre que le fichier verra naître ensuite est « active ».
+ *
+ * Ce que le seed ne fait PAS, volontairement : il ne pose aucun « active ».
+ * Choisir un provider est un acte de l'utilisateur (menu de la tuile, ou
+ * première sauvegarde d'une clé), jamais un repli — cf. la loi « aucun
+ * default_model » de llm.h. llm_config_load() renvoie donc encore NULL sur
+ * une session neuve : le seed donne au fichier sa forme, pas une config.
+ *
+ * Jamais d'écrasement : si le fichier existe, on ne le touche pas, même
+ * incomplet — ses membres appartiennent à l'utilisateur. Pas de mkdir non
+ * plus : le dossier de session est créé par session_ensure(). */
+void
+llm_config_seed_if_absent(void)
+{
+    char          *path = llm_config_path();
+    JsonObject    *root, *provs;
+    JsonNode      *work;
+    JsonGenerator *gen;
+    gchar         *text;
+    GError        *error = NULL;
+    gsize          i;
+
+    if (g_file_test(path, G_FILE_TEST_EXISTS)) {
+        g_free(path);
+        return;
+    }
+
+    /* Le geste exact, MESURÉ et non supposé. Quatre formes testées sous ASAN
+     * contre cette version de json-glib : set_object en gardant notre
+     * référence, init_object en la gardant, init_object sur un nœud
+     * JSON_NODE_NULL — les trois laissent la racine et son sous-arbre
+     * atteignables à la sortie (56 octets directs, 264 indirects par seed).
+     * La seule propre est set_object suivi de l'abandon de notre référence :
+     * json_node_set_object REFERENCE, il ne vole pas.
+     *
+     * Avertissement pour ce fichier : les trois formes qui fuient sont déjà
+     * écrites plus haut (merge_members, save_provider, switch_active) — elles
+     * ne sont pas corrigées ici, hors de ce changement. Et json_node_new
+     * (JSON_NODE_OBJECT) ne crée PAS l'objet : json_node_get_object sur un
+     * nœuf neuf rend NULL, ce qui fait planter le générateur. */
+    root  = json_object_new();
+    provs = json_object_new();
+    for (i = 0; i < G_N_ELEMENTS(LLM_PROVIDERS); i++) {
+        JsonObject *prov = json_object_new();
+
+        json_object_set_string_member(prov, "api_url",
+                                      LLM_PROVIDERS[i].url);
+        json_object_set_string_member(prov, "api_key", "");
+        json_object_set_object_member(provs, LLM_PROVIDERS[i].name, prov);
+    }
+    json_object_set_object_member(root, "providers", provs);
+
+    work = json_node_new(JSON_NODE_OBJECT);
+    json_node_set_object(work, root);
+    json_object_unref(root);          /* le nœud reste seul propriétaire */
+
+    gen  = json_generator_new();
+    json_generator_set_root(gen, work);
+    json_generator_set_pretty(gen, TRUE);
+    text = json_generator_to_data(gen, NULL);
+    if (!g_file_set_contents(path, text, -1, &error)) {
+        g_printerr(_("CDB: failed to seed llm.json: %s\n"), error->message);
+        g_error_free(error);
+    }
+    g_free(text);
+    g_object_unref(gen);
+    json_node_unref(work);
     g_free(path);
 }
 

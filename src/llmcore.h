@@ -70,11 +70,26 @@ llm_config_free(LlmConfig *cfg);
 LlmConfig *
 llm_config_load(void);
 
+/* Relit llm.json dans la config vivante SANS réallouer : le core et chaque
+ * tuile détiennent un pointeur direct sur cfg, donc on déplace les membres
+ * au lieu de déplacer l'objet. Renvoie le MÊME pointeur cfg, ou NULL si le
+ * fichier ne décrit aucune config exploitable — l'état vivant est alors
+ * laissé tel quel. cfg == NULL : rend une config neuve, ou NULL. */
+LlmConfig *
+llm_config_reload(LlmConfig *cfg);
+
 void
 llm_config_save_provider(const char *provider, const char *api_key);
 
-const char *
-llm_msg_wire_role(LlmActor a);
+/* Matérialise llm.json s'il est ABSENT : le catalogue des providers avec
+ * leur URL de base et une clé vide. Ne pose aucun « active » — aucun
+ * provider n'est choisi d'office, donc une session neuve rend encore NULL
+ * à llm_config_load() : le seed donne une forme au fichier, pas une config.
+ * À appeler après session_init() et avant llm_config_load(). */
+void
+llm_config_seed_if_absent(void);
+
+const char *llm_msg_wire_role(LlmActor a);
 
 char *
 str_replace_all(const char *s, const char *old_s, const char *new_s);

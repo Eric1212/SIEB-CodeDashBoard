@@ -507,6 +507,21 @@ llm_model_chevron_update(GtkWidget *popover, gpointer data)
                                            : "pan-down-symbolic");
 }
 
+/* Un aller simple pour /models, avec l'ancre qui tient le popover pendant le
+ * vol. UN seul endroit fabrique ce contexte : la construction du menu et son
+ * invalidation posent la même requête, et un second patron divergerait tôt ou
+ * tard du premier (l'ancre oubliée, le callback changé d'un côté seulement). */
+static void
+section_models_request(LlmTile *t, ModelSection *sec)
+{
+    SectionFetchCtx *fctx = g_new0(SectionFetchCtx, 1);
+
+    fctx->t      = t;
+    fctx->anchor = g_object_ref(t->model_pop);
+    fctx->sec    = sec;
+    llm_models_fetch(sec->provider, on_section_models_fetched, fctx);
+}
+
 void
 llm_model_menu_ensure(LlmTile *t)
 {
@@ -527,8 +542,7 @@ llm_model_menu_ensure(LlmTile *t)
         return;
     }
     for (int i = 0; names[i] != NULL; i++) {
-        ModelSection    *sec = g_new0(ModelSection, 1);
-        SectionFetchCtx *fctx;
+        ModelSection *sec = g_new0(ModelSection, 1);
 
         sec->provider = g_strdup(names[i]);
         sec->header = gtk_label_new(names[i]);
@@ -548,14 +562,69 @@ llm_model_menu_ensure(LlmTile *t)
         gtk_box_append(GTK_BOX(t->rows_box), sec->header);
         gtk_box_append(GTK_BOX(t->rows_box), GTK_WIDGET(sec->list));
 
-        fctx = g_new0(SectionFetchCtx, 1);
-        fctx->t = t;
-        fctx->anchor = g_object_ref(t->model_pop);
-        fctx->sec = sec;
-        llm_models_fetch(sec->provider, on_section_models_fetched, fctx);
+        section_models_request(t, sec);
     }
     g_strfreev(names);
     llm_model_menu_apply_filter(t);
+}
+
+/* Le disque a changé (une clé vient d'être enregistrée) : les listes de
+ * modèles sont périmées. La FORME de ce geste est commandée par un piège :
+ * chaque section porte un fetch en vol, et on_section_models_fetched
+ * déréférence ctx->sec sans autre garde que l'ancre — le commentaire de
+ * SectionFetchCtx signale justement ce garde-fou manquant. Libérer les
+ * sections ici écrirait donc en mémoire rendue dès qu'une réponse tarderait.
+ *
+ * En présence de sections, on ne libère RIEN : on vide leurs listes et on
+ * relance la requête. Un vieux vol qui répond trouve une structure vivante,
+ * y écrit son résultat et le nouveau vol écrira le sien — dernier gagnant sur
+ * un objet valide, bénin.
+ *
+ * Sans section, rows_box ne porte que le label « aucun provider », posé par
+ * ensure() latch relevé : il n'y a aucun vol, donc reposer le latch est sans
+ * risque et ensure() reconstruira tout au prochain ouvert du popover
+ * (llm_model_pop_mapped l'appelle déjà). C'est le seul chemin où le latch
+ * sert à quelque chose — le seed rend l'autre cas inatteignable sur une
+ * session neuve. */
+void
+llm_model_menu_invalidate(LlmTile *t)
+{
+    GtkWidget *child;
+
+    if (t == NULL || !t->menu_built)
+        return;
+
+    if (t->sections != NULL && t->sections->len > 0) {
+        for (guint i = 0; i < t->sections->len; i++) {
+            ModelSection *sec = g_ptr_array_index(t->sections, i);
+
+            while ((child = gtk_widget_get_first_child(sec->list)) != NULL)
+                gtk_list_box_remove(GTK_LIST_BOX(sec->list), child);
+            llm_models_free(sec->models);
+            sec->models = NULL;
+            section_models_request(t, sec);
+        }
+        return;
+    }
+
+    t->menu_built = FALSE;
+    if (t->rows_box != NULL)
+        while ((child = gtk_widget_get_first_child(t->rows_box)) != NULL)
+            gtk_box_remove(GTK_BOX(t->rows_box), child);
+}
+/* Notifier TOUTES les vues d'un core : loi du miroir, le provider est actif
+ * pour toutes les tuiles, donc aucune ne doit rester sur un menu périmé. */
+void
+llm_views_config_changed(LlmCore *core)
+{
+    if (core == NULL || core->views == NULL)
+        return;
+    for (guint i = 0; i < core->views->len; i++) {
+        LlmTile *v = g_ptr_array_index(core->views, i);
+
+        llm_model_menu_invalidate(v);
+        llm_model_button_refresh(v);
+    }
 }
 
 char *

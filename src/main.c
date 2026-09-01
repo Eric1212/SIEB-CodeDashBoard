@@ -88,9 +88,11 @@ typedef struct {
     GtkWidget         *diffbar;
     guint              diff_timer; /* debounce du recalcul de diff */
     guint              render_idle; /* re-rendu différé (destruction sûre) */
-    int                modal_count; /* fenêtres-modales ouvertes (max 4) */
-    /* Ignore les signaux pendant un chargement (évite un sale transitoire). */
-    gboolean           suppress_dirty;
+    /* Vol d'application des fractions, armé sur le « map » de l'arbre. Son
+     * id est porté ici pour que les DEUX points où l'arbre meurt puissent le
+     * désarmer : sans lui, il partait marcher un arbre rendu. */
+    guint              positions_idle;
+    int                modal_count; /* fenêtres-modales ouvertes (max 4) */    gboolean           suppress_dirty;
     /* Source de vérité de la multi-sélection : set de chemins (clés
      * g_strdup/g_free). GTK ne fait qu'afficher. */
     GHashTable        *multi_paths;
@@ -188,6 +190,9 @@ static void recompute_dirty(App *app);
 static void on_buffer_changed(GtkTextBuffer *buffer, gpointer data);
 static void update_style_scheme(App *app);
 static void render_layout(App *app);
+/* Définie plus bas, près de render_layout : le handler d'un bouton de
+ * Settings la demande pour faire naître la tuile LLM d'une session neuve. */
+static gboolean render_layout_idle(gpointer data);
 static void set_paned_positions(App *app);
 static GtkWidget *build_editor(App *app);
 static void search_ensure_ctx(App *app); /* recherche : recouple le moteur */
@@ -2679,9 +2684,13 @@ update_style_scheme(App *app)
     name = adw_style_manager_get_dark(style_mgr) ? "Adwaita-dark" : "Adwaita";
     scheme_mgr = gtk_source_style_scheme_manager_get_default();
     scheme = gtk_source_style_scheme_manager_get_scheme(scheme_mgr, name);
-    if (scheme != NULL)
+    /* Le buffer appartient à la pièce « éditeur » : un layout qui ne
+     * l'affiche pas n'en a aucun, et le thème doit quand même suivre pour
+     * tout le reste — loi du layout, une capacité ne dépend jamais de la
+     * présence d'une tuile. Rien n'est perdu quand l'éditeur renaît :
+     * set_current_file rappelle cette fonction sur son buffer neuf. */
+    if (scheme != NULL && app->buffer != NULL)
         gtk_source_buffer_set_style_scheme(app->buffer, scheme);
-
     if (g_getenv("CDB_DEBUG") != NULL)
         g_printerr(_("CDB: style scheme = %s (dark=%d)\n"), name,
                    adw_style_manager_get_dark(style_mgr));
@@ -3811,12 +3820,54 @@ on_provider_save_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
     GtkWidget  *key_entry = g_object_get_data(G_OBJECT(w), "key-entry");
     GtkWidget  *status = g_object_get_data(G_OBJECT(w), "status");
     const char *key = gtk_editable_get_text(GTK_EDITABLE(key_entry));
+    GtkWidget  *top = gtk_widget_get_ancestor(w, GTK_TYPE_WINDOW);
+    App        *app = (top != NULL)
+                          ? g_object_get_data(G_OBJECT(top), "cdb-app")
+                          : NULL;
 
     llm_config_save_provider(provider, key);
+
+    /* Le fichier est écrit : il reste à le REALISER. llm.json ne connaît
+     * aucun chemin d'invalidation, donc sans ce qui suit la clé neuve ne
+     * devient vraie qu'au redémarrage suivant (bug rapporté en août 2026).
+     * Trois caches sont en cause, et ils ne se préviennent pas entre eux :
+     * la config vivante (cfg->api_key), l'EXISTENCE de la tuile (un cfg à
+     * NULL rend un label, pas une tuile), et le latch du menu des modèles.
+     *
+     * App revient par sa fenêtre : Settings est une fenêtre séparée
+     * (on_settings_activated) ou une tuile du layout, et les deux portent
+     * la donnée. Le remonter de signature en signature jusqu'au bouton a
+     * coûté huit retouches pour le même résultat. */
+    if (app != NULL) {
+        if (app->llm_cfg == NULL) {
+            /* Profil sans config : la tuile n'existe pas, il faut la faire
+             * naître. Un re-rendu suffit, et c'est LE mécanisme de la maison
+             * — les vues meurent, l'état survit dans App — qui remet à zéro
+             * le latch du menu par la même occasion, la tuile neuve étant
+             * toute neuve. Différé : nous sommes dans le handler du bouton,
+             * donc dans l'arbre que render_layout() détruit. */
+            LlmConfig *fresh = llm_config_reload(NULL);
+
+            if (fresh != NULL) {
+                app->llm_cfg = fresh;
+                if (app->llm_core != NULL)
+                    app->llm_core->cfg = fresh;
+                if (app->render_idle == 0)
+                    app->render_idle =
+                        g_idle_add(render_layout_idle, app);
+            }
+        } else {
+            /* La tuile est là : recharge EN PLACE (son pointeur est partagé
+             * par le core et toutes les vues), puis notification de toutes
+             * les vues — le menu, lui, n'est pas dans cfg. */
+            llm_config_reload(app->llm_cfg);
+            llm_views_config_changed(app->llm_core);
+        }
+    }
+
     gtk_label_set_text(GTK_LABEL(status), _("Saved \u2713"));
     sfx_play_feedback();   /* ding court : la clé du fournisseur est écrite */
 }
-
 /* ------------------------------------------------ */
 /* Suggestions de modèles depuis /models             */
 /*                                                   */
@@ -5407,16 +5458,31 @@ set_paned_positions(App *app)
 static gboolean
 apply_positions_idle(gpointer data)
 {
-    set_paned_positions((App *)data);
+    App *app = data;
+
+    /* L'id ne survit pas à sa propre exécution : le rendre ici est ce qui
+     * permet à un futur « map » d'en armer un nouveau. Le laisser posé
+     * ferait croire à un vol encore en attente et n'en armerait jamais
+     * d'autre — les fractions ne reviendraient plus. */
+    app->positions_idle = 0;
+    set_paned_positions(app);
     return G_SOURCE_REMOVE;
 }
 
 static void
 on_layout_map(GtkWidget G_GNUC_UNUSED *widget, gpointer data)
 {
-    g_idle_add(apply_positions_idle, data);
-}
+    App *app = data;
 
+    /* L'id est GARDE, et c'est tout l'objet du geste : sans lui, aucun des
+     * deux points où l'arbre meurt (render_layout, on_close_request) ne peut
+     * désarmer ce vol, et il marche des widgets rendus — le use-after-free
+     * que ASAN signalait ici. Le garde rend l'armement idempotent, au même
+     * titre que celui de render_idle : un « map » qui se répète retrouve
+     * l'idle déjà en attente au lieu d'en empiler un second. */
+    if (app->positions_idle == 0)
+        app->positions_idle = g_idle_add(apply_positions_idle, app);
+}
 /* Reconstruit l'arbre paned depuis le modèle et l'insère dans le holder.
  * Les vues des tuiles meurent avec l'ancien arbre ; l'état des morceaux
  * (buffer / modèle) survit dans App. Les pointeurs de VUE sont invalidés
@@ -5428,10 +5494,16 @@ render_layout(App *app)
     /* gtk_widget_unparent retire proprement l'ancien arbre (les vues sont
      * détruites : widgets GInitiallyUnowned sans ref externe). */
     if (app->layout_root != NULL) {
+        /* Désarmer AVANT de détruire : l'idle de fractions a été armé par le
+         * « map » de CET arbre. La tuile neuve arméra le sien à son propre
+         * map — aucun travail n'est donc perdu, seulement un vol inutile. */
+        if (app->positions_idle != 0) {
+            g_source_remove(app->positions_idle);
+            app->positions_idle = 0;
+        }
         gtk_widget_unparent(app->layout_root);
         app->layout_root = NULL;
-    }
-    app->source_view = NULL;
+    }    app->source_view = NULL;
     app->diffbar = NULL;
     app->explorer_scrolled = NULL;
 
@@ -5624,6 +5696,13 @@ on_close_request(GtkWindow G_GNUC_UNUSED *win, gpointer data)
 {
     App *app = data;
 
+    /* L'arbre meurt avec la fenêtre : un idle de fractions encore en attente
+     * le marcherait déjà rendu. Désarmer ici, au point de fermeture — et
+     * seulement ici, car c'est close-request qui est LE point de sauvegarde. */
+    if (app->positions_idle != 0) {
+        g_source_remove(app->positions_idle);
+        app->positions_idle = 0;
+    }
     if (app->layout_root != NULL && app->layout != NULL) {
         collect_fractions_walk(app->layout_root, app->layout);
         layout_save(app->layout);
@@ -5704,6 +5783,10 @@ on_settings_activated(GSimpleAction G_GNUC_UNUSED *action,
     /* Marqueur technique, non traduit : c'est par LUI que le harnais
      * CDB_TEST_SETTINGS retrouve cette fenêtre, plus par son titre. */
     g_object_set_data(G_OBJECT(win), "cdb-settings", GINT_TO_POINTER(1));
+    /* Même marqueur que sur la fenêtre principale : le bouton « Enregistrer »
+     * d'un provider retrouve App par sa fenêtre hôte, que Settings soit une
+     * fenêtre (ici) ou une tuile du layout (app->win). */
+    g_object_set_data(G_OBJECT(win), "cdb-app", app);
     gtk_window_set_transient_for(GTK_WINDOW(win), app->win);
     /* NON modale : l'utilisateur peut avoir besoin de copier/coller
      * (clé API, endpoint…) depuis l'éditeur pendant que Settings est
@@ -5953,6 +6036,15 @@ on_activate(GtkApplication *gtk_app, gpointer data)
      * Les gardes rendent l'initialisation idempotente ; si session_init
      * annule on est deja sorti, et l'arret de main() tolere ces champs a
      * NULL (dirty_store_free, llm_core_free, llm_config_free). */
+    /* Le fichier AVANT ses lecteurs : roots_load() et llm_config_load()
+     * lisent tous deux llm.json, et le seed ne doit jamais arriver après
+     * eux. Il ne pose que le catalogue (aucun « active »), donc il ne rend
+     * JAMAIS une config — llm_config_load() renvoie encore NULL sur une
+     * session neuve et la tuile y reste l'aide. Ce qu'il règle est une
+     * forme : des l'instant zero tous les providers sont connus du fichier,
+     * avec une cle vide explicite, et plus aucun provider ne peut «
+     * apparaître » après le démarrage. */
+    llm_config_seed_if_absent();
     if (app->dirty == NULL)
         app->dirty = dirty_store_new();
     if (app->roots == NULL)
@@ -5974,6 +6066,10 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     bash_panel_init(app->roots, app->multi_paths);
 
     app->win = GTK_WINDOW(gtk_application_window_new(gtk_app));
+    /* App rendu à ses widgets : un handler de bouton doit pouvoir rejoindre
+     * la session (llm_cfg, llm_core, layout) sans qu'on achemine App de
+     * signature en signature jusqu'au fond des formulaires Settings. */
+    g_object_set_data(G_OBJECT(app->win), "cdb-app", app);
     gtk_window_set_title(app->win, "CodeDashBoard");
     gtk_window_set_default_size(app->win, 1280, 800);
     window_state_load(app);

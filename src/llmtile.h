@@ -49,6 +49,15 @@ llm_model_chevron_update(GtkWidget *popover, gpointer data);
 void
 llm_model_menu_ensure(LlmTile *t);
 
+/* Repose le latch du menu : llm.json a changé, la liste des fournisseurs et
+ * leurs modèles est périmée. Ne reconstruit rien — ensure() le fera au
+ * prochain ouvert du popover, et il sait déjà le faire. */
+void
+llm_model_menu_invalidate(LlmTile *t);
+
+/* llm_model_menu_invalidate sur TOUTES les vues du core (loi du miroir). */
+void
+llm_views_config_changed(LlmCore *core);
 char *
 llm_persona_load(LlmTile *t);
 
