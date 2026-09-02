@@ -11,7 +11,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-02 15:07-0400\n"
+"POT-Creation-Date: 2026-09-02 18:00-0400\n"
 "PO-Revision-Date: 2026-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -86,7 +86,7 @@ msgstr ""
 msgid "Explorer"
 msgstr ""
 
-#: src/layout.c:361 src/main.c:6352
+#: src/layout.c:361 src/main.c:6366
 msgid "Settings"
 msgstr ""
 
@@ -674,10 +674,10 @@ msgid ""
 "[error: invalid provider URL]\n"
 msgstr ""
 
-#: src/llmcore.c:4909
+#: src/llmcore.c:4911
 msgid ""
-"Éric has REFUSED this tool call. This is not a bug: it is a decision. Adapt "
-"and propose something else."
+"[NAME_USER] has REFUSED this tool call. This is not a bug: it is a decision. "
+"Adapt and propose something else."
 msgstr ""
 
 #: src/llmcore.c:4949 src/llmcore.c:4970
@@ -685,21 +685,21 @@ msgstr ""
 msgid "terminal %s unavailable (bash panel absent?)"
 msgstr ""
 
-#: src/llmcore.c:5142
+#: src/llmcore.c:5144
 msgid ""
-"Runs a shell command in a CDB terminal. The command is submitted to Éric for "
-"approval before execution."
+"Runs a shell command in a CDB terminal. The command is submitted to "
+"[NAME_USER] for approval before execution."
 msgstr ""
 
-#: src/llmcore.c:5161
+#: src/llmcore.c:5169
 msgid "CDB terminal number (0 to 9)."
 msgstr ""
 
-#: src/llmcore.c:5170
+#: src/llmcore.c:5178
 msgid "Full shell command to run."
 msgstr ""
 
-#: src/llmcore.c:5197
+#: src/llmcore.c:5205
 msgid ""
 "Reads an exact range of lines from a text file on disk (absolute path). "
 "from_line/to_line are 1-based, inclusive. Returns the lines and a short hash "
@@ -707,7 +707,7 @@ msgid ""
 "replace."
 msgstr ""
 
-#: src/llmcore.c:5255
+#: src/llmcore.c:5263
 msgid ""
 "Insert text verbatim between two ADJACENT lines of a text file on disk "
 "(absolute path). The model must have read the line before and the line after "
@@ -717,35 +717,35 @@ msgid ""
 "never writes into the editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5284
+#: src/llmcore.c:5292
 msgid "Real line after which to insert; 0 = file head."
 msgstr ""
 
-#: src/llmcore.c:5293
+#: src/llmcore.c:5301
 msgid ""
 "Hash returned by read(before_line,before_line). Omit only when before_line=0 "
 "— giving it at the head of the file is refused."
 msgstr ""
 
-#: src/llmcore.c:5305
+#: src/llmcore.c:5313
 msgid ""
 "Real line before which to insert; equals before_line+1, or 0 to insert at "
 "the end of the file."
 msgstr ""
 
-#: src/llmcore.c:5315
+#: src/llmcore.c:5323
 msgid ""
 "Hash returned by read(after_line,after_line). Omit only when after_line=0 — "
 "giving it at the tail is refused."
 msgstr ""
 
-#: src/llmcore.c:5325
+#: src/llmcore.c:5333
 msgid ""
 "Text inserted verbatim, newlines included. Unlike replace, insert may add "
 "any number of lines."
 msgstr ""
 
-#: src/llmcore.c:5356
+#: src/llmcore.c:5364
 msgid ""
 "Removes n WHOLE lines (from_line..to_line, inclusive, 1-based) from a text "
 "file on disk. Nothing is written, nothing is fused: the lines and their "
@@ -757,27 +757,27 @@ msgid ""
 "following lines shifted. Never touches the editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5395
+#: src/llmcore.c:5403
 msgid "Last line removed, inclusive. Must exist."
 msgstr ""
 
-#: src/llmcore.c:5404 src/llmcore.c:5507
+#: src/llmcore.c:5412 src/llmcore.c:5515
 msgid "Hash of line from_line-1, from read(N,N). Omit when from_line is 1."
 msgstr ""
 
-#: src/llmcore.c:5414
+#: src/llmcore.c:5422
 msgid ""
 "Hash of the block itself, from read(from_line, to_line). This is the proof "
 "you read the very lines you destroy."
 msgstr ""
 
-#: src/llmcore.c:5424
+#: src/llmcore.c:5432
 msgid ""
 "Hash of line to_line+1, from read(N,N). Omit only when the block ends at the "
 "last line — omitting it elsewhere is refused."
 msgstr ""
 
-#: src/llmcore.c:5455
+#: src/llmcore.c:5463
 msgid ""
 "Replaces a block of whole lines (from_line..to_line, inclusive, 1-based) of "
 "a text file on disk, ONE LINE FOR ONE LINE: send exactly as many entries in "
@@ -793,30 +793,30 @@ msgid ""
 "editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5498
+#: src/llmcore.c:5506
 msgid "Last line replaced, inclusive. Must exist."
 msgstr ""
 
-#: src/llmcore.c:5517
+#: src/llmcore.c:5525
 msgid ""
 "Hash of the block itself, from read(from_line, to_line). A refusal never "
 "gives it back: re-read."
 msgstr ""
 
-#: src/llmcore.c:5527
+#: src/llmcore.c:5535
 msgid ""
 "Hash of line to_line+1, from read(N,N). Omit only when the block ends at the "
 "last line."
 msgstr ""
 
-#: src/llmcore.c:5542
+#: src/llmcore.c:5550
 msgid ""
 "The new lines, one element per line, WITHOUT newlines. The count must equal "
 "to_line - from_line + 1 exactly. A single element may be \"\" (an empty "
 "line) but may not contain \\n or \\r."
 msgstr ""
 
-#: src/llmcore.c:5575
+#: src/llmcore.c:5583
 msgid ""
 "Creates a NEW text file on disk (absolute path) with this content verbatim. "
 "Refuses if the file already exists (use replace) and if the parent folder is "
@@ -825,11 +825,11 @@ msgid ""
 "empty file."
 msgstr ""
 
-#: src/llmcore.c:5600
+#: src/llmcore.c:5608
 msgid "Content written verbatim, newlines included. Empty string = empty file."
 msgstr ""
 
-#: src/llmcore.c:5628
+#: src/llmcore.c:5636
 msgid ""
 "Destroys a file on disk (absolute path) in TWO passes. Without file_hash: "
 "deletes NOTHING and returns the file's current fingerprint. With a file_hash "
@@ -837,13 +837,13 @@ msgid ""
 "directories, symlinks and anything that is not a regular file."
 msgstr ""
 
-#: src/llmcore.c:5652
+#: src/llmcore.c:5660
 msgid ""
 "Fingerprint returned by the first delete(path). Omit for the confirmation "
 "request."
 msgstr ""
 
-#: src/llmcore.c:5676
+#: src/llmcore.c:5684
 msgid ""
 "\n"
 "\n"
@@ -949,7 +949,7 @@ msgstr ""
 msgid "Cancel generation"
 msgstr ""
 
-#: src/llmtile.c:802 src/llmtile.c:2490
+#: src/llmtile.c:802 src/llmtile.c:2501
 msgid "Send"
 msgstr ""
 
@@ -1143,7 +1143,7 @@ msgstr ""
 msgid "current chat cleared."
 msgstr ""
 
-#: src/llmtile.c:2004 src/llmtile.c:2522
+#: src/llmtile.c:2004 src/llmtile.c:2533
 msgid "Not saved"
 msgstr ""
 
@@ -1182,7 +1182,7 @@ msgid ""
 "input."
 msgstr ""
 
-#: src/llmtile.c:2403
+#: src/llmtile.c:2414
 msgid ""
 "LLM not configured.\n"
 "\n"
@@ -1191,51 +1191,51 @@ msgid ""
 "below."
 msgstr ""
 
-#: src/llmtile.c:2507
+#: src/llmtile.c:2518
 msgid "View sent JSON…"
 msgstr ""
 
-#: src/llmtile.c:2508
+#: src/llmtile.c:2519
 msgid "Save to a slot…"
 msgstr ""
 
-#: src/llmtile.c:2509
+#: src/llmtile.c:2520
 msgid "Load a slot…"
 msgstr ""
 
-#: src/llmtile.c:2510
+#: src/llmtile.c:2521
 msgid "Clear a slot…"
 msgstr ""
 
-#: src/llmtile.c:2511
+#: src/llmtile.c:2522
 msgid "Clear the current chat…"
 msgstr ""
 
-#: src/llmtile.c:2512
+#: src/llmtile.c:2523
 msgid "Import from a session…"
 msgstr ""
 
-#: src/llmtile.c:2570
+#: src/llmtile.c:2581
 msgid "Active profile"
 msgstr ""
 
-#: src/llmtile.c:2622
+#: src/llmtile.c:2633
 msgid "Select a model…"
 msgstr ""
 
-#: src/llmtile.c:2643
+#: src/llmtile.c:2654
 msgid "Configure…"
 msgstr ""
 
-#: src/llmtile.c:2935
+#: src/llmtile.c:2946
 msgid "(CDB action)"
 msgstr ""
 
-#: src/llmtile.c:2941
+#: src/llmtile.c:2952
 msgid "✔ allowed +"
 msgstr ""
 
-#: src/llmtile.c:2942
+#: src/llmtile.c:2953
 msgid "✔ allowed"
 msgstr ""
 
@@ -1245,7 +1245,7 @@ msgstr ""
 #. is captured). Keep the trailing "+", it names the mode, not
 #. the verdict. Distinct from "✔ executed" (plain ASK) and from
 #. "✔ allowed +" (nobody clicked).
-#: src/llmtile.c:2964
+#: src/llmtile.c:2975
 msgid "✔ executed +"
 msgstr ""
 
@@ -1806,19 +1806,19 @@ msgstr ""
 msgid "CDB: no locale installed for language %s\n"
 msgstr ""
 
-#: src/main.c:6351
+#: src/main.c:6365
 msgid "About CDB"
 msgstr ""
 
-#: src/main.c:6353
+#: src/main.c:6367
 msgid "Exit"
 msgstr ""
 
-#: src/main.c:6377
+#: src/main.c:6391
 msgid "New window"
 msgstr ""
 
-#: src/main.c:6378
+#: src/main.c:6392
 msgid "New session…"
 msgstr ""
 

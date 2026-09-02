@@ -4905,21 +4905,21 @@ llm_cdb_results_flush(LlmCore *c)
 void
 cdb_decision_refuse(LlmCore *c, CdbDecision *d)
 {
-    const char *note =
-        _("Éric has REFUSED this tool call. This is not a bug: "
-          "it is a decision. Adapt and propose something else.");
-
-    if (c == NULL || c->decision != d || d->state != CDB_A_PENDING)
-        return;
+    /* TRANSLATORS: do not translate the [NAME_USER] token — it is
+     * replaced with the configured user name (harness.name_user). */
+    char *note = str_replace_all(
+        _("[NAME_USER] has REFUSED this tool call. This is not a bug: "
+          "it is a decision. Adapt and propose something else."),
+        "[NAME_USER]", c->name_user != NULL ? c->name_user : g_get_user_name());
     d->state = CDB_A_REFUSED;
     for (guint vi = 0; vi < c->views->len; vi++)
         llm_tile_decision_resolve(g_ptr_array_index(c->views, vi),
                                   d->spec->tool_call_id, CDB_A_REFUSED);
-    /* La note d'Éric entre dans la zone output de la boîte rouge : le
+    /* La note du refus entre dans la zone output de la boîte rouge : le
      * refus aussi est une réponse, et elle doit rester lisible dans le
      * fil, pas seulement reçue par le modèle. */
-    core_tool_result_commit(c, d->spec->tool_call_id, note, TRUE);
-    cdb_decision_free(d);
+    core_tool_result_commit(c, d->spec->tool_call_id, note, TRUE); /* history: g_strdup */
+    g_free(note);
     c->decision = NULL;
     llm_cdb_next(c);
 }
@@ -5125,9 +5125,9 @@ llm_cdb_next(LlmCore *c)
     core_sync_buttons(c);
 }
 
-/* Schéma de l'outil bash (canal natif). */
+/* Schéma de l'outil bash (canal natif). name_user : nom de l'humain substitué */
 static void
-tools_schema_cdb_bash(JsonBuilder *builder)
+tools_schema_cdb_bash(JsonBuilder *builder, const char *name_user)
 {
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "type");
@@ -5137,10 +5137,18 @@ tools_schema_cdb_bash(JsonBuilder *builder)
     json_builder_set_member_name(builder, "name");
     json_builder_add_string_value(builder, "bash");
     json_builder_set_member_name(builder, "description");
-    json_builder_add_string_value(
-        builder,
-        _("Runs a shell command in a CDB terminal. The command is "
-          "submitted to Éric for approval before execution."));
+    /* TRANSLATORS: do not translate the [NAME_USER] token — it is
+     * replaced with the configured user name (harness.name_user). */
+    {
+        char *desc = str_replace_all(
+            _("Runs a shell command in a CDB terminal. The command is "
+              "submitted to [NAME_USER] for approval before execution."),
+            "[NAME_USER]",
+            name_user != NULL ? name_user : g_get_user_name());
+
+        json_builder_add_string_value(builder, desc);
+        g_free(desc);
+    }
     json_builder_set_member_name(builder, "parameters");
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "type");
@@ -5778,7 +5786,7 @@ llm_body_build(LlmTile *t)
             json_builder_set_member_name(builder, "tools");
             json_builder_begin_array(builder);
             if (announce_bash)
-                tools_schema_cdb_bash(builder);
+                tools_schema_cdb_bash(builder, t->core != NULL ? t->core->name_user : NULL);
             if (announce_read)
                 tools_schema_cdb_read(builder);
             if (announce_insert)
