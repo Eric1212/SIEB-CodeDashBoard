@@ -1161,6 +1161,107 @@ llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms)
     g_free(path);
 }
 
+/* ------------------------------------------------ */
+/* Noms des acteurs (section Harness)                */
+/* ------------------------------------------------ */
+
+/* Défauts : assistant = "Claude" ; user = login de la session
+ * (« eric » de « eric@Eric-PC »). Un membre absent, vide ou non-chaîne
+ * retombe sur son défaut — jamais sur une chaîne figée. */
+void
+llm_harness_names_load(LlmHarnessNames *out)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+
+    out->assistant = g_strdup(LLM_NAME_ASSISTANT_DEFAULT);
+    out->user = g_strdup(g_get_user_name());
+    if (out->user == NULL || out->user[0] == '\0') {
+        g_free(out->user);
+        out->user = g_strdup("user");
+    }
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        JsonObject *root =
+            json_node_get_object(json_parser_get_root(parser));
+
+        if (root != NULL && json_object_has_member(root, "harness")) {
+            JsonObject *h =
+                json_object_get_object_member(root, "harness");
+            JsonNode *n;
+
+            if (h != NULL && json_object_has_member(h, "name_user")) {
+                n = json_object_get_member(h, "name_user");
+                if (n != NULL && json_node_get_value_type(n) == G_TYPE_STRING &&
+                    json_node_get_string(n)[0] != '\0') {
+                    g_free(out->user);
+                    out->user = g_strdup(json_node_get_string(n));
+                }
+            }
+            if (h != NULL && json_object_has_member(h, "name_assistant")) {
+                n = json_object_get_member(h, "name_assistant");
+                if (n != NULL && json_node_get_value_type(n) == G_TYPE_STRING &&
+                    json_node_get_string(n)[0] != '\0') {
+                    g_free(out->assistant);
+                    out->assistant = g_strdup(json_node_get_string(n));
+                }
+            }
+        }
+    }
+    g_object_unref(parser);
+    g_free(path);
+}
+
+/* Même discipline que les saves retry : relecture du fichier, remplacement
+ * des SEULS membres harness.name_user / harness.name_assistant, écriture.
+ * NULL ou vide : écrit tel quel — le défaut sera appliqué au rechargement. */
+void
+llm_config_save_harness_names(const char *user, const char *assistant)
+{
+    char       *path = llm_config_path();
+    JsonParser *parser = json_parser_new();
+    JsonObject *root;
+    JsonNode   *work = NULL;
+    JsonObject *harness;
+
+    if (json_parser_load_from_file(parser, path, NULL) &&
+        json_parser_get_root(parser) != NULL &&
+        JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+        work = json_node_copy(json_parser_get_root(parser));
+        root = json_node_get_object(work);
+    } else {
+        root = json_object_new();
+        work = json_node_new(JSON_NODE_OBJECT);
+        json_node_take_object(work, root);
+    }
+
+    if (!json_object_has_member(root, "harness") ||
+        json_object_get_object_member(root, "harness") == NULL)
+        json_object_set_object_member(root, "harness",
+                                      json_object_new());
+    harness = json_object_get_object_member(root, "harness");
+    json_object_set_string_member(harness, "name_user",
+                                  user != NULL ? user : "");
+    json_object_set_string_member(harness, "name_assistant",
+                                  assistant != NULL ? assistant : "");
+
+    {
+        gchar  *text = json_to_string(work, TRUE);
+        GError *error = NULL;
+
+        if (!g_file_set_contents(path, text, -1, &error)) {
+            g_printerr(_("CDB: failed to write harness names: %s\n"),
+                       error->message);
+            g_error_free(error);
+        }
+        g_free(text);
+    }
+    json_node_unref(work);
+    g_object_unref(parser);
+    g_free(path);
+}
+
 char **
 llm_config_provider_names(void)
 {
@@ -1644,10 +1745,10 @@ str_replace_all(const char *s, const char *old_s, const char *new_s)
 }
 
 #define LLM_INITPROMPT_DEFAULT /* « Init-Prompt » */ \
-    N_("Hello Claude. I am CodeDashBoard (CDB), an IDE application that "  \
-    "acts as a relay between you and Éric Boucher. Éric hired you for "   \
-    "your skills as a senior programmer in systems, simulation and "      \
-    "video games, and for your work ethic.\n\n"                           \
+    N_("Hello [NAME_ASSISTANT]. I am CodeDashBoard (CDB), an IDE "        \
+    "application that acts as a relay between you and [NAME_USER]. "      \
+    "You were hired by [NAME_USER] for your skills as a senior programmer " \
+    "in systems, simulation and video games, and for your work ethic.\n\n"  \
     "You work exclusively remotely. Your employer never sees you: the "    \
     "whole of your working relationship passes through CDB, which runs "  \
     "on the workstation assigned to you both.\n\n"                        \
@@ -1660,7 +1761,7 @@ str_replace_all(const char *s, const char *old_s, const char *new_s)
     "- command: a complete shell command, written as is.\n"                \
     "- The result is returned in a window of 100000 lines. To page, "     \
     "use head/tail/sed INSIDE the command.\n"                              \
-    "- Every call is submitted to Éric's approval before execution.\n"    \
+    "- Every call is submitted to [NAME_USER]'s approval before execution.\n" \
     "- If a result has content:null, it means there is no new content "   \
     "compared with the previous results of the same terminal: that is "   \
     "not a failure.\n"                                                    \
@@ -5959,6 +6060,15 @@ llm_core_new(LlmConfig *cfg, GListStore *roots,
     c->views = g_ptr_array_new();
     c->answered_tools = g_hash_table_new_full(g_str_hash, g_str_equal,
                                               g_free, NULL);
+    {
+        LlmHarnessNames n;
+
+        /* Noms des acteurs du fil : lus une fois ici, reposés par
+         * Settings → LLM → Harness → Noms (llm_views_names_changed). */
+        llm_harness_names_load(&n);
+        c->name_user = n.user;
+        c->name_assistant = n.assistant;
+    }
     return c;
 }
 
@@ -6011,6 +6121,8 @@ llm_core_free(LlmCore *c)
         g_hash_table_unref(c->answered_tools);
     if (c->views != NULL)
         g_ptr_array_unref(c->views);
+    g_free(c->name_user);
+    g_free(c->name_assistant);
     g_free(c);
     /* La conversation vient de rendre son historique, ses buffers et ses
      * vues — le plus gros lot de petits objets que CDB libère. Ces pages ne

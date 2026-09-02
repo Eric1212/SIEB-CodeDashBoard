@@ -56,6 +56,12 @@ llm_retry5xx_load(LlmRetry5xx *out);
 void
 llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms);
 
+void
+llm_harness_names_load(LlmHarnessNames *out);
+
+void
+llm_config_save_harness_names(const char *user, const char *assistant);
+
 char **
 llm_config_provider_names(void);
 

@@ -162,6 +162,28 @@ typedef struct {
 
 #define LLM_RETRY5XX_DEFAULTS     (LlmRetry5xx){ .retry = TRUE, .max_retries = 120, .delay_ms = 1000 }
 
+/* Noms des deux acteurs du fil LLM, tels qu'affichés dans les en-têtes
+ * (« — eric — », « — Claude — ») et substitués dans l'Init-Prompt par les
+ * jetons [NAME_USER] / [NAME_ASSISTANT]. Membres JSON nommés d'après les
+ * rôles du protocole OpenAI (user/assistant) : harness.name_user,
+ * harness.name_assistant. */
+typedef struct {
+    char *user;       /* « — <user> — » ; défaut : login de la session */
+    char *assistant;  /* « — <assistant> — » ; défaut : "Claude"       */
+} LlmHarnessNames;
+
+#define LLM_NAME_ASSISTANT_DEFAULT "Claude"
+
+/* Charge harness.name_user / harness.name_assistant ; défauts si absents,
+ * vides ou fichier invalide : user = login de la session (g_get_user_name),
+ * assistant = LLM_NAME_ASSISTANT_DEFAULT. Chaînes à libérer (g_free). */
+void llm_harness_names_load(LlmHarnessNames *out);
+
+/* Sauvegarde les deux noms (section harness), le reste de llm.json intact.
+ * Chaîne vide ou NULL : le défaut sera appliqué au prochain
+ * llm_harness_names_load. */
+void llm_config_save_harness_names(const char *user, const char *assistant);
+
 /* Prompt d'initialisation (« Init-Prompt ») :
  * raw = texte brut de prompts/default.txt (fallback défaut intégré),
  * save = écriture (crée les dossiers). Chaînes à libérer. */
@@ -390,6 +412,11 @@ typedef struct {
      * sur boucle vivante afficherait « ▶ » sur une fenêtre dont le bouton
      * est déjà revenu à play. g_new0 : FALSE au départ. */
     gboolean      session_busy;
+    /* Noms des acteurs du fil (« — <nom> — » et jetons [NAME_*] du
+     * prompt) : lus à la création du core, reposés par Settings → LLM →
+     * Harness → Noms. Possédés, libérés à llm_core_free. */
+    char        *name_user;
+    char        *name_assistant;
     LlmConfig    *cfg;
     GListStore   *roots;
     GHashTable   *multi_paths;

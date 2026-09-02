@@ -3739,6 +3739,7 @@ static void on_allowed_models_changed(GtkEditable *editable,
                                       gpointer data);
 static GtkWidget *build_provider_form(const char *provider_name);
 static GtkWidget *build_harness_form(void);
+static GtkWidget *build_names_form(void);
 static GtkWidget *build_tools_form(void);
 static void on_tool_mode_clicked(GtkButton *btn, gpointer data);
 static GtkWidget *build_initprompt_editor(void);
@@ -3787,6 +3788,8 @@ build_settings_section(const SettingsSection *sec)
         body = build_provider_form(sec->id);
     else if (g_strcmp0(sec->id, "Retry on error") == 0)
         body = build_harness_form();
+    else if (g_strcmp0(sec->id, "Names") == 0)
+        body = build_names_form();
     else if (g_strcmp0(sec->id, "Init-Prompt") == 0)
         body = build_initprompt_editor();
     else if (g_strcmp0(sec->id, "Tools") == 0)
@@ -4957,6 +4960,101 @@ build_harness_form(void)
 }
 
 /* ------------------------------------------------ */
+/* Formulaire « Noms » : acteurs du fil LLM          */
+/* ------------------------------------------------ */
+
+typedef struct {
+    GtkWidget *entry_user;
+    GtkWidget *entry_assistant;
+    GtkWidget *status;
+} NamesCtx;
+
+static void
+on_names_save_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
+{
+    NamesCtx  *ctx = data;
+    GtkWidget *w = GTK_WIDGET(btn);
+    GtkWidget *top = gtk_widget_get_ancestor(w, GTK_TYPE_WINDOW);
+    App       *app = (top != NULL)
+                          ? g_object_get_data(G_OBJECT(top), "cdb-app")
+                          : NULL;
+    const char *user = gtk_editable_get_text(
+        GTK_EDITABLE(ctx->entry_user));
+    const char *assistant = gtk_editable_get_text(
+        GTK_EDITABLE(ctx->entry_assistant));
+
+    llm_config_save_harness_names(user, assistant);
+
+    /* Réaliser : le core porte les noms en mémoire (en-têtes du fil et
+     * substitutions du prompt). App remonte par sa fenêtre, comme pour
+     * la clé de provider. Mêmes règles de défaut que le load — un champ
+     * vide retombe sur le login / « Claude ». */
+    if (app != NULL && app->llm_core != NULL) {
+        LlmCore *c = app->llm_core;
+
+        g_free(c->name_user);
+        g_free(c->name_assistant);
+        c->name_user = (user != NULL && user[0] != '\0')
+                           ? g_strdup(user) : g_strdup(g_get_user_name());
+        c->name_assistant = (assistant != NULL && assistant[0] != '\0')
+                                ? g_strdup(assistant)
+                                : g_strdup(LLM_NAME_ASSISTANT_DEFAULT);
+        llm_views_names_changed(c);
+    }
+
+    gtk_label_set_text(GTK_LABEL(ctx->status), _("Saved ✓"));
+    sfx_play_feedback();   /* ding court : les noms des acteurs sont écrits */
+}
+
+static GtkWidget *
+build_names_form(void)
+{
+    NamesCtx        *ctx = g_new0(NamesCtx, 1);
+    GtkWidget       *grid = gtk_grid_new();
+    GtkWidget       *user_lbl = gtk_label_new(_("User name"));
+    GtkWidget       *ass_lbl = gtk_label_new(_("Assistant name"));
+    GtkWidget       *save_btn = gtk_button_new_with_label(_("Save"));
+    LlmHarnessNames  n;
+
+    llm_harness_names_load(&n);
+
+    ctx->status = gtk_label_new("");
+    ctx->entry_user = gtk_entry_new();
+    gtk_editable_set_text(GTK_EDITABLE(ctx->entry_user),
+                          n.user != NULL ? n.user : "");
+    ctx->entry_assistant = gtk_entry_new();
+    gtk_editable_set_text(GTK_EDITABLE(ctx->entry_assistant),
+                          n.assistant != NULL ? n.assistant : "");
+    g_free(n.user);
+    g_free(n.assistant);
+
+    gtk_widget_set_halign(user_lbl, GTK_ALIGN_START);
+    gtk_widget_set_halign(ass_lbl, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(ctx->entry_user, TRUE);
+    gtk_widget_set_hexpand(ctx->entry_assistant, TRUE);
+    gtk_grid_attach(GTK_GRID(grid), user_lbl, 0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), ctx->entry_user, 1, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), ass_lbl, 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), ctx->entry_assistant, 1, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), save_btn, 1, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), ctx->status, 1, 3, 1, 1);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 8);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+
+    gtk_widget_add_css_class(save_btn, "flat");
+    g_signal_connect(save_btn, "clicked",
+                     G_CALLBACK(on_names_save_clicked), ctx);
+    /* Entrée = enregistrer, sur les deux champs. */
+    g_signal_connect(ctx->entry_user, "activate",
+                     G_CALLBACK(on_names_save_clicked), ctx);
+    g_signal_connect(ctx->entry_assistant, "activate",
+                     G_CALLBACK(on_names_save_clicked), ctx);
+
+    g_object_set_data_full(G_OBJECT(grid), "names-ctx-owner", ctx, g_free);
+    return grid;
+}
+
+/* ------------------------------------------------ */
 /* Éditeur « Init-Prompt » (prompt système par session) */
 /* ------------------------------------------------ */
 
@@ -5009,6 +5107,8 @@ build_initprompt_editor(void)
     static const IpSnippet snippets[] = {
         { "[PROJET]", "[PROJET]" },
         { "[CHEMIN]", "[CHEMIN]" },
+        { "[NAME_USER]", "[NAME_USER]" },
+        { "[NAME_ASSISTANT]", "[NAME_ASSISTANT]" },
     };
     InitPromptCtx *ctx = g_new0(InitPromptCtx, 1);
     GtkWidget     *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
@@ -5223,6 +5323,7 @@ build_settings(App *app G_GNUC_UNUSED)
     };
     static const SettingsSection harness_subs[] = {
         { "Retry on error", N_("Retry on error"), NULL, NULL, 0 },  /* formulaire retry */
+        { "Names",          N_("Names"),          NULL, NULL, 0 },  /* noms des acteurs du fil */
         { "Init-Prompt",    N_("Init-Prompt"),    NULL, NULL, 0 },  /* éditeur du prompt système */
     };
     static const SettingsSection llm_subs[] = {
@@ -6208,6 +6309,20 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     if (app->llm_core == NULL)
         app->llm_core = llm_core_new(app->llm_cfg, app->roots,
                                      app->multi_paths);
+
+    /* Un core qui part SANS config (provider jamais réglé) ne portait
+     * aucun nom d'acteur : les en-têtes du fil retombaient sur les
+     * défauts au lieu des noms édités. Le fichier est écrit dès le seed
+     * — on relit ici pour que les noms suivent au premier démarrage. */
+    {
+        LlmHarnessNames n;
+
+        llm_harness_names_load(&n);
+        g_free(app->llm_core->name_user);
+        g_free(app->llm_core->name_assistant);
+        app->llm_core->name_user = n.user;
+        app->llm_core->name_assistant = n.assistant;
+    }
 
     /* Live (C5) : APRES session_init — le numéro de session
      * fixe le dossier de llm_live.json. */

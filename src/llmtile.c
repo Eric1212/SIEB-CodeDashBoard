@@ -633,7 +633,8 @@ llm_persona_load(LlmTile *t)
     char *raw = llm_persona_raw();
     char *proj_path;
     char *proj_name;
-    char *s1, *s2;
+    char *s1, *s2, *s3, *s4;
+    const char *uname, *aname;
 
     /* Priorité : CDB_TEST_PROJET > projet sélectionné > cwd. */
     proj_path = g_strdup(g_getenv("CDB_TEST_PROJET"));
@@ -643,13 +644,22 @@ llm_persona_load(LlmTile *t)
         proj_path = g_get_current_dir();
 
     proj_name = g_path_get_basename(proj_path);
+    /* Noms des acteurs : mêmes sources que les en-têtes du fil. */
+    uname = t->core != NULL && t->core->name_user != NULL
+                ? t->core->name_user : g_get_user_name();
+    aname = t->core != NULL && t->core->name_assistant != NULL
+                ? t->core->name_assistant : LLM_NAME_ASSISTANT_DEFAULT;
     s1 = str_replace_all(raw, "[PROJET]", proj_name);
     s2 = str_replace_all(s1, "[CHEMIN]", proj_path);
+    s3 = str_replace_all(s2, "[NAME_USER]", uname);
+    s4 = str_replace_all(s3, "[NAME_ASSISTANT]", aname);
     g_free(raw);
     g_free(s1);
+    g_free(s2);
+    g_free(s3);
     g_free(proj_name);
     g_free(proj_path);
-    return s2;
+    return s4;
 }
 
 void
@@ -670,25 +680,35 @@ void
 hist_render_actor_header(LlmTile *t, LlmActor actor)
 {
     GtkTextIter end;
-    const char *label;
+    const char *name;
+    char        *line;
 
     hist_ensure_voice_tags(t);
     gtk_text_buffer_get_end_iter(t->hist, &end);
 
     switch (actor) {
     case LLMACTOR_USER:
-        label = "\n— Éric —\n";
-        gtk_text_buffer_insert(t->hist, &end, label, -1);
+        name = t->core != NULL ? t->core->name_user : NULL;
+        if (name == NULL)
+            name = g_get_user_name();
+        line = g_strdup_printf("\n— %s —\n", name);
+        gtk_text_buffer_insert(t->hist, &end, line, -1);
+        g_free(line);
         break;
     case LLMACTOR_LLM:
-        label = "\n— Claude —\n";
-        gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, label, -1,
+        name = t->core != NULL ? t->core->name_assistant : NULL;
+        if (name == NULL)
+            name = LLM_NAME_ASSISTANT_DEFAULT;
+        line = g_strdup_printf("\n— %s —\n", name);
+        gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, line, -1,
                                                  "voice-sep", NULL);
+        g_free(line);
         break;
     case LLMACTOR_CDB:
-        label = "\n— CDB · local —\n";
-        gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, label, -1,
+        line = g_strdup("\n— CDB · local —\n");
+        gtk_text_buffer_insert_with_tags_by_name(t->hist, &end, line, -1,
                                                  "voice-cdb", NULL);
+        g_free(line);
         break;
     }
 }
@@ -2241,6 +2261,11 @@ llm_tile_replay_history(LlmTile *t)
     if (c == NULL)
         return;
 
+    /* Vide d'abord : l'appel initial (buffer neuf) ne voit rien, mais le
+     * re-rendu après un renommage (llm_views_names_changed) doit partir
+     * de zéro — sinon les vieux en-têtes se doublent. */
+    gtk_text_buffer_set_text(t->hist, "", -1);
+
     for (guint i = 0; i < c->history->len; i++) {
         LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
 
@@ -2300,6 +2325,33 @@ llm_tile_replay_history(LlmTile *t)
     llm_scroll_to_end(t);
 }
 
+/* Les noms des acteurs ont changé (Settings → LLM → Harness → Noms) :
+ * chaque vue vide et rejoue l'historique — les en-têtes « — <nom> — »
+ * déjà rendus doivent suivre le renommage, comme tout le reste du
+ * miroir. */
+static void
+llm_views_names_changed_tile(LlmTile *t)
+{
+    /* Replay après renommage : le mark de réponse et la boîte de décision
+     * pointaient dans l'ancien buffer vidé — refaits au fil du rejouet. */
+    if (t->reply_mark != NULL) {
+        gtk_text_buffer_delete_mark(t->hist, t->reply_mark);
+        t->reply_mark = NULL;
+    }
+    llm_tile_replay_history(t);
+}
+
+void
+llm_views_names_changed(LlmCore *core)
+{
+    if (core == NULL || core->views == NULL)
+        return;
+    for (guint i = 0; i < core->views->len; i++) {
+        LlmTile *v = g_ptr_array_index(core->views, i);
+
+        llm_views_names_changed_tile(v);
+    }
+}
 
 /* ----- largeur des boîtes interactives -------------------------------- */
 

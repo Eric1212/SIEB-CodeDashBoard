@@ -58,6 +58,12 @@ llm_model_menu_invalidate(LlmTile *t);
 /* llm_model_menu_invalidate sur TOUTES les vues du core (loi du miroir). */
 void
 llm_views_config_changed(LlmCore *core);
+
+/* Les noms des acteurs ont changé (Settings → Noms) : chaque vue vide et
+ * rejoue l'historique pour que les en-têtes « — <nom> — » déjà rendus
+ * suivent le renommage (loi du miroir). */
+void
+llm_views_names_changed(LlmCore *core);
 char *
 llm_persona_load(LlmTile *t);
 
