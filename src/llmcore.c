@@ -144,9 +144,10 @@ static const struct {
     const char *name;
     const char *url;
 } LLM_PROVIDERS[] = {
-    { "OpenRouter", "https://openrouter.ai/api/v1"      },
-    { "OpenCode",   "https://opencode.ai/zen/v1"        },
-    { "HyperCharm", "https://hyper.charm.land/v1"       },
+    { "OpenRouter",  "https://openrouter.ai/api/v1"    },
+    { "OpenCode",    "https://opencode.ai/zen/v1"      },
+    { "HyperCharm",  "https://hyper.charm.land/v1"     },
+    { "KiloGateway", "https://api.kilo.ai/api/gateway" },
 };
 
 /* URL de base d'un provider connu ; NULL si inconnu. */

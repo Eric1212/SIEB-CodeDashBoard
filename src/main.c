@@ -3780,14 +3780,10 @@ build_settings_section(const SettingsSection *sec)
                      G_CALLBACK(on_settings_section_toggled), NULL);
 
     /* Corps : formulaire provider, sous-accordéons, ou placeholder.
-     * Dispatch sur sec->id (clé technique), JAMAIS sur sec->title : le titre
-     * est affichable donc traduisible, et une comparaison sur lui choisirait
-     * un autre formulaire — ou aucun — dès qu'une langue le renommerait. */
-    if (g_strcmp0(sec->id, "OpenRouter") == 0)
-        body = build_provider_form(sec->id);
-    else if (g_strcmp0(sec->id, "OpenCode") == 0)
-        body = build_provider_form(sec->id);
-    else if (g_strcmp0(sec->id, "HyperCharm") == 0)
+     * « Est un provider » se lit au catalogue (LLM_PROVIDERS), pas à une
+     * liste de noms : ajouter un provider ne fait plus toucher ce fichier.
+     * Le test porte sur sec->id, jamais le titre, qui est traduisible. */
+    if (llm_provider_default_url(sec->id) != NULL)
         body = build_provider_form(sec->id);
     else if (g_strcmp0(sec->id, "Retry on error") == 0)
         body = build_harness_form();
@@ -5135,10 +5131,11 @@ build_provider_form(const char *provider_name)
     gtk_widget_set_halign(model_lbl, GTK_ALIGN_START);
     gtk_widget_set_hexpand(key_entry, TRUE);
     gtk_widget_set_hexpand(model_entry, TRUE);
-    /* La clé est un secret : affichage masqué. OpenCode Zen marche
-     * SANS clé (placeholder différent). */
+    /* La clé est un secret : affichage masqué. OpenCode Zen et KiloGateway
+     * marchent SANS clé — liste à classer au catalogue si un 3e arrive. */
     gtk_entry_set_visibility(GTK_ENTRY(key_entry), FALSE);
-    if (g_strcmp0(provider_name, "OpenCode") == 0) {
+    if (g_strcmp0(provider_name, "OpenCode") == 0 ||
+        g_strcmp0(provider_name, "KiloGateway") == 0) {
         gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry),
                                        _("(optional)"));
         gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
@@ -5220,6 +5217,7 @@ build_settings(App *app G_GNUC_UNUSED)
     static const SettingsSection provider_subs[] = {
         { "OpenAi-Compatible", "OpenAi-Compatible", N_("(to come: endpoint, model, API key…)"), NULL, 0 },
         { "HyperCharm", "HyperCharm", NULL, NULL, 0 },   /* formulaire provider */
+        { "KiloGateway", "KiloGateway", NULL, NULL, 0 }, /* formulaire provider */
         { "OpenCode",   "OpenCode",   NULL, NULL, 0 },   /* formulaire provider */
         { "OpenRouter", "OpenRouter", NULL, NULL, 0 },   /* formulaire provider */
     };
