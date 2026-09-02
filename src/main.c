@@ -2702,6 +2702,43 @@ on_theme_notify(GObject G_GNUC_UNUSED *obj, GParamSpec G_GNUC_UNUSED *pspec, gpo
     update_style_scheme((App *)data);
 }
 
+/* La bascule manuelle d'Éric (1er septembre) : le thème se CHOISIT, il ne se
+ * devine plus. Trois états, deux seulement à l'écran :
+ *
+ *   clé absente ....... ADW_COLOR_SCHEME_DEFAULT — AdwStyleManager obéit au
+ *                       portail freedesktop, comportement d'avant la bascule,
+ *                       intact pour toute session qui n'a jamais cliqué.
+ *   "dark" / "light" .. FORCE_DARK / FORCE_LIGHT — le poste ne commande plus,
+ *                       ni maintenant ni aux redémarrages.
+ *
+ * Rien n'est écrit au démarrage, rien n'est écrit à l'ouverture du panneau :
+ * la clé ne naît que du premier clic. Une valeur inconnue (fichier édité à la
+ * main, thème d'un futur qui n'est pas celui-là) ne force rien et rend la main
+ * au portail — choisir le sombre « par défaut » inventerait un choix que
+ * personne n'a fait.
+ *
+ * Pas d'appel à update_style_scheme() ici : set_color_scheme fait bouger la
+ * propriété « dark », notify::dark est branché au démarrage, et c'est par ce
+ * seul chemin que le schéma GtkSourceView suit. Le rappeler ferait deux points
+ * de peinture — et deux points de peinture finissent par diverger (loi du
+ * chronomètre LLM, même cause). */
+static void
+theme_apply(void)
+{
+    AdwStyleManager *style_mgr = adw_style_manager_get_default();
+    char            *want      = layout_pref_get("theme");
+    AdwColorScheme   scheme    = ADW_COLOR_SCHEME_DEFAULT;
+
+    if (want != NULL) {
+        if (g_strcmp0(want, "dark") == 0)
+            scheme = ADW_COLOR_SCHEME_FORCE_DARK;
+        else if (g_strcmp0(want, "light") == 0)
+            scheme = ADW_COLOR_SCHEME_FORCE_LIGHT;
+    }
+    g_free(want);
+    adw_style_manager_set_color_scheme(style_mgr, scheme);
+}
+
 /* ------------------------------------------------------------------ */
 /* Recherche / remplacement (Ctrl+F / Ctrl+H)                          */
 /* ------------------------------------------------------------------ */
@@ -3707,6 +3744,7 @@ static void on_tool_mode_clicked(GtkButton *btn, gpointer data);
 static GtkWidget *build_initprompt_editor(void);
 static GtkWidget *build_language_form(void);
 static GtkWidget *build_sounds_form(void);
+static GtkWidget *build_theme_form(void);
 
 static GtkWidget *
 build_settings_section(const SettingsSection *sec)
@@ -3761,6 +3799,8 @@ build_settings_section(const SettingsSection *sec)
         body = build_language_form();
     else if (g_strcmp0(sec->id, "Sounds") == 0)
         body = build_sounds_form();
+    else if (g_strcmp0(sec->id, "Theme") == 0)
+        body = build_theme_form();
     else if (sec->subs != NULL && sec->n_subs > 0) {
         body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_widget_set_margin_start(body, 16);
@@ -4549,6 +4589,115 @@ language_add_row(GtkWidget *grid, int row, const char *code,
     gtk_grid_attach(GTK_GRID(grid), b, 0, row, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), mark, 1, row, 1, 1);
 }
+
+/* ------------------------------------------------ */
+/* Thème : la bascule manuelle dark / clair           */
+/* ------------------------------------------------ */
+
+/* Le marqueur de la ligne en vigueur se pose dans sa PROPRE colonne, pas sur
+ * la teinte du libellé : c'est la loi de CLAUDE.md, née du menu des langues où
+ * « suggested-action » sur un bouton plat ne peint aucun fond — deux lignes
+ * strictement identiques à l'écran, et l'utilisateur ne savait pas laquelle il
+ * lisait. La classe n'est PAS reprise ici : invisible sur un bouton plat, la
+ * recopier serait un ornement qui ne peint rien mais qu'un lecteur futur croira
+ * utile. Le crochet vide occupe sa colonne en permanence, sinon les libellés
+ * se décalent d'un clic à l'autre.
+ *
+ * La marque suit l'état EFFECTIF (adw_style_manager_get_dark) et non la clé :
+ * tant que personne n'a cliqué, la clé est absente et c'est le portail qui a
+ * répondu — le crochet se pose donc sur le thème que l'utilisateur a sous les
+ * yeux, sans écrire quoi que ce soit pour le lui voler. */
+static void
+theme_form_mark(GtkWidget *grid)
+{
+    const char *effect = adw_style_manager_get_dark(adw_style_manager_get_default())
+                             ? "dark" : "light";
+    int         row;
+
+    for (row = 0; row < 8; row++) {
+        GtkWidget  *w     = gtk_grid_get_child_at(GTK_GRID(grid), 0, row);
+        const char *value;
+        GtkWidget  *mark;
+
+        if (w == NULL)
+            break;
+        value = g_object_get_data(G_OBJECT(w), "theme-value");
+        if (value == NULL)
+            continue;                       /* l'étiquette de note, colonne 0 */
+        mark = g_object_get_data(G_OBJECT(w), "theme-mark");
+        if (mark != NULL)
+            gtk_label_set_text(GTK_LABEL(mark),
+                               strcmp(value, effect) == 0 ? "✓" : "");
+    }
+}
+
+static void
+on_theme_clicked(GtkButton *btn, gpointer grid)
+{
+    const char *value = g_object_get_data(G_OBJECT(btn), "theme-value");
+
+    if (value == NULL)
+        return;
+    /* Écrire, puis appliquer, puis revêtir : dans cet ordre, le crochet que
+     * pose theme_form_mark est celui de la clé relue, pas celui qu'on croit
+     * avoir posé. theme_apply() fait bouger « dark », notify::dark est branché
+     * au démarrage, et c'est par lui seul que le schéma de l'éditeur suit. */
+    layout_pref_set("theme", value);
+    theme_apply();
+    theme_form_mark(GTK_WIDGET(grid));
+    sfx_play_feedback();   /* un choix qui se confirme, comme la langue */
+}
+
+static void
+theme_add_row(GtkWidget *grid, int row, const char *value, const char *label)
+{
+    GtkWidget *b    = gtk_button_new_with_label(label);
+    GtkWidget *mark = gtk_label_new("");
+
+    gtk_widget_add_css_class(b, "flat");
+    gtk_widget_set_halign(b, GTK_ALIGN_START);
+    gtk_widget_add_css_class(mark, "success");
+    gtk_widget_set_halign(mark, GTK_ALIGN_START);
+    gtk_widget_set_valign(mark, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text(mark, _("current theme"));
+    /* « ✓ » n'est pas marqué _() : un signe, pas une phrase (CLAUDE.md). */
+    g_object_set_data_full(G_OBJECT(b), "theme-value",
+                           g_strdup(value), g_free);
+    g_object_set_data(G_OBJECT(b), "theme-mark", mark);
+    g_signal_connect(b, "clicked", G_CALLBACK(on_theme_clicked), grid);
+    gtk_grid_attach(GTK_GRID(grid), b, 0, row, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), mark, 1, row, 1, 1);
+}
+
+static GtkWidget *
+build_theme_form(void)
+{
+    GtkWidget *grid = gtk_grid_new();
+    GtkWidget *note;
+
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 4);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+    gtk_widget_set_margin_start(grid, 24);
+    gtk_widget_set_margin_top(grid, 12);
+    gtk_widget_set_margin_bottom(grid, 12);
+
+    /* Deux lignes, pas trois : la bascule est manuelle, le suivi système
+     * n'est plus proposé. Revenir au portail se fait en retirant la clé de
+     * layout.json — layout_pref_set(key, NULL) le sait déjà faire. */
+    theme_add_row(grid, 0, "light", _("Light"));
+    theme_add_row(grid, 1, "dark",  _("Dark"));
+
+    note = gtk_label_new(_("The choice applies at once and survives restarts: "
+                           "the system's light/dark setting no longer rules."));
+    gtk_label_set_wrap(GTK_LABEL(note), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(note), 0.0);
+    gtk_widget_add_css_class(note, "dim-label");
+    gtk_grid_attach(GTK_GRID(grid), note, 0, 2, 2, 1);
+
+    theme_form_mark(grid);
+    return grid;
+}
+
 /* ------------------------------------------------ */
 /* Sons : les deux interruptions sonores              */
 /* ------------------------------------------------ */
@@ -5083,15 +5232,16 @@ build_settings(App *app G_GNUC_UNUSED)
         { "Tools",     N_("Tools"),     NULL, NULL, 0 },  /* formulaire outils */
         { "Providers", N_("Providers"), NULL, provider_subs, G_N_ELEMENTS(provider_subs) },
     };
-    /* Général prend le même motif repliable que LLM : deux sous-accordéons
-     * (Language, Sounds), et sa note « à venir » portée par le parent au-
-     * dessus des enfants — build_settings_section sait faire les deux. */
+    /* Général prend le même motif repliable que LLM : trois sous-accordéons
+     * (Theme, Language, Sounds). La note « à venir » du parent est retirée :
+     * elle promettait le thème. Font et indentation reviendront en accordéons. */
     static const SettingsSection general_subs[] = {
+        { "Theme",    N_("Theme"),    NULL, NULL, 0 },  /* formulaire thème  */
         { "Language", N_("Language"), NULL, NULL, 0 },  /* formulaire langue */
         { "Sounds",   N_("Sounds"),   NULL, NULL, 0 },  /* formulaire sons   */
     };
     static const SettingsSection sections[] = {
-        { "General",    N_("General"),    N_("(to come: theme, font, indentation…)"), general_subs, G_N_ELEMENTS(general_subs) },
+        { "General",    N_("General"),    NULL, general_subs, G_N_ELEMENTS(general_subs) },
         { "GitHub/Git", "GitHub/Git",     N_("(to come: token, user, repo defaults…)"), NULL, 0 },
         { "LLM",        N_("LLM"),        NULL, llm_subs, G_N_ELEMENTS(llm_subs) },
     };
@@ -6246,8 +6396,16 @@ on_activate(GtkApplication *gtk_app, gpointer data)
     /* Moitié/moitié (fractions persistées) au premier affichage. */
     g_signal_connect(app->win, "map", G_CALLBACK(on_first_map), app);
 
-    /* Suivi du thème clair/sombre système : AdwStyleManager suit
-     * automatiquement color-scheme (via le portal), on écoute son état. */
+    /* Thème : la préférence manuelle d'Éric passe avant le portail. Sans clé
+     * « theme » dans layout.json, theme_apply() ne force rien et
+     * AdwStyleManager continue d'obéir au portal freedesktop — le comportement
+     * d'avant la bascule, intact pour toute session qui n'a jamais cliqué.
+     * Appelé AVANT de brancher notify::dark : forcer le schéma émet ce signal,
+     * et le brancher après évite de peindre deux fois le schéma de l'éditeur. */
+    theme_apply();
+
+    /* Suivi du thème : AdwStyleManager obéit au portal (color-scheme) tant que
+     * la clé « theme » est absente. On écoute son état — un seul point. */
     style_mgr = adw_style_manager_get_default();
     g_signal_connect(style_mgr, "notify::dark",
                      G_CALLBACK(on_theme_notify), app);

@@ -11,7 +11,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-01 17:44-0400\n"
+"POT-Creation-Date: 2026-09-01 20:12-0400\n"
 "PO-Revision-Date: 2026-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -86,7 +86,7 @@ msgstr ""
 msgid "Explorer"
 msgstr ""
 
-#: src/layout.c:361 src/main.c:6103
+#: src/layout.c:361 src/main.c:6253
 msgid "Settings"
 msgstr ""
 
@@ -680,21 +680,21 @@ msgstr ""
 msgid "terminal %s unavailable (bash panel absent?)"
 msgstr ""
 
-#: src/llmcore.c:5039
+#: src/llmcore.c:5040
 msgid ""
 "Runs a shell command in a CDB terminal. The command is submitted to Éric for "
 "approval before execution."
 msgstr ""
 
-#: src/llmcore.c:5058
+#: src/llmcore.c:5059
 msgid "CDB terminal number (0 to 9)."
 msgstr ""
 
-#: src/llmcore.c:5067
+#: src/llmcore.c:5068
 msgid "Full shell command to run."
 msgstr ""
 
-#: src/llmcore.c:5094
+#: src/llmcore.c:5095
 msgid ""
 "Reads an exact range of lines from a text file on disk (absolute path). "
 "from_line/to_line are 1-based, inclusive. Returns the lines and a short hash "
@@ -702,7 +702,7 @@ msgid ""
 "replace."
 msgstr ""
 
-#: src/llmcore.c:5152
+#: src/llmcore.c:5153
 msgid ""
 "Insert text verbatim between two ADJACENT lines of a text file on disk "
 "(absolute path). The model must have read the line before and the line after "
@@ -712,35 +712,35 @@ msgid ""
 "never writes into the editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5181
+#: src/llmcore.c:5182
 msgid "Real line after which to insert; 0 = file head."
 msgstr ""
 
-#: src/llmcore.c:5190
+#: src/llmcore.c:5191
 msgid ""
 "Hash returned by read(before_line,before_line). Omit only when before_line=0 "
 "— giving it at the head of the file is refused."
 msgstr ""
 
-#: src/llmcore.c:5202
+#: src/llmcore.c:5203
 msgid ""
 "Real line before which to insert; equals before_line+1, or 0 to insert at "
 "the end of the file."
 msgstr ""
 
-#: src/llmcore.c:5212
+#: src/llmcore.c:5213
 msgid ""
 "Hash returned by read(after_line,after_line). Omit only when after_line=0 — "
 "giving it at the tail is refused."
 msgstr ""
 
-#: src/llmcore.c:5222
+#: src/llmcore.c:5223
 msgid ""
 "Text inserted verbatim, newlines included. Unlike replace, insert may add "
 "any number of lines."
 msgstr ""
 
-#: src/llmcore.c:5253
+#: src/llmcore.c:5254
 msgid ""
 "Removes n WHOLE lines (from_line..to_line, inclusive, 1-based) from a text "
 "file on disk. Nothing is written, nothing is fused: the lines and their "
@@ -752,27 +752,27 @@ msgid ""
 "following lines shifted. Never touches the editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5292
+#: src/llmcore.c:5293
 msgid "Last line removed, inclusive. Must exist."
 msgstr ""
 
-#: src/llmcore.c:5301 src/llmcore.c:5404
+#: src/llmcore.c:5302 src/llmcore.c:5405
 msgid "Hash of line from_line-1, from read(N,N). Omit when from_line is 1."
 msgstr ""
 
-#: src/llmcore.c:5311
+#: src/llmcore.c:5312
 msgid ""
 "Hash of the block itself, from read(from_line, to_line). This is the proof "
 "you read the very lines you destroy."
 msgstr ""
 
-#: src/llmcore.c:5321
+#: src/llmcore.c:5322
 msgid ""
 "Hash of line to_line+1, from read(N,N). Omit only when the block ends at the "
 "last line — omitting it elsewhere is refused."
 msgstr ""
 
-#: src/llmcore.c:5352
+#: src/llmcore.c:5353
 msgid ""
 "Replaces a block of whole lines (from_line..to_line, inclusive, 1-based) of "
 "a text file on disk, ONE LINE FOR ONE LINE: send exactly as many entries in "
@@ -788,30 +788,30 @@ msgid ""
 "editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5395
+#: src/llmcore.c:5396
 msgid "Last line replaced, inclusive. Must exist."
 msgstr ""
 
-#: src/llmcore.c:5414
+#: src/llmcore.c:5415
 msgid ""
 "Hash of the block itself, from read(from_line, to_line). A refusal never "
 "gives it back: re-read."
 msgstr ""
 
-#: src/llmcore.c:5424
+#: src/llmcore.c:5425
 msgid ""
 "Hash of line to_line+1, from read(N,N). Omit only when the block ends at the "
 "last line."
 msgstr ""
 
-#: src/llmcore.c:5439
+#: src/llmcore.c:5440
 msgid ""
 "The new lines, one element per line, WITHOUT newlines. The count must equal "
 "to_line - from_line + 1 exactly. A single element may be \"\" (an empty "
 "line) but may not contain \\n or \\r."
 msgstr ""
 
-#: src/llmcore.c:5472
+#: src/llmcore.c:5473
 msgid ""
 "Creates a NEW text file on disk (absolute path) with this content verbatim. "
 "Refuses if the file already exists (use replace) and if the parent folder is "
@@ -820,11 +820,11 @@ msgid ""
 "empty file."
 msgstr ""
 
-#: src/llmcore.c:5497
+#: src/llmcore.c:5498
 msgid "Content written verbatim, newlines included. Empty string = empty file."
 msgstr ""
 
-#: src/llmcore.c:5525
+#: src/llmcore.c:5526
 msgid ""
 "Destroys a file on disk (absolute path) in TWO passes. Without file_hash: "
 "deletes NOTHING and returns the file's current fingerprint. With a file_hash "
@@ -832,13 +832,13 @@ msgid ""
 "directories, symlinks and anything that is not a regular file."
 msgstr ""
 
-#: src/llmcore.c:5549
+#: src/llmcore.c:5550
 msgid ""
 "Fingerprint returned by the first delete(path). Omit for the confirmation "
 "request."
 msgstr ""
 
-#: src/llmcore.c:5573
+#: src/llmcore.c:5574
 msgid ""
 "\n"
 "\n"
@@ -953,7 +953,7 @@ msgstr ""
 msgid "image paste failed: %s"
 msgstr ""
 
-#: src/llmtile.c:1101 src/main.c:3139
+#: src/llmtile.c:1101 src/main.c:3176
 msgid "unknown error"
 msgstr ""
 
@@ -1530,260 +1530,278 @@ msgstr ""
 msgid "CDB: style scheme = %s (dark=%d)\n"
 msgstr ""
 
-#: src/main.c:3138 src/main.c:3191
+#: src/main.c:3175 src/main.c:3228
 #, c-format
 msgid "Replace failed: %s\n"
 msgstr ""
 
-#: src/main.c:3331
+#: src/main.c:3368
 msgid "Find"
 msgstr ""
 
-#: src/main.c:3342
+#: src/main.c:3379
 msgid "Find the previous match"
 msgstr ""
 
-#: src/main.c:3347
+#: src/main.c:3384
 msgid "Find the next match"
 msgstr ""
 
-#: src/main.c:3360
+#: src/main.c:3397
 msgid "Match case"
 msgstr ""
 
-#: src/main.c:3368
+#: src/main.c:3405
 msgid "Show replace options"
 msgstr ""
 
-#: src/main.c:3375
+#: src/main.c:3412
 msgid "Replace with"
 msgstr ""
 
-#: src/main.c:3379
+#: src/main.c:3416
 msgid "Replace"
 msgstr ""
 
-#: src/main.c:3383
+#: src/main.c:3420
 msgid "Replace all"
 msgstr ""
 
-#: src/main.c:3868 src/main.c:4851
+#: src/main.c:3908 src/main.c:5000
 msgid "Saved ✓"
 msgstr ""
 
-#: src/main.c:4330
+#: src/main.c:4370
 msgid "Tool"
 msgstr ""
 
-#: src/main.c:4395
+#: src/main.c:4435
 msgid ""
 "Applied at once to everything created from now on: new tiles, dialogs, and "
 "what CDB sends to the model. Screens already open keep their language."
 msgstr ""
 
-#: src/main.c:4496
+#: src/main.c:4536
 msgid ""
 "No locale is installed for this language. Install it (locale-gen), then "
 "restart CDB."
 msgstr ""
 
-#: src/main.c:4533
+#: src/main.c:4573
 msgid "current language"
 msgstr ""
 
-#: src/main.c:4611
+#: src/main.c:4662
+msgid "current theme"
+msgstr ""
+
+#: src/main.c:4687
+msgid "Light"
+msgstr ""
+
+#: src/main.c:4688
+msgid "Dark"
+msgstr ""
+
+#: src/main.c:4690
+msgid ""
+"The choice applies at once and survives restarts: the system's light/dark "
+"setting no longer rules."
+msgstr ""
+
+#: src/main.c:4760
 msgid "Play this sound"
 msgstr ""
 
-#: src/main.c:4652
+#: src/main.c:4801
 #, c-format
 msgid "%s (system)"
 msgstr ""
 
-#: src/main.c:4690
+#: src/main.c:4839
 msgid "End-of-turn sound (when the wait ends):"
 msgstr ""
 
-#: src/main.c:4695
+#: src/main.c:4844
 msgid "Change sound (a choice, a save):"
 msgstr ""
 
-#: src/main.c:4700
+#: src/main.c:4849
 msgid ""
 "▶ plays the sound as a test, even when the switch is off. Silent if no audio "
 "player is installed."
 msgstr ""
 
-#: src/main.c:4715
+#: src/main.c:4864
 msgid "Retry on HTTP 429:"
 msgstr ""
 
-#: src/main.c:4717 src/main.c:4725
+#: src/main.c:4866 src/main.c:4874
 msgid "Retries (0 = infinite):"
 msgstr ""
 
-#: src/main.c:4718 src/main.c:4726
+#: src/main.c:4867 src/main.c:4875
 msgid "Delay between attempts (ms):"
 msgstr ""
 
-#: src/main.c:4723
+#: src/main.c:4872
 msgid "Retry on HTTP 5xx:"
 msgstr ""
 
-#: src/main.c:4901
+#: src/main.c:5050
 #, c-format
 msgid "CDB: Init-Prompt scheme=%s found=%d\n"
 msgstr ""
 
-#: src/main.c:4946 src/main.c:4982
+#: src/main.c:5095 src/main.c:5131
 msgid "Save"
 msgstr ""
 
-#: src/main.c:4978
+#: src/main.c:5127
 msgid "API key:"
 msgstr ""
 
-#: src/main.c:4980
+#: src/main.c:5129
 msgid "Allowed models:"
 msgstr ""
 
-#: src/main.c:4994
+#: src/main.c:5143
 msgid "(optional)"
 msgstr ""
 
-#: src/main.c:4996 src/main.c:5001 src/main.c:5005
+#: src/main.c:5145 src/main.c:5150 src/main.c:5154
 msgid "(empty: all models)"
 msgstr ""
 
-#: src/main.c:4999
+#: src/main.c:5148
 msgid "HyperCharm key…"
 msgstr ""
 
-#: src/main.c:5072
+#: src/main.c:5221
 msgid "(to come: endpoint, model, API key…)"
 msgstr ""
 
-#: src/main.c:5078
+#: src/main.c:5227
 msgid "Retry on error"
 msgstr ""
 
-#: src/main.c:5079
+#: src/main.c:5228
 msgid "Init-Prompt"
 msgstr ""
 
-#: src/main.c:5082
+#: src/main.c:5231
 msgid "Harness"
 msgstr ""
 
-#: src/main.c:5083
+#: src/main.c:5232
 msgid "Tools"
 msgstr ""
 
-#: src/main.c:5084
+#: src/main.c:5233
 msgid "Providers"
 msgstr ""
 
-#: src/main.c:5090
+#: src/main.c:5239
+msgid "Theme"
+msgstr ""
+
+#: src/main.c:5240
 msgid "Language"
 msgstr ""
 
-#: src/main.c:5091
+#: src/main.c:5241
 msgid "Sounds"
 msgstr ""
 
-#: src/main.c:5094
+#: src/main.c:5244
 msgid "General"
 msgstr ""
 
-#: src/main.c:5094
-msgid "(to come: theme, font, indentation…)"
-msgstr ""
-
-#: src/main.c:5095
+#: src/main.c:5245
 msgid "(to come: token, user, repo defaults…)"
 msgstr ""
 
-#: src/main.c:5096
+#: src/main.c:5246
 msgid "LLM"
 msgstr ""
 
-#: src/main.c:5131
+#: src/main.c:5281
 msgid ""
 "Empty\n"
 "(reserved slot)"
 msgstr ""
 
-#: src/main.c:5226
+#: src/main.c:5376
 msgid "Split horizontally"
 msgstr ""
 
-#: src/main.c:5227
+#: src/main.c:5377
 msgid "Split vertically"
 msgstr ""
 
-#: src/main.c:5263
+#: src/main.c:5413
 msgid "Remove this tile"
 msgstr ""
 
-#: src/main.c:5273
+#: src/main.c:5423
 msgid "Group"
 msgstr ""
 
-#: src/main.c:5283
+#: src/main.c:5433
 msgid "Split group horizontally"
 msgstr ""
 
-#: src/main.c:5284
+#: src/main.c:5434
 msgid "Split group vertically"
 msgstr ""
 
-#: src/main.c:5298
+#: src/main.c:5448
 msgid "Collapse group to this piece"
 msgstr ""
 
-#: src/main.c:5308
+#: src/main.c:5458
 msgid "Remove group"
 msgstr ""
 
-#: src/main.c:5616
+#: src/main.c:5766
 msgid "CDB: window.json merged into layout.json\n"
 msgstr ""
 
-#: src/main.c:5754
+#: src/main.c:5904
 #, c-format
 msgid "CDB: modal limit of %d reached"
 msgstr ""
 
-#: src/main.c:5788
+#: src/main.c:5938
 msgid "Settings — CodeDashBoard"
 msgstr ""
 
-#: src/main.c:5836
+#: src/main.c:5986
 msgid "CDB: readlink /proc/self/exe failed"
 msgstr ""
 
-#: src/main.c:5869
+#: src/main.c:6019
 msgid "CDB: failed to spawn the new session"
 msgstr ""
 
-#: src/main.c:6023
+#: src/main.c:6173
 #, c-format
 msgid "CDB: no locale installed for language %s\n"
 msgstr ""
 
-#: src/main.c:6102
+#: src/main.c:6252
 msgid "About CDB"
 msgstr ""
 
-#: src/main.c:6104
+#: src/main.c:6254
 msgid "Exit"
 msgstr ""
 
-#: src/main.c:6128
+#: src/main.c:6278
 msgid "New window"
 msgstr ""
 
-#: src/main.c:6129
+#: src/main.c:6279
 msgid "New session…"
 msgstr ""
 
