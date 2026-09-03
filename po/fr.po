@@ -14,7 +14,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-03 11:16-0400\n"
+"POT-Creation-Date: 2026-09-03 17:36-0400\n"
 "PO-Revision-Date: 2026-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -999,7 +999,7 @@ msgstr ""
 msgid "Cancel generation"
 msgstr "Annuler la génération"
 
-#: src/llmtile.c:802 src/llmtile.c:2587
+#: src/llmtile.c:802 src/llmtile.c:2653
 msgid "Send"
 msgstr "Envoyer"
 
@@ -1099,7 +1099,7 @@ msgstr "Slot %d : JSON invalide (%s)."
 msgid "no \"messages\" array in this slot."
 msgstr "pas de tableau « messages » dans ce slot."
 
-#: src/llmtile.c:1656 src/llmtile.c:2379
+#: src/llmtile.c:1656 src/llmtile.c:2445
 msgid "(no new content)"
 msgstr "(aucun contenu nouveau)"
 
@@ -1195,7 +1195,7 @@ msgstr "Vider la conversation actuelle ?"
 msgid "current chat cleared."
 msgstr "chat actuel vidé."
 
-#: src/llmtile.c:2004 src/llmtile.c:2619
+#: src/llmtile.c:2004 src/llmtile.c:2685
 msgid "Not saved"
 msgstr "Non sauvegardé"
 
@@ -1228,17 +1228,31 @@ msgstr "Profil des outils : %s (Réglages → Modèles → Outils)"
 msgid "Active profile — %s"
 msgstr "Profil actif — %s"
 
-#: src/llmtile.c:2094
+#: src/llmtile.c:2095
 #, c-format
 msgid "Reasoning effort: %s"
 msgstr "Effort de raisonnement : %s"
 
-#: src/llmtile.c:2099
+#: src/llmtile.c:2100
 #, c-format
 msgid "Reasoning effort — %s"
 msgstr "Effort de raisonnement — %s"
 
-#: src/llmtile.c:2233
+#: src/llmtile.c:2160
+#, c-format
+msgid "Trim history: keep at most %d message — whole turns are dropped"
+msgid_plural "Trim history: keep at most %d messages — whole turns are dropped"
+msgstr[0] ""
+"Historique : garder au plus %d message — des tours complets sont jetés"
+msgstr[1] ""
+"Historique : garder au plus %d messages — des tours complets sont jetés"
+
+#: src/llmtile.c:2166
+#, c-format
+msgid "History trim — %d"
+msgstr "Trim de l'historique — %d"
+
+#: src/llmtile.c:2293
 msgid ""
 "no active model: choose one in the model menu (the \"?\" button) above the "
 "input."
@@ -1246,7 +1260,7 @@ msgstr ""
 "aucun modèle actif : choisissez-en un dans le menu de modèle (bouton « ? ») "
 "au-dessus de la saisie."
 
-#: src/llmtile.c:2500
+#: src/llmtile.c:2566
 msgid ""
 "LLM not configured.\n"
 "\n"
@@ -1260,55 +1274,67 @@ msgstr ""
 "(clé API), puis choisissez un modèle dans le menu\n"
 "ci-dessous."
 
-#: src/llmtile.c:2604
+#: src/llmtile.c:2670
 msgid "View sent JSON…"
 msgstr "Voir le JSON envoyé…"
 
-#: src/llmtile.c:2605
+#: src/llmtile.c:2671
 msgid "Save to a slot…"
 msgstr "Sauvegarder dans un slot…"
 
-#: src/llmtile.c:2606
+#: src/llmtile.c:2672
 msgid "Load a slot…"
 msgstr "Charger un slot…"
 
-#: src/llmtile.c:2607
+#: src/llmtile.c:2673
 msgid "Clear a slot…"
 msgstr "Vider un slot…"
 
-#: src/llmtile.c:2608
+#: src/llmtile.c:2674
 msgid "Clear the current chat…"
 msgstr "Vider le chat actuel…"
 
-#: src/llmtile.c:2609
+#: src/llmtile.c:2675
 msgid "Import from a session…"
 msgstr "Importer d'une session…"
 
-#: src/llmtile.c:2667
+#: src/llmtile.c:2733
 msgid "Active profile"
 msgstr "Profil actif"
 
-#: src/llmtile.c:2713
+#: src/llmtile.c:2778
+msgid "History trim"
+msgstr "Trim de l'historique"
+
+#: src/llmtile.c:2785
+msgid ""
+"Kept budget, in messages: a whole turn that does not fit is dropped. 0 wipes "
+"the thread on play."
+msgstr ""
+"Budget conservé, en messages : un tour complet qui ne tient pas est jeté. 0 "
+"vide le fil au play."
+
+#: src/llmtile.c:2823
 msgid "Reasoning effort"
 msgstr "Effort de raisonnement"
 
-#: src/llmtile.c:2786
+#: src/llmtile.c:2900
 msgid "Select a model…"
 msgstr "Sélectionner un modèle…"
 
-#: src/llmtile.c:2807
+#: src/llmtile.c:2921
 msgid "Configure…"
 msgstr "Configurer…"
 
-#: src/llmtile.c:3099
+#: src/llmtile.c:3215
 msgid "(CDB action)"
 msgstr "(action CDB)"
 
-#: src/llmtile.c:3105
+#: src/llmtile.c:3221
 msgid "✔ allowed +"
 msgstr "✔ autorisé +"
 
-#: src/llmtile.c:3106
+#: src/llmtile.c:3222
 msgid "✔ allowed"
 msgstr "✔ autorisé"
 
@@ -1318,49 +1344,54 @@ msgstr "✔ autorisé"
 #. is captured). Keep the trailing "+", it names the mode, not
 #. the verdict. Distinct from "✔ executed" (plain ASK) and from
 #. "✔ allowed +" (nobody clicked).
-#: src/llmtile.c:3128
+#: src/llmtile.c:3244
 msgid "✔ executed +"
 msgstr "✔ exécuté +"
 
 #. TRANSLATORS: effort levels of reasoning models. "Default" means
 #. * CDB sends no field at all and the provider applies the model's
 #. * own default. N_() at definition, _() at use — tables statiques.
-#: src/llmeffort.c:57 src/llmeffort.c:71
+#: src/llmeffort.c:60 src/llmeffort.c:74
 msgid "Default"
 msgstr "Défaut"
 
-#: src/llmeffort.c:58
+#: src/llmeffort.c:61
 msgid "None"
 msgstr "Aucun"
 
-#: src/llmeffort.c:59
+#: src/llmeffort.c:62
 msgid "Minimal"
 msgstr "Minimal"
 
-#: src/llmeffort.c:60
+#: src/llmeffort.c:63
 msgid "Low"
 msgstr "Faible"
 
-#: src/llmeffort.c:61
+#: src/llmeffort.c:64
 msgid "Medium"
 msgstr "Moyen"
 
-#: src/llmeffort.c:62
+#: src/llmeffort.c:65
 msgid "High"
 msgstr "Élevé"
 
-#: src/llmeffort.c:63
+#: src/llmeffort.c:66
 msgid "X-High"
 msgstr "Très élevé"
 
-#: src/llmeffort.c:64
+#: src/llmeffort.c:67
 msgid "Max"
 msgstr "Maximal"
 
-#: src/llmeffort.c:179
+#: src/llmeffort.c:182
 #, c-format
 msgid "CDB: failed to write active effort: %s\n"
 msgstr ""
+
+#: src/llmtrim.c:126
+#, c-format
+msgid "CDB: failed to write active trim: %s\n"
+msgstr "CDB : échec d'écriture du trim actif : %s\n"
 
 #. TRANSLATORS: name of the strictest tool profile (everything is either
 #. refused or asked about). The word is identical in French: leave the

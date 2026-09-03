@@ -5966,6 +5966,99 @@ llm_core_turn_new(LlmCore *c)
         llm_tile_turn_reset(g_ptr_array_index(c->views, vi));
 }
 
+
+/* Trim de l'historique avant l'envoi (active.trim).
+ *
+ * L'UNITÉ est le MESSAGE (user, assistant, tool_calls, tool — tout ce qui
+ * part au wire) : n est un BUDGET de messages. La FRONTIÈRE de coupure est
+ * le TOUR : un tour s'ouvre sur un message USER non-local et court jusqu'à
+ * l'ouvreur suivant ; il est INDIVISIBLE, car un fil conservé qui
+ * commencerait sur un tool_result ou des tool_calls orphelins est une
+ * erreur API garantie. Un tour qui ne tient pas dans le budget part donc
+ * EN BLOC, y compris le plus récent.
+ *
+ * Le trim précède le push du message qui ouvre le nouveau tour (llmtile.c,
+ * on_llm_send_clicked) : ce message réserve sa place dans n, d'où
+ * budget = n - 1. Loi d'Éric, mesurée (T1 = 3 messages, T2 = 2, T3 = 5,
+ * len = 10) : n = 0..5 vident T1-T2-T3, n = 6 et 7 gardent T3, n = 8, 9, 10
+ * gardent T2+T3, n = 11 ne coupe rien. n = 0 = fil vidé, mêmes gestes que
+ * llm_history_wipe. Les vues sont resynchronisées : le fil a raccourci, les
+ * miroirs doivent le refléter. */
+void
+llm_history_trim(LlmCore *c)
+{
+    int    n   = llm_config_active_trim();
+    int    budget = n - 1;
+    guint  s   = 0;
+    guint  len;
+
+    if (c == NULL || c->history == NULL || c->history->len == 0)
+        return;
+    len = c->history->len;
+
+    if (n == 0)
+        s = len;                /* wipe demandé : tout part, aucune recherche */
+    else if (len <= (guint)budget)
+        return;                 /* le fil tient en entier : rien à retirer */
+    else {
+        /* Coupure = le PREMIER ouvreur de tour dont la queue tient dans le
+         * budget, cherché parmi les ouvreurs RÉELS du fil. L'ancien code
+         * partait de « len - n » et AVANÇAIT : plafond au lieu de plancher,
+         * et sur un fil agentique sans ouvreur devant soi, balayage depuis
+         * l'index 0 → s = 0 → le trim ne trim JAMAIS rien (mesuré : 42 msgs
+         * gardés avec une borne à 2). budget >= 0 ici : n == 0 est déjà sorti,
+         * donc jamais de (guint)(-1) rendu immense par le cast. */
+        s = len;                /* aucun tour ne tient : tout part */
+        for (guint i = 0; i < len; i++) {
+            LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
+
+            if (m->actor != LLMACTOR_USER || m->local ||
+                m->kind != LLM_MSG_TEXT)
+                continue;
+            if ((gint)(len - i) <= budget) {
+                s = i;
+                break;
+            }
+        }
+    }
+
+    if (s == len && n > 0 && g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("CDB trim: no whole turn fits budget %d — thread wiped\n",
+                   budget);
+
+    for (guint i = 0; i < s; i++) {
+        LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
+
+        /* answered_tools : les ids des tool_calls retirés ne doivent
+         * plus compter comme « répondus » — leurs messages n'existent
+         * plus nulle part. Les conservés restent marqués. */
+        if (m->kind == LLM_MSG_ASSISTANT_TOOL_CALLS &&
+            m->tool_calls != NULL)
+            for (guint k = 0; k < m->tool_calls->len; k++)
+                g_hash_table_remove(c->answered_tools,
+                    ((LlmToolCall *)g_ptr_array_index(m->tool_calls,
+                                                       k))->id);
+        llm_msg_clear(m);
+    }
+    g_array_remove_range(c->history, 0, s);
+
+    if (c->history->len == 0) {
+        /* Fil vide : un json {"messages": []} n'a pas à être rejoué
+         * au démarrage — on efface, comme « Vider le chat actuel ». */
+        llm_live_wipe();
+        if (c->answered_tools != NULL)
+            g_hash_table_remove_all(c->answered_tools);
+    } else {
+        llm_live_save(c);
+    }
+    /* c->reply porte encore la réponse du tour PRÉCÉDENT (elle n'est
+     * tronquée qu'au prochain llm_core_turn_new). Sans truncature, le
+     * replay la re-rend INTÉGRALE dans le buffer fraîchement vidé :
+     * la vieille réponse ressuscitait sous le fil neuf. */
+    g_string_truncate(c->reply, 0);
+    llm_views_replay(c);
+}
+
 void
 llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
 {

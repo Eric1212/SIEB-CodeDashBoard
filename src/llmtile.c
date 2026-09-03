@@ -2124,6 +2124,65 @@ llm_tile_effort_marks(LlmTile *t, LlmEffort active)
     }
 }
 
+
+/* Rejoue l'historique du core dans TOUTES les vues (resync après un
+ * trim : le fil a raccourci au core, les miroirs doivent le refléter).
+ * Le replay part de zéro de lui-même (llm_tile_replay_history vide son
+ * buffer avant de remplir), donc un simple rappel suffit. */
+void llm_tile_replay_history(LlmTile *t); /* définie plus bas */
+void
+llm_views_replay(LlmCore *c)
+{
+    if (c == NULL)
+        return;
+    for (guint vi = 0; vi < c->views->len; vi++)
+        llm_tile_replay_history(g_ptr_array_index(c->views, vi));
+}
+
+/* Rafraîchit le bouton trim d'une vue : label = borne active, tooltip.
+ * Exportée : le core la diffuse sur toutes les vues (choix global). */
+void
+llm_tile_trim_refresh(LlmTile *t)
+{
+    int         trim;
+    char        lbl[16];
+    char       *tip;
+
+    if (t == NULL || t->trim_btn == NULL)
+        return;
+    trim = llm_config_active_trim();
+    g_snprintf(lbl, sizeof(lbl), "%d", trim);
+    gtk_menu_button_set_label(GTK_MENU_BUTTON(t->trim_btn), lbl);
+    /* Un seul ngettext : la branche trim == 0 écrivait « 0 message kept »
+     * — faux pluriel anglais. La loi tient dans la phrase : le nombre
+     * compte des MESSAGES, la coupure se pose sur un TOUR indivisible. */
+    tip = g_strdup_printf(ngettext(
+        "Trim history: keep at most %d message — whole turns are dropped",
+        "Trim history: keep at most %d messages — whole turns are dropped",
+        trim), trim);
+    gtk_widget_set_tooltip_text(t->trim_btn, tip);
+    g_free(tip);
+    if (t->trim_title != NULL) {
+        char *head = g_strdup_printf(_("History trim — %d"), trim);
+
+        gtk_label_set_text(GTK_LABEL(t->trim_title), head);
+        g_free(head);
+    }
+}
+
+/* Valeur du spin changée : persiste et miroite (choix global). */
+static void
+on_trim_spin_changed(GtkSpinButton *spin, gpointer data)
+{
+    LlmTile *t = data;
+
+    llm_config_set_active_trim(gtk_spin_button_get_value_as_int(spin));
+    if (t->core == NULL)
+        return;
+    for (guint vi = 0; vi < t->core->views->len; vi++)
+        llm_tile_trim_refresh(g_ptr_array_index(t->core->views, vi));
+}
+
 static void
 on_effort_item_clicked(GtkButton *btn, gpointer data)
 {
@@ -2237,6 +2296,12 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
         return;
     }
 
+    /* Trim lie au SEUL bouton play : les re-requetes de la boucle
+     * agentique (llm_cdb_requery) ne triment jamais. Avant le push du
+     * message user : CE message reserve sa place dans la borne (le core
+     * fait budget = trim - 1) et, avec trim 0, ouvre le fil neuf. */
+    llm_history_trim(t->core);
+
     for (guint vi = 0; vi < t->core->views->len; vi++) {
         LlmTile *v = g_ptr_array_index(t->core->views, vi);
 
@@ -2339,7 +2404,7 @@ on_llm_entry_changed(GtkTextBuffer G_GNUC_UNUSED *buf, gpointer data)
 /* Rejoue la conversation du core dans cette vue (attachement) :
  * chaque message avec son en-tête d'acteur, puis le fragment de
  * réponse en cours s'il existe. Appelée après création du buffer. */
-static void
+void
 llm_tile_replay_history(LlmTile *t)
 {
     LlmCore    *c = t->core;
@@ -2702,6 +2767,50 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
         llm_tile_profile_refresh(t);
     }
 
+
+    {
+        /* Trim de l'historique : bouton CHIFFRE (0-9999) à gauche de
+         * l'effort. Le popover porte un spin ; le choix persiste dans
+         * llm.json active.trim et miroite sur toutes les vues. 0 = fil
+         * vidé au prochain play (« Vider le chat actuel »). */
+        GtkWidget *trim_box, *trim_pop, *trim_lbl;
+
+        t->trim_title = gtk_label_new(_("History trim"));
+        gtk_label_set_xalign(GTK_LABEL(t->trim_title), 0.0);
+        gtk_widget_add_css_class(t->trim_title, "cdb-pop-title");
+
+        trim_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+        gtk_box_append(GTK_BOX(trim_box), t->trim_title);
+
+        trim_lbl = gtk_label_new(_("Kept budget, in messages: a whole turn"
+            " that does not fit is dropped. 0 wipes the thread on play."));
+        gtk_label_set_xalign(GTK_LABEL(trim_lbl), 0.0);
+        gtk_label_set_wrap(GTK_LABEL(trim_lbl), TRUE);
+        gtk_widget_add_css_class(trim_lbl, "dim-label");
+        gtk_box_append(GTK_BOX(trim_box), trim_lbl);
+
+        t->trim_spin = gtk_spin_button_new_with_range(0, 9999, 1);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(t->trim_spin),
+                                  llm_config_active_trim());
+        g_signal_connect(t->trim_spin, "value-changed",
+                         G_CALLBACK(on_trim_spin_changed), t);
+        gtk_box_append(GTK_BOX(trim_box), t->trim_spin);
+
+        trim_pop = gtk_popover_new();
+        gtk_popover_set_has_arrow(GTK_POPOVER(trim_pop), FALSE);
+        gtk_popover_set_child(GTK_POPOVER(trim_pop), trim_box);
+        gtk_widget_add_css_class(trim_pop, "cdb-pop");
+        gtk_widget_set_size_request(trim_pop, 240, -1);
+
+        t->trim_btn = gtk_menu_button_new();
+        gtk_menu_button_set_label(GTK_MENU_BUTTON(t->trim_btn), "9999");
+        gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->trim_btn), trim_pop);
+        gtk_widget_add_css_class(t->trim_btn, "flat");
+        gtk_widget_add_css_class(t->trim_btn, "cdb-flat");
+        gtk_widget_set_valign(t->trim_btn, GTK_ALIGN_CENTER);
+        llm_tile_trim_refresh(t);
+    }
+
     {
         /* Effort de raisonnement : bouton ICÔNE (dialog-information-
          * symbolic), teinte = état (gris Default, rouge None, bleu les
@@ -2966,7 +3075,8 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
                 gtk_box_append(GTK_BOX(tools), spring);
             }
             /* Effort à gauche du profil, lui-même à gauche de la
-             * persistance puis du play/pause. */
+             * persistance puis du play/pause. Le trim précède l'effort. */
+            gtk_box_append(GTK_BOX(tools), t->trim_btn);
             gtk_box_append(GTK_BOX(tools), t->effort_btn);
             gtk_box_append(GTK_BOX(tools), t->profile_btn);
             gtk_box_append(GTK_BOX(tools), t->slots_btn);

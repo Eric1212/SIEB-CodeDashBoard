@@ -252,6 +252,15 @@ gboolean llm_effort_is_default(LlmEffort e);
 LlmEffort llm_config_active_effort(void);
 void llm_config_set_active_effort(LlmEffort e);
 
+/* Trim de l'historique (llm.json active.trim, défaut 9999) : BUDGET de
+ * MESSAGES conservés au prochain envoi — unité = entrée non-locale de
+ * core->history (user, assistant, tool_calls, tool). La FRONTIÈRE de
+ * coupure est le TOUR : un tour indivisible qui ne tient pas dans le
+ * budget part en bloc, jamais de tool_calls/résultat orphelin en tête.
+ * N compte aussi le message en cours d'envoi ; 0 = fil vidé au play. */
+int  llm_config_active_trim(void);
+void llm_config_set_active_trim(int n);
+
 /* Libellé affichable (traduit). */
 const char *llm_effort_label(LlmEffort e);
 
@@ -472,6 +481,14 @@ typedef struct {
     GHashTable *answered_tools;
 } LlmCore;
 
+/* Rejoue l'historique du core dans TOUTES ses vues (resync après un
+ * trim : le fil a raccourci, les miroirs doivent le refléter). */
+void llm_views_replay(LlmCore *c);
+
+
+/* Trim de l'historique (active.trim) — appelé du SEUL bouton play
+ * (on_llm_send_clicked) : la boucle agentique ne trim jamais. */
+void llm_history_trim(LlmCore *c);
 typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     LlmCore      *core;      /* état partagé (possédé par App) */
     GtkWidget   *view;      /* historique (GtkTextView, non éditable) */
@@ -512,6 +529,9 @@ typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     GtkWidget   *profile_btn;   /* bouton menu profil actif (global session) */
     GtkWidget   *effort_btn;    /* bouton menu effort de raisonnement */
     GtkWidget   *effort_title;  /* titre du popover : effort courant */
+    GtkWidget   *trim_btn;      /* bouton menu trim de l'historique */
+    GtkWidget   *trim_title;    /* titre du popover : trim courant */
+    GtkWidget   *trim_spin;     /* spin 0-9999 du popover trim */
     GtkWidget   *profile_title; /* titre du popover : profil courant */
     int         *modal_count; /* compteur de modales d'App (emprunté) */
     GtkWidget   *model_pop; /* popover : recherche + sections provider */

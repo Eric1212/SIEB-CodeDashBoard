@@ -253,6 +253,9 @@ void llm_tile_profile_refresh(LlmTile *t);
  * Trois teintes : Default grise, None rouge (error), les autres bleues
  * (accent) — classes libadwaita, aucune couleur codée. */
 void llm_tile_effort_refresh(LlmTile *t);
+/* Label/infobulle/titre du bouton trim (refresh après changement du
+ * choix global — le core diffuse sur toutes les vues). */
+void llm_tile_trim_refresh(LlmTile *t);
 /* Résond la boîte portant CET ID à l'état de la décision (vert/rouge).
  * Appelé sur TOUTES les vues par le core : la décision vit au core, chaque
  * vue n'en possède que le rendu. L'ID est indispensable depuis qu'un tour

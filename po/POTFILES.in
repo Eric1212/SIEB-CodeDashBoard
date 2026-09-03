@@ -12,6 +12,7 @@
 ../src/llmslots.c
 ../src/llmtile.c
 ../src/llmeffort.c
+../src/llmtrim.c
 ../src/llmtoolpref.c
 ../src/main.c
 ../src/mdview.c
