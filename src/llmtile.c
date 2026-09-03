@@ -2770,6 +2770,7 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
         g_object_set_data_full(G_OBJECT(t->effort_btn), "effort-marks",
                                marks, (GDestroyNotify)g_hash_table_unref);
         llm_tile_effort_refresh(t);
+        llm_tile_effort_marks(t, llm_config_active_effort());
     }
 
     {
