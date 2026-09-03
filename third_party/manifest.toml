@@ -55,7 +55,7 @@ ref      = "dev"
 # pour 0 fichier changé sous models/. Le pin devient donc « le dernier état
 # de CE qu'on copie », qui est aussi ce qu'on materialise vraiment.
 watch    = "models"
-commit   = "5c5e7787a094367f10d7f590deaa2baf398de6c8"
+commit   = "391db6d395a9d9af10d8a9ef19911b02fc9713e2"
 license  = "MIT"
 paths    = [
     "models",
