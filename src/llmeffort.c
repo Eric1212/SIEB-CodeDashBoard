@@ -15,20 +15,23 @@
  *      touché, une reconstruction à zéro l'effacerait en silence
  *      (même discipline que llm_config_set_active_profile) ;
  *
- *   3. le mot wire : champ plat OpenAI « reasoning_effort » — forme
- *      vérifiée sur le terrain chez HyperCharm (glm-5.3-flash : none
- *      respecté à 0 jeton, max appliqué ; qwen3.8-flash : champ avalé
- *      sans effet) et OpenRouter (glm-5.2:free : none → 0 jeton,
- *      xhigh → 238 jetons). DEFAULT renvoie NULL : l'appelant n'écrit
- *      alors AUCUN champ, le fournisseur applique le défaut du modèle —
- *      l'état d'origine de CDB avant cette fonctionnalité.
+ *   3. le mot wire : champ plat OpenAI « reasoning_effort », à la RACINE
+ *      du body. DEFAULT renvoie NULL : aucun champ, et c'est LE RÉGLAGE
+ *      LE PLUS CHER mesuré (glm-5.3-flash/HyperCharm, 3 sep 2026) :
+ *      ~1084 jetons de raisonnement sans champ, ~80-350 dès qu'un champ
+ *      est posé — même inventé (« banana »). Le prompt gouverne le
+ *      volume (trivial ~0, invité ~150-1200). Et « none » n'est PAS le
+ *      plancher : « low » le bat (26-93 vs 86-331), HyperCharm ne
+ *      connaît pas « none ». AVEC tools annoncés, l'effort est noyé
+ *      (none, high et défaut dans une seule bande 0-354) — or CDB en YOLO
+ *      annonce toujours ses tools. qwen3.8-flash avale le champ.
  *
  * La vérification du respect est du ressort de l'observation, pas
  * d'ici : le chunk usage déjà reçu porte completion_tokens_details.
  * reasoning_tokens, et les deltas reasoning s'affichent déjà dans le
  * fil. Aucune table de découverte n'est lue — les tables déclaratives
- * des fournisseurs sous-estiment le réel (glm-5.2 déclare [xhigh,high]
- * sans none et respecte pourtant none à la lettre). */
+ * des fournisseurs sous-estiment le réel : chez OpenRouter, glm-5.2
+ * déclare [xhigh,high] sans none et respecte pourtant none. */
 #include "llm.h"
 #include "i18n.h"
 

@@ -5988,6 +5988,13 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     req->body = llm_body_build(t);
     llm_slots_last_save(req->body);
 
+    /* Espion wire : CDB_DEBUG=2 vide le body EXACT envoyé au fournisseur,
+     * juste avant l'envoi. Un champ avalé, un champ au mauvais endroit —
+     * la preuve est ici, pas dans une reconstitution curl. */
+    if (g_getenv("CDB_DEBUG") != NULL &&
+        strcmp(g_getenv("CDB_DEBUG"), "2") == 0)
+        g_printerr("CDB wire: %s\n", req->body);
+
     /* Bilan estimé : propre à chaque vue (bandeau). */
     for (guint vi = 0; vi < c->views->len; vi++) {
         LlmTile *v = g_ptr_array_index(c->views, vi);
