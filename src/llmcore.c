@@ -922,7 +922,6 @@ llm_config_set_allowed_models(const char *provider, const char *filter)
     JsonParser *parser = json_parser_new();
     JsonObject *root, *provs, *prov;
     JsonNode   *work_root = NULL;
-    JsonGenerator *gen;
     gchar      *text;
     GError     *error = NULL;
     gboolean    existed;
@@ -961,15 +960,12 @@ llm_config_set_allowed_models(const char *provider, const char *filter)
         json_object_set_string_member(prov, "allowed_models", filter);
     }
 
-    gen = json_generator_new();
-    json_generator_set_root(gen, work_root);
     text = json_to_string(work_root, TRUE);
     if (!g_file_set_contents(path, text, -1, &error)) {
         g_printerr(_("CDB: failed to write allowed_models: %s\n"), error->message);
         g_error_free(error);
     }
     g_free(text);
-    g_object_unref(gen);
     json_node_unref(work_root);
     g_object_unref(parser);
     g_free(path);
@@ -1062,19 +1058,16 @@ llm_config_save_retry429(gboolean retry, int max_retries, int delay_ms)
     json_object_set_int_member(harness, "delay_ms_429", delay_ms);
 
     {
-        JsonGenerator *gen = json_generator_new();
-        gchar         *text = json_to_string(work, TRUE);
-        GError        *error = NULL;
+        gchar  *text = json_to_string(work, TRUE);
+        GError *error = NULL;
 
-        json_generator_set_root(gen, work);
-        text = json_to_string(work, TRUE);
         if (!g_file_set_contents(path, text, -1, &error)) {
             g_printerr(_("CDB: failed to write retry429: %s\n"), error->message);
             g_error_free(error);
         }
         g_free(text);
-        g_object_unref(gen);
     }
+
     json_node_unref(work);
     g_object_unref(parser);
     g_free(path);
@@ -1144,17 +1137,14 @@ llm_config_save_retry5xx(gboolean retry, int max_retries, int delay_ms)
     json_object_set_int_member(harness, "delay_ms_5xx", delay_ms);
 
     {
-        JsonGenerator *gen = json_generator_new();
-        gchar         *text = json_to_string(work, TRUE);
-        GError        *error = NULL;
+        gchar  *text = json_to_string(work, TRUE);
+        GError *error = NULL;
 
-        json_generator_set_root(gen, work);
         if (!g_file_set_contents(path, text, -1, &error)) {
             g_printerr(_("CDB: failed to write retry5xx: %s\n"), error->message);
             g_error_free(error);
         }
         g_free(text);
-        g_object_unref(gen);
     }
     json_node_unref(work);
     g_object_unref(parser);
@@ -1310,9 +1300,6 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
     JsonParser *parser = json_parser_new();
     JsonObject *root = NULL, *active;
     JsonNode   *work = NULL;
-    JsonGenerator *gen;
-    gchar      *text;
-    GError     *error = NULL;
     JsonObject *provs = NULL, *prov = NULL;
     const char *new_url = NULL;
     char       *new_key = NULL;
@@ -1371,17 +1358,15 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
     /* COPIE immédiate : la chaîne vit dans l'arbre JSON qui sera libéré
      * plus bas (json_node_unref) — garder le pointeur serait un UAF. */
     {
-        char *url_copy = (new_url != NULL) ? g_strdup(new_url) : NULL;
-
-        gen = json_generator_new();
-        text = json_to_string(work, TRUE);
+        char   *url_copy = (new_url != NULL) ? g_strdup(new_url) : NULL;
+        gchar  *text = json_to_string(work, TRUE);
+        GError *error = NULL;
         if (!g_file_set_contents(path, text, -1, &error)) {
             g_printerr(_("CDB: failed to save active provider: %s\n"),
                        error->message);
             g_error_free(error);
         }
         g_free(text);
-        g_object_unref(gen);
         json_node_unref(work);
         g_object_unref(parser);
         g_free(path);
