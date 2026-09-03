@@ -5722,6 +5722,20 @@ llm_body_build(LlmTile *t)
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "include_usage");
     json_builder_add_boolean_value(builder, TRUE);
+
+    /* Effort de raisonnement : champ plat OpenAI, UNE forme pour tous
+     * les providers (vérifié HyperCharm + OpenRouter). DEFAULT n'écrit
+     * RIEN — le fournisseur applique le défaut du modèle. Le choix est
+     * global (llm.json active.effort), lu ici au dernier moment : la
+     * tuile ne le transmet pas (rendre ≠ posséder). */
+    {
+        const char *wire = llm_effort_wire(llm_config_active_effort());
+
+        if (wire != NULL) {
+            json_builder_set_member_name(builder, "reasoning_effort");
+            json_builder_add_string_value(builder, wire);
+        }
+    }
     json_builder_end_object(builder);
 
     /* Canal tools natif : piloté par les préfs du PROFIL ACTIF. Un outil

@@ -219,6 +219,46 @@ typedef enum {
     LLM_PROFILE_COUNT
 } LlmToolProfile;
 
+/* Effort de raisonnement envoyé au fournisseur (champ plat OpenAI
+ * « reasoning_effort » : none|minimal|low|medium|high|xhigh|max — vérifié
+ * chez HyperCharm et OpenRouter, voir docs). DEFAULT = ne rien envoyer :
+ * le fournisseur applique son défaut de modèle, l'état d'origine.
+ * L'ordre de l'enum est l'ordre du menu ; DEFAULT est 0 parce que c'est
+ * la valeur d'absence, pas parce qu'il ouvrirait l'échelle. */
+typedef enum {
+    LLM_EFFORT_DEFAULT = 0,
+    LLM_EFFORT_NONE,
+    LLM_EFFORT_MINIMAL,
+    LLM_EFFORT_LOW,
+    LLM_EFFORT_MEDIUM,
+    LLM_EFFORT_HIGH,
+    LLM_EFFORT_XHIGH,
+    LLM_EFFORT_MAX,
+    LLM_EFFORT_COUNT
+} LlmEffort;
+
+extern const char *const LLM_EFFORT_NAMES[LLM_EFFORT_COUNT];
+/* Libellés affichables : distincts des NOMS ci-dessus, qui sont des CLES
+ * persistées (llm.json active.effort) et comparées en code — les
+ * traduire changerait la valeur relue au démarrage. */
+extern const char *const LLM_EFFORT_LABELS[LLM_EFFORT_COUNT];
+/* La seule question qu'un appelant a le droit de poser à un effort :
+ * est-ce le défaut (donc NE RIEN envoyer) ? Les autres valeurs partent
+ * telles quelles sur le wire, leur sémantique est au fournisseur. */
+gboolean llm_effort_is_default(LlmEffort e);
+
+/* Effort actif : lu dans llm.json active.effort, défaut DEFAULT.
+ * set : persiste sur disque (patron active.profile). */
+LlmEffort llm_config_active_effort(void);
+void llm_config_set_active_effort(LlmEffort e);
+
+/* Libellé affichable (traduit). */
+const char *llm_effort_label(LlmEffort e);
+
+/* Mot wire envoyé dans le body ("none"… "max"), NULL si default —
+ * l'appelant n'écrit alors AUCUN champ. */
+const char *llm_effort_wire(LlmEffort e);
+
 extern const char *const LLM_PROFILE_NAMES[LLM_PROFILE_COUNT];
 /* Libellés affichables : distincts des NOMS ci-dessus, qui sont des CLES
  * persistées (llm.json active.profile) et comparées en code. */
@@ -470,6 +510,8 @@ typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
     GtkWidget   *slots_btn; /* bouton menu persistance (slots JSON) */
     GtkWidget   *profile_btn;   /* bouton menu profil actif (global session) */
+    GtkWidget   *effort_btn;    /* bouton menu effort de raisonnement */
+    GtkWidget   *effort_title;  /* titre du popover : effort courant */
     GtkWidget   *profile_title; /* titre du popover : profil courant */
     int         *modal_count; /* compteur de modales d'App (emprunté) */
     GtkWidget   *model_pop; /* popover : recherche + sections provider */

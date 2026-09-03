@@ -14,7 +14,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-02 18:00-0400\n"
+"POT-Creation-Date: 2026-09-03 11:16-0400\n"
 "PO-Revision-Date: 2026-08-27 00:00+0000\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -97,7 +97,7 @@ msgstr "Réglages"
 msgid "Empty"
 msgstr "Vide"
 
-#: src/llmcore.c:128 src/llmcore.c:1604
+#: src/llmcore.c:128 src/llmcore.c:1589
 #, c-format
 msgid "CDB: failed to write llm.json: %s\n"
 msgstr "CDB: écriture llm.json : %s\n"
@@ -135,37 +135,37 @@ msgstr "CDB: /models échoué : %s\n"
 msgid "CDB: /credits %s failed: %s\n"
 msgstr "CDB: /credits %s échoué : %s\n"
 
-#: src/llmcore.c:968
+#: src/llmcore.c:965
 #, c-format
 msgid "CDB: failed to write allowed_models: %s\n"
 msgstr "CDB: écriture allowed_models : %s\n"
 
-#: src/llmcore.c:1072
+#: src/llmcore.c:1065
 #, c-format
 msgid "CDB: failed to write retry429: %s\n"
 msgstr "CDB: écriture retry429 : %s\n"
 
-#: src/llmcore.c:1153
+#: src/llmcore.c:1144
 #, c-format
 msgid "CDB: failed to write retry5xx: %s\n"
 msgstr "CDB: écriture retry5xx : %s\n"
 
-#: src/llmcore.c:1254
+#: src/llmcore.c:1244
 #, c-format
 msgid "CDB: failed to write harness names: %s\n"
 msgstr "CDB : écriture des noms du harnais : %s\n"
 
-#: src/llmcore.c:1379
+#: src/llmcore.c:1365
 #, c-format
 msgid "CDB: failed to save active provider: %s\n"
 msgstr "CDB: écriture switch active : %s\n"
 
-#: src/llmcore.c:1692
+#: src/llmcore.c:1677
 #, c-format
 msgid "CDB: failed to seed llm.json: %s\n"
 msgstr "CDB: création de llm.json : %s\n"
 
-#: src/llmcore.c:1748
+#: src/llmcore.c:1733
 msgid ""
 "Hello [NAME_ASSISTANT]. I am CodeDashBoard (CDB), an IDE application that "
 "acts as a relay between you and [NAME_USER]. You were hired by [NAME_USER] "
@@ -191,44 +191,44 @@ msgid ""
 "- Never invent the output of a command.\n"
 msgstr ""
 
-#: src/llmcore.c:1796
+#: src/llmcore.c:1781
 #, c-format
 msgid "CDB: failed to write prompts/default.txt: %s\n"
 msgstr "CDB: écriture prompts/default.txt : %s\n"
 
-#: src/llmcore.c:2056
+#: src/llmcore.c:2041
 msgid "〔tool〕 no new content"
 msgstr "〔tool〕 aucun contenu nouveau"
 
-#: src/llmcore.c:2342
+#: src/llmcore.c:2327
 #, c-format
 msgid ""
 "%s given but there is no line above: the block starts at the head of the "
 "file. Omit %s."
 msgstr ""
 
-#: src/llmcore.c:2350
+#: src/llmcore.c:2335
 #, c-format
 msgid ""
 "%s required: read the bordering line with read(%ld, %ld) and replay its hash."
 msgstr ""
 
-#: src/llmcore.c:2371
+#: src/llmcore.c:2356
 #, c-format
 msgid ""
 "lines required: send exactly %u line%s, one element per line, without their "
 "newlines. \"\" is an EMPTY line, not a deleted one."
 msgstr ""
 
-#: src/llmcore.c:2379
+#: src/llmcore.c:2364
 msgid "lines must be an array of strings, one element per line."
 msgstr ""
 
-#: src/llmcore.c:2385
+#: src/llmcore.c:2370
 msgid "lines is empty: to drop lines without rewriting them, use remove."
 msgstr ""
 
-#: src/llmcore.c:2391
+#: src/llmcore.c:2376
 #, c-format
 msgid ""
 "cardinality mismatch: the block you read is %u line%s, you sent %u. replace "
@@ -236,12 +236,12 @@ msgid ""
 "insert."
 msgstr ""
 
-#: src/llmcore.c:2406
+#: src/llmcore.c:2391
 #, c-format
 msgid "lines[%u] is not a string: one element per line, without its newline."
 msgstr ""
 
-#: src/llmcore.c:2415
+#: src/llmcore.c:2400
 #, c-format
 msgid ""
 "lines[%u] contains a %s: one element is one line. Split it into as many "
@@ -252,80 +252,80 @@ msgstr ""
 # Jalon F — llmcore.c. Entrées ajoutées à la main (make pot en veille) :
 # les references #: seront retablies par msgmerge, pas recopiees ici.
 # ------------------------------------------------------------------
-#: src/llmcore.c:2456 src/llmcore.c:2619 src/llmcore.c:2747 src/llmcore.c:3426
-#: src/llmcore.c:3546 src/llmcore.c:3863
+#: src/llmcore.c:2441 src/llmcore.c:2604 src/llmcore.c:2732 src/llmcore.c:3411
+#: src/llmcore.c:3531 src/llmcore.c:3848
 #, c-format
 msgid "invalid JSON arguments for %s."
 msgstr "arguments JSON invalides pour %s."
 
-#: src/llmcore.c:2464 src/llmcore.c:2635 src/llmcore.c:2763 src/llmcore.c:3434
-#: src/llmcore.c:3554
+#: src/llmcore.c:2449 src/llmcore.c:2620 src/llmcore.c:2748 src/llmcore.c:3419
+#: src/llmcore.c:3539
 msgid "missing path."
 msgstr "chemin manquant."
 
-#: src/llmcore.c:2468 src/llmcore.c:2640 src/llmcore.c:2767 src/llmcore.c:3438
-#: src/llmcore.c:3558
+#: src/llmcore.c:2453 src/llmcore.c:2625 src/llmcore.c:2752 src/llmcore.c:3423
+#: src/llmcore.c:3543
 msgid "absolute path required."
 msgstr "chemin absolu requis."
 
-#: src/llmcore.c:2482 src/llmcore.c:2522 src/llmcore.c:2645
+#: src/llmcore.c:2467 src/llmcore.c:2507 src/llmcore.c:2630
 msgid "from_line/to_line invalid (1-based, to >= from >= 1)."
 msgstr "from_line/to_line invalides (1-based, to >= from >= 1)."
 
-#: src/llmcore.c:2493 src/llmcore.c:2775
+#: src/llmcore.c:2478 src/llmcore.c:2760
 msgid "before_line/after_line required (0 = file bound)."
 msgstr "before_line/after_line requis (0 = borne du fichier)."
 
-#: src/llmcore.c:2499 src/llmcore.c:2780
+#: src/llmcore.c:2484 src/llmcore.c:2765
 #, c-format
 msgid "non-adjacent bounds: after_line must be before_line + 1 (got %ld/%ld)."
 msgstr ""
 "bornes non adjacentes : after_line doit valoir before_line + 1 (reçu %ld/"
 "%ld)."
 
-#: src/llmcore.c:2505
+#: src/llmcore.c:2490
 msgid "missing or empty text (to delete lines, use remove)."
 msgstr ""
 
-#: src/llmcore.c:2527
+#: src/llmcore.c:2512
 #, c-format
 msgid ""
 "hash_target required: it is the proof you read the very lines you are about "
 "to destroy. Run read(%ld, %ld) and replay the hash you got."
 msgstr ""
 
-#: src/llmcore.c:2549 src/llmcore.c:3442
+#: src/llmcore.c:2534 src/llmcore.c:3427
 msgid "missing content: set content empty to create an empty file."
 msgstr "contenu manquant : laisse content vide pour créer un fichier vide."
 
-#: src/llmcore.c:2560
+#: src/llmcore.c:2545
 msgid "bash is not a file tool."
 msgstr ""
 
-#: src/llmcore.c:2651 src/llmcore.c:2791 src/llmcore.c:3132 src/llmcore.c:3247
-#: src/llmcore.c:3580
+#: src/llmcore.c:2636 src/llmcore.c:2776 src/llmcore.c:3117 src/llmcore.c:3232
+#: src/llmcore.c:3565
 #, c-format
 msgid "cannot read: %s"
 msgstr "lecture impossible : %s"
 
-#: src/llmcore.c:2661 src/llmcore.c:2797 src/llmcore.c:3137 src/llmcore.c:3252
+#: src/llmcore.c:2646 src/llmcore.c:2782 src/llmcore.c:3122 src/llmcore.c:3237
 msgid "binary file or non-UTF-8 encoding: refused."
 msgstr "fichier binaire ou non UTF-8 : refusé."
 
-#: src/llmcore.c:2671
+#: src/llmcore.c:2656
 #, c-format
 msgid "range outside the file: line_count=%u (requested %u-%u)."
 msgstr "plage hors fichier : line_count=%u (demandé %u-%u)."
 
-#: src/llmcore.c:2771
+#: src/llmcore.c:2756
 msgid "missing or empty text (to delete, use replace)."
 msgstr ""
 
-#: src/llmcore.c:2789 src/llmcore.c:3130 src/llmcore.c:3245
+#: src/llmcore.c:2774 src/llmcore.c:3115 src/llmcore.c:3230
 msgid "file absent: use create."
 msgstr ""
 
-#: src/llmcore.c:2807
+#: src/llmcore.c:2792
 #, c-format
 msgid ""
 "empty file (line_count=0): before_line and after_line must be 0, got %ld/%ld."
@@ -333,17 +333,17 @@ msgstr ""
 "fichier vide (line_count=0) : before_line et after_line doivent valoir 0, "
 "reçu %ld/%ld."
 
-#: src/llmcore.c:2815
+#: src/llmcore.c:2800
 #, c-format
 msgid "insertion at head: after_line must be 1 (got %ld)."
 msgstr "insertion en tête : after_line doit valoir 1 (reçu %ld)."
 
-#: src/llmcore.c:2823
+#: src/llmcore.c:2808
 #, c-format
 msgid "insertion at end: before_line must be line_count=%u (got %ld)."
 msgstr "insertion en fin : before_line doit valoir line_count=%u (reçu %ld)."
 
-#: src/llmcore.c:2831
+#: src/llmcore.c:2816
 #, c-format
 msgid ""
 "after_line outside the file: line_count=%u (got %ld). To insert at the end "
@@ -352,26 +352,26 @@ msgstr ""
 "after_line hors fichier : line_count=%u (reçu %ld). Pour insérer en fin de "
 "fichier, mets after_line=0 avec before_line=%u."
 
-#: src/llmcore.c:2850
+#: src/llmcore.c:2835
 #, c-format
 msgid ""
 "before_hash stale or missing: line %ld no longer holds the content you claim "
 "to have read. Run read(%ld, %ld) and replay the hash you got."
 msgstr ""
 
-#: src/llmcore.c:2866
+#: src/llmcore.c:2851
 #, c-format
 msgid ""
 "after_hash stale or missing: line %ld no longer holds the content you claim "
 "to have read. Run read(%ld, %ld) and replay the hash you got."
 msgstr ""
 
-#: src/llmcore.c:2887 src/llmcore.c:3157 src/llmcore.c:3305
+#: src/llmcore.c:2872 src/llmcore.c:3142 src/llmcore.c:3290
 #, c-format
 msgid "cannot write: %s"
 msgstr "écriture impossible : %s"
 
-#: src/llmcore.c:2926
+#: src/llmcore.c:2911
 msgid ""
 "note: lines outside authored_range mix your text with existing content; no "
 "hash is attached to them.\n"
@@ -379,54 +379,54 @@ msgstr ""
 "note: les lignes hors de authored_range mélangent ton texte et du contenu "
 "existant; aucun hash n'y est attaché.\n"
 
-#: src/llmcore.c:2930
+#: src/llmcore.c:2915
 msgid ""
 "authored_range: no whole line\n"
 "note: no line is entirely yours (text without a trailing newline, or "
 "inserted mid-line). Read with read(N,N) before any other write.\n"
 msgstr ""
 
-#: src/llmcore.c:2999
+#: src/llmcore.c:2984
 msgid ""
 "empty file: there is no line to destroy. Use insert to write the first lines."
 msgstr ""
 
-#: src/llmcore.c:3005
+#: src/llmcore.c:2990
 #, c-format
 msgid ""
 "block %u-%u is outside the file (line_count=%u). Line numbers do not survive "
 "writes: read the file again before naming a range."
 msgstr ""
 
-#: src/llmcore.c:3017
+#: src/llmcore.c:3002
 #, c-format
 msgid ""
 "hash_target stale or wrong: %u-%u no longer holds what you claim to have "
 "read. Run read(%u, %u) and replay the hash you got."
 msgstr ""
 
-#: src/llmcore.c:3030
+#: src/llmcore.c:3015
 #, c-format
 msgid ""
 "hash_before stale or wrong: line %u no longer holds what you claim to have "
 "read. Run read(%u, %u) and replay the hash you got."
 msgstr ""
 
-#: src/llmcore.c:3042
+#: src/llmcore.c:3027
 #, c-format
 msgid ""
 "hash_after given but the block already ends at the last line "
 "(line_count=%u): there is nothing below it. Omit hash_after."
 msgstr ""
 
-#: src/llmcore.c:3051
+#: src/llmcore.c:3036
 #, c-format
 msgid ""
 "hash_after stale or wrong: line %u no longer holds what you claim to have "
 "read. Run read(%u, %u) and replay the hash you got."
 msgstr ""
 
-#: src/llmcore.c:3060
+#: src/llmcore.c:3045
 #, c-format
 msgid ""
 "hash_after required: line %u exists below your block (line_count=%u). Either "
@@ -434,36 +434,36 @@ msgid ""
 "end of the file."
 msgstr ""
 
-#: src/llmcore.c:3081
+#: src/llmcore.c:3066
 msgid "authored_range: no whole line\n"
 msgstr ""
 
-#: src/llmcore.c:3176
+#: src/llmcore.c:3161
 #, c-format
 msgid ""
 "note: former line %ld is now line %ld (everything below the block moved up "
 "by %ld). The hash of an untouched line does not change — only its number.\n"
 msgstr ""
 
-#: src/llmcore.c:3184
+#: src/llmcore.c:3169
 msgid ""
 "note: the file is now empty. To write it again, insert with before_line=0 "
 "and after_line=0.\n"
 msgstr ""
 
-#: src/llmcore.c:3187
+#: src/llmcore.c:3172
 msgid ""
 "authored_range: no whole line\n"
 "note: nothing was written, so no hash was struck. Read the new neighbours "
 "before writing here.\n"
 msgstr ""
 
-#: src/llmcore.c:3276
+#: src/llmcore.c:3261
 #, c-format
 msgid "lines[%u] cannot be written as one line (found a %s)."
 msgstr ""
 
-#: src/llmcore.c:3287
+#: src/llmcore.c:3272
 #, c-format
 msgid ""
 "no change: you sent back exactly the block at %ld-%ld. replace must write "
@@ -471,43 +471,43 @@ msgid ""
 "write."
 msgstr ""
 
-#: src/llmcore.c:3323
+#: src/llmcore.c:3308
 #, c-format
 msgid ""
 "warning: line count moved from %u to %u on a k->k replacement — this should "
 "be unreachable.\n"
 msgstr ""
 
-#: src/llmcore.c:3328
+#: src/llmcore.c:3313
 #, c-format
 msgid "mapping: lines[0-%u] -> file %ld-%ld\n"
 msgstr ""
 
-#: src/llmcore.c:3334
+#: src/llmcore.c:3319
 msgid ""
 "note: the file has no trailing newline and the last line kept it that way.\n"
 msgstr ""
 
-#: src/llmcore.c:3447
+#: src/llmcore.c:3432
 msgid "non-UTF-8 content: refused."
 msgstr "contenu non UTF-8 : refusé."
 
-#: src/llmcore.c:3452
+#: src/llmcore.c:3437
 #, c-format
 msgid "parent folder absent: %s (create never creates a folder)."
 msgstr ""
 
-#: src/llmcore.c:3459
+#: src/llmcore.c:3444
 msgid ""
 "file already exists: use replace with its block_hash, or delete then create."
 msgstr ""
 
-#: src/llmcore.c:3462
+#: src/llmcore.c:3447
 #, c-format
 msgid "cannot create: %s"
 msgstr "création impossible : %s"
 
-#: src/llmcore.c:3473
+#: src/llmcore.c:3458
 #, c-format
 msgid ""
 "create: ok\n"
@@ -520,11 +520,11 @@ msgstr ""
 "line_count: 0\n"
 "note: fichier vide créé; aucun hash frappé.\n"
 
-#: src/llmcore.c:3562
+#: src/llmcore.c:3547
 msgid "file absent: nothing to delete."
 msgstr "fichier absent : rien à supprimer."
 
-#: src/llmcore.c:3569
+#: src/llmcore.c:3554
 msgid ""
 "symlink refused: its content is read through the target, but deleting would "
 "destroy the link. Act on the target directly."
@@ -532,12 +532,12 @@ msgstr ""
 "lien symbolique refusé : son contenu se lit à travers la cible, mais la "
 "suppression détruirait le lien. Agis sur la cible directement."
 
-#: src/llmcore.c:3575
+#: src/llmcore.c:3560
 msgid "not a regular file: not deleted (folder, pipe, device)."
 msgstr ""
 "pas un fichier régulier : non supprimé (répertoire, pipe, périphérique)."
 
-#: src/llmcore.c:3596
+#: src/llmcore.c:3581
 #, c-format
 msgid ""
 "delete: confirmation required\n"
@@ -550,103 +550,103 @@ msgid ""
 "between the two calls, the second pass will be refused.\n"
 msgstr ""
 
-#: src/llmcore.c:3607
+#: src/llmcore.c:3592
 msgid ""
 "file_hash stale: the file is no longer the one confirmed. Re-run delete "
 "without a hash for the current fingerprint."
 msgstr ""
 
-#: src/llmcore.c:3617
+#: src/llmcore.c:3602
 #, c-format
 msgid "cannot delete: %s"
 msgstr "suppression impossible : %s"
 
-#: src/llmcore.c:3670
+#: src/llmcore.c:3655
 msgid "NUL sequence (\\u0000) refused in arguments."
 msgstr "séquence NUL (\\u0000) refusée dans les arguments."
 
-#: src/llmcore.c:3692
+#: src/llmcore.c:3677
 #, c-format
 msgid "insert  %s  after %ld / before %ld  (+%u line)"
 msgid_plural "insert  %s  after %ld / before %ld  (+%u lines)"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/llmcore.c:3702
+#: src/llmcore.c:3687
 #, c-format
 msgid "remove  %s  %ld-%ld  (-%u line)"
 msgid_plural "remove  %s  %ld-%ld  (-%u lines)"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/llmcore.c:3713
+#: src/llmcore.c:3698
 #, c-format
 msgid "replace  %s  %ld-%ld  [%u line -> %u line]"
 msgid_plural "replace  %s  %ld-%ld  [%u lines -> %u lines]"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/llmcore.c:3727
+#: src/llmcore.c:3712
 #, c-format
 msgid "create  %s  +%u line  (new file)"
 msgid_plural "create  %s  +%u lines  (new file)"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/llmcore.c:3752
+#: src/llmcore.c:3737
 #, c-format
 msgid "delete  %s  -%u line%s%s"
 msgid_plural "delete  %s  -%u lines%s%s"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/llmcore.c:3755
+#: src/llmcore.c:3740
 msgid "   [ABSENT OR UNREADABLE]"
 msgstr "   [ABSENT OU ILLISIBLE]"
 
-#: src/llmcore.c:3757
+#: src/llmcore.c:3742
 msgid "   [DESTRUCTION CONFIRMED]"
 msgstr "   [DESTRUCTION CONFIRMÉE]"
 
-#: src/llmcore.c:3808
+#: src/llmcore.c:3793
 msgid "tool call ignored: missing API id."
 msgstr "appel d'outil ignoré : identifiant API manquant."
 
-#: src/llmcore.c:3813
+#: src/llmcore.c:3798
 msgid "duplicate tool call ignored by CDB."
 msgstr "appel d'outil dupliqué ignoré par CDB."
 
-#: src/llmcore.c:3833
+#: src/llmcore.c:3818
 #, c-format
 msgid "unknown tool \"%s\": this tool does not exist in CDB."
 msgstr "outil inconnu « %s » : cet outil n'existe pas dans CDB."
 
-#: src/llmcore.c:3834
+#: src/llmcore.c:3819
 msgid "(unnamed)"
 msgstr "(sans nom)"
 
-#: src/llmcore.c:3844
+#: src/llmcore.c:3829
 #, c-format
 msgid "tool \"%s\" disabled in the current profile."
 msgstr "outil « %s » désactivé dans le profil courant."
 
-#: src/llmcore.c:3875
+#: src/llmcore.c:3860
 msgid "invalid terminal: expected 0 to 9."
 msgstr "terminal invalide : attendu entre 0 et 9."
 
-#: src/llmcore.c:3879
+#: src/llmcore.c:3864
 msgid "missing or empty command."
 msgstr "commande manquante ou vide."
 
-#: src/llmcore.c:3925
+#: src/llmcore.c:3910
 msgid "incomplete tool call ignored: id or function.name absent."
 msgstr "appel d'outil incomplet ignoré : id ou function.name absent."
 
-#: src/llmcore.c:4039 src/llmcore.c:4060 src/llmcore.c:4076
+#: src/llmcore.c:4024 src/llmcore.c:4045 src/llmcore.c:4061
 msgid "Cancelled by the user."
 msgstr "Annulé par l'utilisateur."
 
-#: src/llmcore.c:4209 src/llmcore.c:4230
+#: src/llmcore.c:4194 src/llmcore.c:4215
 msgid ""
 "\n"
 "〔cancelled〕\n"
@@ -654,7 +654,7 @@ msgstr ""
 "\n"
 "〔annulé〕\n"
 
-#: src/llmcore.c:4258
+#: src/llmcore.c:4243
 msgid ""
 "\n"
 "[CDB] Stream timeout — retries in progress…\n"
@@ -662,21 +662,21 @@ msgstr ""
 "\n"
 "[CDB] Délai dépassé sur le flux — nouvelles tentatives en cours…\n"
 
-#: src/llmcore.c:4379
+#: src/llmcore.c:4364
 msgid "(no error message)"
 msgstr "(erreur sans message)"
 
-#: src/llmcore.c:4435
+#: src/llmcore.c:4420
 #, c-format
 msgid "shell %s does not start (spawn failed?)."
 msgstr "le shell %s ne démarre pas (spawn en échec ?)."
 
-#: src/llmcore.c:4472
+#: src/llmcore.c:4457
 #, c-format
 msgid "terminal %s was closed during execution."
 msgstr "le terminal %s a été fermé pendant l'exécution."
 
-#: src/llmcore.c:4602
+#: src/llmcore.c:4587
 msgid ""
 "\n"
 "[CDB] Timeout — retries in progress…\n"
@@ -684,7 +684,7 @@ msgstr ""
 "\n"
 "[CDB] Délai dépassé — nouvelles tentatives en cours…\n"
 
-#: src/llmcore.c:4611
+#: src/llmcore.c:4596
 #, c-format
 msgid ""
 "\n"
@@ -693,7 +693,7 @@ msgstr ""
 "\n"
 "[erreur : %s]\n"
 
-#: src/llmcore.c:4659
+#: src/llmcore.c:4644
 #, c-format
 msgid ""
 "\n"
@@ -702,7 +702,7 @@ msgstr ""
 "\n"
 "[CDB] HTTP %u — nouvelles tentatives en cours…\n"
 
-#: src/llmcore.c:4715
+#: src/llmcore.c:4700
 msgid ""
 "\n"
 "[error: invalid provider URL]\n"
@@ -710,7 +710,7 @@ msgstr ""
 "\n"
 "[erreur : URL de fournisseur invalide]\n"
 
-#: src/llmcore.c:4911
+#: src/llmcore.c:4896
 msgid ""
 "[NAME_USER] has REFUSED this tool call. This is not a bug: it is a decision. "
 "Adapt and propose something else."
@@ -718,12 +718,12 @@ msgstr ""
 "[NAME_USER] a REFUSÉ cet appel d'outil. Ce n'est pas un bug : c'est une "
 "décision. Adapte-toi et propose autre chose."
 
-#: src/llmcore.c:4949 src/llmcore.c:4970
+#: src/llmcore.c:4934 src/llmcore.c:4955
 #, c-format
 msgid "terminal %s unavailable (bash panel absent?)"
 msgstr "terminal %s indisponible (panneau bash absent ?)"
 
-#: src/llmcore.c:5144
+#: src/llmcore.c:5129
 msgid ""
 "Runs a shell command in a CDB terminal. The command is submitted to "
 "[NAME_USER] for approval before execution."
@@ -731,15 +731,15 @@ msgstr ""
 "Exécute une commande shell dans un terminal CDB. La commande est soumise à "
 "l'approbation de [NAME_USER] avant exécution."
 
-#: src/llmcore.c:5169
+#: src/llmcore.c:5154
 msgid "CDB terminal number (0 to 9)."
 msgstr "Numéro du terminal CDB (0 à 9)."
 
-#: src/llmcore.c:5178
+#: src/llmcore.c:5163
 msgid "Full shell command to run."
 msgstr "Commande shell complète à exécuter."
 
-#: src/llmcore.c:5205
+#: src/llmcore.c:5190
 msgid ""
 "Reads an exact range of lines from a text file on disk (absolute path). "
 "from_line/to_line are 1-based, inclusive. Returns the lines and a short hash "
@@ -747,7 +747,7 @@ msgid ""
 "replace."
 msgstr ""
 
-#: src/llmcore.c:5263
+#: src/llmcore.c:5248
 msgid ""
 "Insert text verbatim between two ADJACENT lines of a text file on disk "
 "(absolute path). The model must have read the line before and the line after "
@@ -757,17 +757,17 @@ msgid ""
 "never writes into the editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5292
+#: src/llmcore.c:5277
 msgid "Real line after which to insert; 0 = file head."
 msgstr "Ligne réelle après laquelle insérer ; 0 = tête du fichier."
 
-#: src/llmcore.c:5301
+#: src/llmcore.c:5286
 msgid ""
 "Hash returned by read(before_line,before_line). Omit only when before_line=0 "
 "— giving it at the head of the file is refused."
 msgstr ""
 
-#: src/llmcore.c:5313
+#: src/llmcore.c:5298
 msgid ""
 "Real line before which to insert; equals before_line+1, or 0 to insert at "
 "the end of the file."
@@ -775,19 +775,19 @@ msgstr ""
 "Ligne réelle avant laquelle insérer ; vaut before_line+1, ou 0 pour insérer "
 "en fin de fichier."
 
-#: src/llmcore.c:5323
+#: src/llmcore.c:5308
 msgid ""
 "Hash returned by read(after_line,after_line). Omit only when after_line=0 — "
 "giving it at the tail is refused."
 msgstr ""
 
-#: src/llmcore.c:5333
+#: src/llmcore.c:5318
 msgid ""
 "Text inserted verbatim, newlines included. Unlike replace, insert may add "
 "any number of lines."
 msgstr ""
 
-#: src/llmcore.c:5364
+#: src/llmcore.c:5349
 msgid ""
 "Removes n WHOLE lines (from_line..to_line, inclusive, 1-based) from a text "
 "file on disk. Nothing is written, nothing is fused: the lines and their "
@@ -799,27 +799,27 @@ msgid ""
 "following lines shifted. Never touches the editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5403
+#: src/llmcore.c:5388
 msgid "Last line removed, inclusive. Must exist."
 msgstr ""
 
-#: src/llmcore.c:5412 src/llmcore.c:5515
+#: src/llmcore.c:5397 src/llmcore.c:5500
 msgid "Hash of line from_line-1, from read(N,N). Omit when from_line is 1."
 msgstr ""
 
-#: src/llmcore.c:5422
+#: src/llmcore.c:5407
 msgid ""
 "Hash of the block itself, from read(from_line, to_line). This is the proof "
 "you read the very lines you destroy."
 msgstr ""
 
-#: src/llmcore.c:5432
+#: src/llmcore.c:5417
 msgid ""
 "Hash of line to_line+1, from read(N,N). Omit only when the block ends at the "
 "last line — omitting it elsewhere is refused."
 msgstr ""
 
-#: src/llmcore.c:5463
+#: src/llmcore.c:5448
 msgid ""
 "Replaces a block of whole lines (from_line..to_line, inclusive, 1-based) of "
 "a text file on disk, ONE LINE FOR ONE LINE: send exactly as many entries in "
@@ -835,30 +835,30 @@ msgid ""
 "editor's dirty buffer."
 msgstr ""
 
-#: src/llmcore.c:5506
+#: src/llmcore.c:5491
 msgid "Last line replaced, inclusive. Must exist."
 msgstr "Dernière ligne remplacée, inclusive. Doit exister."
 
-#: src/llmcore.c:5525
+#: src/llmcore.c:5510
 msgid ""
 "Hash of the block itself, from read(from_line, to_line). A refusal never "
 "gives it back: re-read."
 msgstr ""
 
-#: src/llmcore.c:5535
+#: src/llmcore.c:5520
 msgid ""
 "Hash of line to_line+1, from read(N,N). Omit only when the block ends at the "
 "last line."
 msgstr ""
 
-#: src/llmcore.c:5550
+#: src/llmcore.c:5535
 msgid ""
 "The new lines, one element per line, WITHOUT newlines. The count must equal "
 "to_line - from_line + 1 exactly. A single element may be \"\" (an empty "
 "line) but may not contain \\n or \\r."
 msgstr ""
 
-#: src/llmcore.c:5583
+#: src/llmcore.c:5568
 msgid ""
 "Creates a NEW text file on disk (absolute path) with this content verbatim. "
 "Refuses if the file already exists (use replace) and if the parent folder is "
@@ -867,12 +867,12 @@ msgid ""
 "empty file."
 msgstr ""
 
-#: src/llmcore.c:5608
+#: src/llmcore.c:5593
 msgid "Content written verbatim, newlines included. Empty string = empty file."
 msgstr ""
 "Contenu écrit tel quel, sauts de ligne compris. Chaîne vide = fichier vide."
 
-#: src/llmcore.c:5636
+#: src/llmcore.c:5621
 msgid ""
 "Destroys a file on disk (absolute path) in TWO passes. Without file_hash: "
 "deletes NOTHING and returns the file's current fingerprint. With a file_hash "
@@ -885,13 +885,13 @@ msgstr ""
 "Refuse les répertoires, les liens symboliques et tout ce qui n'est pas un "
 "fichier régulier."
 
-#: src/llmcore.c:5660
+#: src/llmcore.c:5645
 msgid ""
 "Fingerprint returned by the first delete(path). Omit for the confirmation "
 "request."
 msgstr ""
 
-#: src/llmcore.c:5684
+#: src/llmcore.c:5669
 msgid ""
 "\n"
 "\n"
@@ -999,7 +999,7 @@ msgstr ""
 msgid "Cancel generation"
 msgstr "Annuler la génération"
 
-#: src/llmtile.c:802 src/llmtile.c:2501
+#: src/llmtile.c:802 src/llmtile.c:2587
 msgid "Send"
 msgstr "Envoyer"
 
@@ -1099,7 +1099,7 @@ msgstr "Slot %d : JSON invalide (%s)."
 msgid "no \"messages\" array in this slot."
 msgstr "pas de tableau « messages » dans ce slot."
 
-#: src/llmtile.c:1656 src/llmtile.c:2293
+#: src/llmtile.c:1656 src/llmtile.c:2379
 msgid "(no new content)"
 msgstr "(aucun contenu nouveau)"
 
@@ -1195,7 +1195,7 @@ msgstr "Vider la conversation actuelle ?"
 msgid "current chat cleared."
 msgstr "chat actuel vidé."
 
-#: src/llmtile.c:2004 src/llmtile.c:2533
+#: src/llmtile.c:2004 src/llmtile.c:2619
 msgid "Not saved"
 msgstr "Non sauvegardé"
 
@@ -1228,7 +1228,17 @@ msgstr "Profil des outils : %s (Réglages → Modèles → Outils)"
 msgid "Active profile — %s"
 msgstr "Profil actif — %s"
 
-#: src/llmtile.c:2147
+#: src/llmtile.c:2094
+#, c-format
+msgid "Reasoning effort: %s"
+msgstr "Effort de raisonnement : %s"
+
+#: src/llmtile.c:2099
+#, c-format
+msgid "Reasoning effort — %s"
+msgstr "Effort de raisonnement — %s"
+
+#: src/llmtile.c:2233
 msgid ""
 "no active model: choose one in the model menu (the \"?\" button) above the "
 "input."
@@ -1236,7 +1246,7 @@ msgstr ""
 "aucun modèle actif : choisissez-en un dans le menu de modèle (bouton « ? ») "
 "au-dessus de la saisie."
 
-#: src/llmtile.c:2414
+#: src/llmtile.c:2500
 msgid ""
 "LLM not configured.\n"
 "\n"
@@ -1250,51 +1260,55 @@ msgstr ""
 "(clé API), puis choisissez un modèle dans le menu\n"
 "ci-dessous."
 
-#: src/llmtile.c:2518
+#: src/llmtile.c:2604
 msgid "View sent JSON…"
 msgstr "Voir le JSON envoyé…"
 
-#: src/llmtile.c:2519
+#: src/llmtile.c:2605
 msgid "Save to a slot…"
 msgstr "Sauvegarder dans un slot…"
 
-#: src/llmtile.c:2520
+#: src/llmtile.c:2606
 msgid "Load a slot…"
 msgstr "Charger un slot…"
 
-#: src/llmtile.c:2521
+#: src/llmtile.c:2607
 msgid "Clear a slot…"
 msgstr "Vider un slot…"
 
-#: src/llmtile.c:2522
+#: src/llmtile.c:2608
 msgid "Clear the current chat…"
 msgstr "Vider le chat actuel…"
 
-#: src/llmtile.c:2523
+#: src/llmtile.c:2609
 msgid "Import from a session…"
 msgstr "Importer d'une session…"
 
-#: src/llmtile.c:2581
+#: src/llmtile.c:2667
 msgid "Active profile"
 msgstr "Profil actif"
 
-#: src/llmtile.c:2633
+#: src/llmtile.c:2713
+msgid "Reasoning effort"
+msgstr "Effort de raisonnement"
+
+#: src/llmtile.c:2786
 msgid "Select a model…"
 msgstr "Sélectionner un modèle…"
 
-#: src/llmtile.c:2654
+#: src/llmtile.c:2807
 msgid "Configure…"
 msgstr "Configurer…"
 
-#: src/llmtile.c:2946
+#: src/llmtile.c:3099
 msgid "(CDB action)"
 msgstr "(action CDB)"
 
-#: src/llmtile.c:2952
+#: src/llmtile.c:3105
 msgid "✔ allowed +"
 msgstr "✔ autorisé +"
 
-#: src/llmtile.c:2953
+#: src/llmtile.c:3106
 msgid "✔ allowed"
 msgstr "✔ autorisé"
 
@@ -1304,9 +1318,49 @@ msgstr "✔ autorisé"
 #. is captured). Keep the trailing "+", it names the mode, not
 #. the verdict. Distinct from "✔ executed" (plain ASK) and from
 #. "✔ allowed +" (nobody clicked).
-#: src/llmtile.c:2975
+#: src/llmtile.c:3128
 msgid "✔ executed +"
 msgstr "✔ exécuté +"
+
+#. TRANSLATORS: effort levels of reasoning models. "Default" means
+#. * CDB sends no field at all and the provider applies the model's
+#. * own default. N_() at definition, _() at use — tables statiques.
+#: src/llmeffort.c:57 src/llmeffort.c:71
+msgid "Default"
+msgstr "Défaut"
+
+#: src/llmeffort.c:58
+msgid "None"
+msgstr "Aucun"
+
+#: src/llmeffort.c:59
+msgid "Minimal"
+msgstr "Minimal"
+
+#: src/llmeffort.c:60
+msgid "Low"
+msgstr "Faible"
+
+#: src/llmeffort.c:61
+msgid "Medium"
+msgstr "Moyen"
+
+#: src/llmeffort.c:62
+msgid "High"
+msgstr "Élevé"
+
+#: src/llmeffort.c:63
+msgid "X-High"
+msgstr "Très élevé"
+
+#: src/llmeffort.c:64
+msgid "Max"
+msgstr "Maximal"
+
+#: src/llmeffort.c:179
+#, c-format
+msgid "CDB: failed to write active effort: %s\n"
+msgstr ""
 
 #. TRANSLATORS: name of the strictest tool profile (everything is either
 #. refused or asked about). The word is identical in French: leave the

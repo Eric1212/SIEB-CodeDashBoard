@@ -2062,6 +2062,93 @@ llm_tile_profile_refresh(LlmTile *t)
     }
 }
 
+/* Rafraîchit l'icône, la teinte et l'infobulle du bouton effort d'une
+ * vue. Exportée : le core la diffuse sur toutes les vues quand l'effort
+ * change (le choix est global, comme le profil). Trois états : DEFAULT
+ * = icône grise (couleur du texte, aucune classe) ; NONE = rouge
+ * (classe error de libadwaita — le fournisseur ne garantit pas d'y
+ * obéir) ; les autres = bleue (classe accent). Le détail vit dans le
+ * tooltip et le titre du popover, l'icône reste muette. */
+void
+llm_tile_effort_refresh(LlmTile *t)
+{
+    LlmEffort   effort;
+    const char *label;
+    char       *tip;
+
+    if (t == NULL || t->effort_btn == NULL)
+        return;
+    effort = llm_config_active_effort();
+    label  = llm_effort_label(effort);
+
+    /* Trois classes de teinte (accent/error/success de libadwaita)
+     * descendent sur l'image symbolique. Default : aucune. NONE porte
+     * le rouge, MAX le vert, le reste bleu. */
+    gtk_widget_remove_css_class(t->effort_btn, "error");
+    gtk_widget_remove_css_class(t->effort_btn, "success");
+    if (effort == LLM_EFFORT_NONE)
+        gtk_widget_add_css_class(t->effort_btn, "error");
+    else if (effort == LLM_EFFORT_MAX)
+        gtk_widget_add_css_class(t->effort_btn, "success");
+    else if (!llm_effort_is_default(effort))
+        gtk_widget_add_css_class(t->effort_btn, "accent");
+    tip = g_strdup_printf(_("Reasoning effort: %s"), label);
+    gtk_widget_set_tooltip_text(t->effort_btn, tip);
+    g_free(tip);
+
+    if (t->effort_title != NULL) {
+        char *head = g_strdup_printf(_("Reasoning effort — %s"), label);
+
+        gtk_label_set_text(GTK_LABEL(t->effort_title), head);
+        g_free(head);
+    }
+}
+
+/* Marquage de l'actif par un signe dans sa propre colonne (loi CLAUDE.md)
+ * : le ✓ de la rangée choisie passe, les autres restent vides — jamais un
+ * grisage, les inactifs restent cliquables. La table id → label ✓ est
+ * posée à la construction (effort-marks). */
+static void
+llm_tile_effort_marks(LlmTile *t, LlmEffort active)
+{
+    GHashTable *marks = g_object_get_data(G_OBJECT(t->effort_btn),
+                                          "effort-marks");
+
+    if (marks == NULL)
+        return;
+    for (int i = 0; i < LLM_EFFORT_COUNT; i++) {
+        GtkWidget *mark = g_hash_table_lookup(marks,
+                                              LLM_EFFORT_NAMES[i]);
+
+        gtk_widget_set_visible(mark, (LlmEffort)i == active);
+    }
+}
+
+static void
+on_effort_item_clicked(GtkButton *btn, gpointer data)
+{
+    LlmTile    *t = data;
+    const char *name = g_object_get_data(G_OBJECT(btn), "effort-name");
+    GtkWidget  *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn),
+                                              GTK_TYPE_POPOVER);
+
+    if (name != NULL) {
+        for (int i = 0; i < LLM_EFFORT_COUNT; i++) {
+            if (g_strcmp0(name, LLM_EFFORT_NAMES[i]) == 0) {
+                llm_config_set_active_effort((LlmEffort)i);
+                break;
+            }
+        }
+    }
+    if (pop != NULL)
+        gtk_popover_popdown(GTK_POPOVER(pop));
+
+    /* Choix GLOBAL : toutes les vues miroitent le nouvel effort. */
+    for (guint vi = 0; vi < t->core->views->len; vi++)
+        llm_tile_effort_refresh(g_ptr_array_index(t->core->views, vi));
+    llm_tile_effort_marks(t, llm_config_active_effort());
+}
+
 static void
 on_profile_item_clicked(GtkButton *btn, gpointer data)
 {
@@ -2616,6 +2703,76 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     }
 
     {
+        /* Effort de raisonnement : bouton ICÔNE (dialog-information-
+         * symbolic), teinte = état (gris Default, rouge None, bleu les
+         * autres — llm_tile_effort_refresh). Le popover liste les huit
+         * niveaux : colonne de signe (✓ de l'actif, loi CLAUDE.md) +
+         * libellé. Le choix est global : un clic persiste et miroite. */
+        GtkWidget *effort_box, *effort_pop;
+        GHashTable *marks;
+
+        t->effort_title = gtk_label_new(_("Reasoning effort"));
+        gtk_label_set_xalign(GTK_LABEL(t->effort_title), 0.0);
+        gtk_widget_add_css_class(t->effort_title, "cdb-pop-title");
+
+        effort_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_box_append(GTK_BOX(effort_box), t->effort_title);
+
+        marks = g_hash_table_new(g_str_hash, g_str_equal);
+        for (int i = 0; i < LLM_EFFORT_COUNT; i++) {
+            GtkWidget *row  = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+            GtkWidget *mark = gtk_label_new("✓");
+            GtkWidget *lbl  = gtk_label_new(llm_effort_label((LlmEffort)i));
+            GtkWidget *b    = gtk_button_new();
+
+            gtk_widget_add_css_class(mark, "success");
+            gtk_widget_set_visible(mark, FALSE);
+            gtk_box_append(GTK_BOX(row), mark);
+            gtk_label_set_xalign(GTK_LABEL(lbl), 0.0);
+            gtk_box_append(GTK_BOX(row), lbl);
+            gtk_widget_set_hexpand(lbl, TRUE);
+            gtk_button_set_child(GTK_BUTTON(b), row);
+            gtk_widget_add_css_class(b, "flat");
+            gtk_widget_add_css_class(b, "cdb-pop-item");
+            gtk_widget_set_hexpand(b, TRUE);
+            gtk_widget_set_halign(b, GTK_ALIGN_FILL);
+            /* CLE technique, pas un libellé : comparee en
+             * on_effort_item_clicked. Ne pas traduire ici. */
+            g_object_set_data_full(G_OBJECT(b), "effort-name",
+                                   g_strdup(LLM_EFFORT_NAMES[i]),
+                                   g_free);
+            g_signal_connect(b, "clicked",
+                             G_CALLBACK(on_effort_item_clicked), t);
+            gtk_box_append(GTK_BOX(effort_box), b);
+            /* La table n'est pas propriétaire des labels : ils meurent
+             * avec les rangées du popover, elle ne fait que retrouver. */
+            g_hash_table_insert(marks, (gpointer)LLM_EFFORT_NAMES[i],
+                                mark);
+        }
+
+        effort_pop = gtk_popover_new();
+        gtk_popover_set_has_arrow(GTK_POPOVER(effort_pop), FALSE);
+        gtk_popover_set_child(GTK_POPOVER(effort_pop), effort_box);
+        gtk_widget_add_css_class(effort_pop, "cdb-pop");
+        gtk_widget_set_size_request(effort_pop, 240, -1);
+
+        t->effort_btn = gtk_menu_button_new();
+        gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(t->effort_btn),
+                                      "dialog-information-symbolic");
+        gtk_menu_button_set_popover(GTK_MENU_BUTTON(t->effort_btn),
+                                    effort_pop);
+        gtk_widget_add_css_class(t->effort_btn, "flat");
+        gtk_widget_add_css_class(t->effort_btn, "cdb-flat");
+        gtk_widget_set_valign(t->effort_btn, GTK_ALIGN_CENTER);
+        /* Table de marks sur le BOUTON (GObject réel, mort avec la
+         * tuile), maintenant qu'il existe : sur G_OBJECT(t) c'était un
+         * cast de struct nue — CRITICAL G_IS_OBJECT, donnée jamais posée. */
+        g_object_set_data_full(G_OBJECT(t->effort_btn), "effort-marks",
+                               marks, (GDestroyNotify)g_hash_table_unref);
+        llm_tile_effort_refresh(t);
+    }
+
+    {
         GtkWidget *model_pop;
         GtkWidget *model_scroll;
         GtkWidget *model_outer;
@@ -2807,8 +2964,9 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
                 gtk_widget_set_hexpand(spring, TRUE);
                 gtk_box_append(GTK_BOX(tools), spring);
             }
-            /* Profil à gauche de la persistance, lui-même à gauche
-             * du play/pause. */
+            /* Effort à gauche du profil, lui-même à gauche de la
+             * persistance puis du play/pause. */
+            gtk_box_append(GTK_BOX(tools), t->effort_btn);
             gtk_box_append(GTK_BOX(tools), t->profile_btn);
             gtk_box_append(GTK_BOX(tools), t->slots_btn);
             gtk_box_append(GTK_BOX(tools), t->send_btn);

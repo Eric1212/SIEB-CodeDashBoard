@@ -249,6 +249,10 @@ void llm_tile_decision_render(LlmTile *t);
 
 /* Étiquette/infobulle du bouton profil (refresh après changement). */
 void llm_tile_profile_refresh(LlmTile *t);
+/* Icône/teinte/infobulle du bouton effort (refresh après changement).
+ * Trois teintes : Default grise, None rouge (error), les autres bleues
+ * (accent) — classes libadwaita, aucune couleur codée. */
+void llm_tile_effort_refresh(LlmTile *t);
 /* Résond la boîte portant CET ID à l'état de la décision (vert/rouge).
  * Appelé sur TOUTES les vues par le core : la décision vit au core, chaque
  * vue n'en possède que le rendu. L'ID est indispensable depuis qu'un tour
