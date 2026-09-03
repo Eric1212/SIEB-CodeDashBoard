@@ -5736,7 +5736,6 @@ llm_body_build(LlmTile *t)
             json_builder_add_string_value(builder, wire);
         }
     }
-    json_builder_end_object(builder);
 
     /* Canal tools natif : piloté par les préfs du PROFIL ACTIF. Un outil
      * en OFF n'est pas annoncé (inexistant pour le modèle). Si aucun
