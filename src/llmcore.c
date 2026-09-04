@@ -251,9 +251,9 @@ md_entry_free(gpointer p)
 }
 
 /* <dir du binaire>/third_party/models-dev/models, exactement comme
- * i18n_localedir() le fait pour po/locale : CDB se lance depuis la racine du
- * projet, il n'y a pas d'installation à cibler. Repli relatif au cwd si
- * /proc/self/exe est illisible. */
+ * i18n_localedir() le fait pour po/locale. Le <dir du binaire> est la racine
+ * du projet sous `make run`, et $(PREFIX)/lib/cdb sous `make install` : le
+ * lien de $(PREFIX)/bin est resolu par /proc/self/exe. Repli sur le cwd. */
 static const char *
 md_modelsdir(void)
 {

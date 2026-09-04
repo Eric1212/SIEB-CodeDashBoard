@@ -1,8 +1,8 @@
 /*
  * sfx.c : lecture des deux ding, sans aucune dépendance audio liée.
  *
- * Chemin des assets. CDB n'a ni préfixe d'installation ni GResource (vérifié :
- * zéro occurrence dans le projet). Le seul précédent d'asset EMBARQUE — non
+ * Chemin des assets. CDB n'a pas de GResource (vérifié : zéro occurrence
+ * dans le projet). Le seul précédent d'asset EMBARQUE — non
  * par-session — est po/locale, résolu relativement au binaire via
  * /proc/self/exe (voir i18n.c). On calque exactement ce modèle :
  * <dir_du_binaire>/resources/sounds. `make run` depuis la racine fonctionne

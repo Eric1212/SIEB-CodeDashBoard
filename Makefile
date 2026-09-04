@@ -194,6 +194,129 @@ clean:
 	rm -f $(OBJ) $(DEP) $(TARGET) $(TOOLS) $(TESTBIN)
 	rm -rf $(LOCALEDIR)
 
+# --- Installation ------------------------------------------------------
+# Loi de CDB : tout se résout depuis le répertoire du binaire — po/locale
+# (i18n.c), third_party/models-dev (llmcore.c), resources/sounds (sfx.c).
+# Installer le SEUL binaire casserait les trois. On installe donc
+# l'arborescence sous $(LIBDIR) et un lien dans $(BINDIR) ; /proc/self/exe
+# rend la cible RÉSOLUE du lien (mesuré sur ce poste), donc le binaire
+# installé trouve ses ressources sous $(LIBDIR) sans qu'une ligne de code
+# change.
+#
+# PREFIX = /usr, par choix d'Éric, contre la convention GNU (/usr/local).
+# Conséquence mesurée : /usr/bin/cdb est possédé par AUCUN paquet
+# (`dpkg -S` répond « aucun chemin ne correspond »), et dpkg ne refuse un
+# conflit qu'entre paquets — un fichier sans propriétaire est remplacé en
+# silence. Or tinycdb est dans main ici, décrit comme « utilitaire de
+# manipulation de bases de données constantes (cdb) » : il réclame ce nom.
+# Si un `apt install tinycdb` efface CDB du PATH un jour, la porte de sortie
+# est une ligne : installer sous un nom non réclamable et laisser l'app id
+# ca.sieb.cdb tranquille — seul Exec= du .desktop doit suivre.
+#
+# Et l'install est la SEULE voie vers l'icône du bureau. Sous Wayland, le
+# compositeur est un autre processus : il ne voit rien de local à CDB, il
+# lit $(SHAREDIR)/applications et $(SHAREDIR)/icons. C'est pour ça qu'aucun
+# arbre d'icônes ne vit dans le dépôt — il serait invisible au shell ET à
+# maintenir à la main. Les cinq liens symboliques qui tenaient là ont été
+# retirés le 4 septembre ; la génération les remplace, sans état à corrompre.
+#
+# Enfin : on ne régénère pas le cache du thème. L'install du 4 septembre en a
+# laissé un chez le voisin, $(SHAREDIR)/icons/hicolor/icon-theme.cache, que
+# hicolor-icon-theme ne fournit pas et que personne ne réclame (`dpkg -S` :
+# « aucun chemin ne correspond »). Inutile de surcroît : la sonde GtkIconTheme
+# résout ca.sieb.cdb avec et sans ce cache, taille par taille, sur exactement
+# les mêmes fichiers. On ne livre pas de thème — on dépose des fichiers dans
+# des répertoires que l'OS déclare déjà. Le cache posé reste, un `rm` le rend.
+PREFIX     ?= /usr
+BINDIR      = $(PREFIX)/bin
+LIBDIR      = $(PREFIX)/lib/cdb
+SHAREDIR    = $(PREFIX)/share
+APP_ID      = ca.sieb.cdb
+# L'encre installée. Le nom de l'actif dit l'ENCRE, pas la destination :
+# logo-light.svg est l'encre CLAIRE (#fafafb), donc celle qu'on pose sur un
+# shell sombre — le cas de ce poste, en prefer-dark. Basculer sur l'autre
+# est une ligne ici, plus jamais le nom caché au bout d'un lien.
+ICON_INK    = resources/svg/logo-light.svg
+# Tailles que le thème système DÉCLARE déjà (index.theme du paquet
+# hicolor-icon-theme, mesuré : 16x16, 24x24, 32x32, 48x48, 64x64, 96x96,
+# 128x128, 256x256, 512x512, scalable, symbolic). On n'y écrit jamais un
+# index.theme : il ne nous appartient pas, et un index.theme partiel
+# effacerait du thème les icônes des autres — google-chrome et vivaldi
+# vivent dans ce hicolor. On ne pose que des fichiers dans des répertoires
+# déjà déclarés.
+ICON_SIZES  = 16x16 24x24 32x32 48x48 64x64 96x96 128x128 256x256 512x512
+
+# PREFIX vide n'est pas « par défaut » : c'est LIBDIR=/lib/cdb, et `uninstall`
+# y applique un `rm -rf`. `?=` ne mène jamais là tout seul — on n'y touche que
+# par un `make PREFIX=` explicitement cassé. On refuse à la lecture du Makefile,
+# pas dans la recette : un `make -n uninstall` doit déjà répondre non.
+ifeq ($(strip $(PREFIX)),)
+$(error PREFIX est vide — cela donnerait `rm -rf /lib/cdb` à uninstall)
+endif
+
+install: $(TARGET) mo
+	@command -v rsvg-convert >/dev/null 2>&1 || { \
+	  echo "rsvg-convert est requis pour générer les icônes (librsvg2-bin)"; \
+	  exit 1; }
+	@# La loi des premiers octets, payée cher le 4 septembre : gdk-pixbuf
+	@# identifie un fichier à ce qui précède <svg>, quand GTK4, lui, a son
+	@# propre parseur et tolère un commentaire avant la balise. Un SVG
+	@# correct pour GTK4 peut donc laisser un emplacement vide dans le dash :
+	@# le nom se résout quand même (has_icon vrai, le fichier est là), rien ne
+	@# se dessine. Et rien dans le dev ne le révèle — CDB ne charge pas ces
+	@# actifs (grep resources/svg src/ est vide) : le premier œil qui les voit
+	@# est le shell, après install. D'où la ligne de garde ci-dessous, qui ne
+	@# remplace pas cet œil mais ne coûte rien à tenir.
+	@head -c 5 $(ICON_INK) | grep -Eq '^<(\?xml|svg)' || { \
+	  echo "$(ICON_INK) ne commence ni par <svg> ni par <?xml : gdk-pixbuf ne le chargera pas"; \
+	  exit 1; }
+	@mkdir -p $(LIBDIR)/po $(LIBDIR)/resources $(LIBDIR)/third_party \
+	    $(BINDIR) $(SHAREDIR)/applications
+	install -m 0755 $(TARGET) $(LIBDIR)/$(TARGET)
+	cp -a po/locale $(LIBDIR)/po/
+	cp -a resources/sounds $(LIBDIR)/resources/
+	cp -a third_party/models-dev $(LIBDIR)/third_party/
+	ln -sfn ../lib/cdb/$(TARGET) $(BINDIR)/$(TARGET)
+	@# Le .desktop installé ne contient pas une ligne de commentaire de dev :
+	@# les justifications vivent dans le .in, le client ne les lit pas.
+	@# '/^#/d' les retire, '/./,$$!d' mange le blanc qui restait en tête.
+	sed -e '/^#/d' -e '/./,$$!d' \
+	    -e 's|@PREFIX@|$(PREFIX)|' resources/$(APP_ID).desktop.in \
+	    > $(SHAREDIR)/applications/$(APP_ID).desktop
+	@# Le PNG est GÉNÉRÉ depuis le SVG, à la taille près : aucun fichier
+	@# d'icône n'est versionné, donc rien ne peut pourrir. L'encre vient de
+	@# $(ICON_INK) — la mesurer dans le PNG produit, pas la croire au nom.
+	@for s in $(ICON_SIZES); do \
+	    d=$(SHAREDIR)/icons/hicolor/$$s/apps; \
+	    mkdir -p $$d; \
+	    rsvg-convert -w $${s%x*} -h $${s%x*} $(ICON_INK) -o $$d/$(APP_ID).png; \
+	    chmod 644 $$d/$(APP_ID).png; \
+	done
+	@d=$(SHAREDIR)/icons/hicolor/scalable/apps; mkdir -p $$d; \
+	    install -m 0644 $(ICON_INK) $$d/$(APP_ID).svg
+	@command -v update-desktop-database >/dev/null 2>&1 && \
+	    update-desktop-database -q $(SHAREDIR)/applications; true
+	@echo "installé : $(LIBDIR), $(BINDIR)/$(TARGET), $(SHAREDIR)/applications/$(APP_ID).desktop"
+
+# Retire exactement ce que `install` a posé. Rien ici ne touche ~/.config/cdb
+# (sessions, layouts, lives) ni ~/.local : les données de l'utilisateur ne
+# sont pas la propriété du Makefile.
+uninstall:
+	rm -f $(BINDIR)/$(TARGET)
+	rm -rf $(LIBDIR)
+	rm -f $(SHAREDIR)/applications/$(APP_ID).desktop
+	@# Balayage par MOTIF, pas par $(ICON_SIZES) : cette liste est celle d'hui,
+	@# pas celle d'hier. Le 192x192 posé par l'install aux favicons lui a
+	@# survécu, et plus fort — la sonde GtkIconTheme montre que l'orphelin
+	@# reste résolvable comme icône de l'app à 16, 48, 144 et 432 px. Un
+	@# `uninstall` qui laisse l'icône en place est pire qu'un fichier oublié.
+	@for d in $(SHAREDIR)/icons/hicolor/*/apps; do \
+	    rm -f $$d/$(APP_ID).png $$d/$(APP_ID).svg; \
+	done
+	@command -v update-desktop-database >/dev/null 2>&1 && \
+	    update-desktop-database -q $(SHAREDIR)/applications; true
+	@echo "retiré : $(LIBDIR), $(BINDIR)/$(TARGET), le .desktop et les icônes $(APP_ID)"
+
 # Dépendances de headers générées par -MMD (ignorées si absentes).
 -include $(DEP)
-.PHONY: all run asan clean pot po mo i18n-check tools install-hooks check check-asan
+.PHONY: all run asan clean pot po mo i18n-check tools install-hooks check check-asan install uninstall
