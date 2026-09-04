@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="CDB">
+<!-- ENCRE SOMBRE (#242424) — ce fichier se pose en thème CLAIR. Le nom dit l'encre,
+     pas la destination : logo-dark = thème clair, logo-light = thème sombre. Encre =
+     le fond de la case vide, mesuré en thème sombre. Bleu #24669F invariant, partagé
+     avec logo-light.svg : l'onglet s'y lit contre le trait qui l'entoure. -->
+  <g fill="none" stroke="#242424" stroke-width="8" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="5" y="5" width="90" height="90" rx="15" ry="15"/>
+    <line x1="95" y1="60" x2="5" y2="60"/>
+    <line x1="50" y1="95" x2="50" y2="5"/>
+  </g>
+  <!-- TILEBAR -->
+  <rect x="15" y="15" width="25" height="8" rx="4" fill="#24669F"/>
+</svg>

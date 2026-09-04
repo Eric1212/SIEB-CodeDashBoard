@@ -1,0 +1,38 @@
+# Gabarit du fichier .desktop de CDB — rendu par `make install` (sed sur
+# @PREFIX@), jamais lu tel quel par le système.
+#
+# Pourquoi un template et pas un fichier figé : Exec= doit porter le préfixe
+# réel de l'installation, et `make install PREFIX=…` reste possible.
+#
+# Trois choix qui se justifient, mesurés sur cette machine :
+#
+#   - pas de `%U` : CDB ne déclare aucun HANDLES_OPEN_URI et aucun
+#     gestionnaire de ligne de commande (src/main.c — argv ne traverse que
+#     g_application_run). Lui passer des URI serait un argument qu'il ne
+#     sait pas consommer.
+#   - Name n'est PAS traduit : « CodeDashBoard » est un nom propre.
+#     GenericName et Comment le sont, par les clés [fr] — le mécanisme de
+#     localisation du format desktop, pas gettext. Aucun des 244 .desktop
+#     installés ici ne termine son Comment par un point ; on fait pareil.
+#   - Categories : UNE seule catégorie principale (Development), IDE et
+#     TextEditor n'étant qu'additionnelles. La forme dominante ici,
+#     `Utility;TextEditor;Development;IDE;`, en déclare deux et fait
+#     apparaître l'app deux fois dans le menu ; desktop-file-validate le dit.
+#     Le hint restant (« TextEditor could be extended with Utility ») est une
+#     heuristique pour les éditeurs utilitaires — pas pour un IDE. Ne pas
+#     « corriger » en ajoutant Utility.
+
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=CodeDashBoard
+GenericName=Dashboard IDE
+GenericName[fr]=IDE tableau de bord
+Comment=Lightweight dashboard IDE oriented toward LLM workflows
+Comment[fr]=IDE tableau de bord léger, orienté vers les flux de travail LLM
+Exec=@PREFIX@/bin/cdb
+Icon=ca.sieb.cdb
+Terminal=false
+Categories=Development;IDE;TextEditor;
+StartupNotify=true
+StartupWMClass=ca.sieb.cdb
