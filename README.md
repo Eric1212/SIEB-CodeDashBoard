@@ -32,9 +32,7 @@
 
 **The interactive box, in three states.** A request folds away, the decision
 always shows in full — green or red — and the answer arrives complete, white
-on black like a terminal. The thread is a lazy GtkTextView: 100 000 lines
-render in 0,0 ms, where a GtkLabel needs 62 seconds. Nothing is ever
-truncated.
+on black like a terminal. Nothing is ever truncated.
 
 <p align="center">
   <img src="resources/images/cdb_ibox_close_shadow.webp" alt="ibox, folded" width="320">

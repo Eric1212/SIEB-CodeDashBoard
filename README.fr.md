@@ -32,9 +32,7 @@
 
 **La boîte interactive, en trois états.** Une demande se plie, la décision
 s'affiche toujours en entier — vert ou rouge — et la réponse arrive
-complète, blanc sur noir comme un terminal. Le fil est un GtkTextView
-paresseux : 100 000 lignes se rendent en 0,0 ms, là où une GtkLabel exige
-62 secondes. Rien n'est jamais tronqué.
+complète, blanc sur noir comme un terminal. Rien n'est jamais tronqué.
 
 <p align="center">
   <img src="resources/images/cdb_ibox_close_shadow.webp" alt="ibox, pliée" width="320">
