@@ -138,6 +138,14 @@ on_fold_toggled(GtkToggleButton *btn, gpointer G_GNUC_UNUSED unused)
                                      open ? "pan-up-symbolic"
                                           : "pan-down-symbolic");
 
+    /* La hauteur du pane, elle, ne se décide PAS ici : le handler ne
+     * peint que le chevron et l'opacité du digest. Elle suit le pli
+     * AILLEURS — la liaison « active -> reveal-child » posée à la
+     * construction (plus bas) ouvre/ferme la zone, et pane_fill a déjà
+     * posé le size_request borné. Le suivi du fil, côté tuile, n'y lit
+     * donc jamais d'état intermédiaire.
+     */
+
     /* Le digest n'a de raison d'être que ZONE REPLIÉE : dépliée, il
      * répète le contenu (« input bash-0 $ date » au-dessus de
      * « bash-0 $ date »). On le rend INVISIBLE, on ne le cache pas : c'est
@@ -679,12 +687,6 @@ ibox_set_output(GtkWidget *box, const char *text)
         gtk_label_set_text(GTK_LABEL(b->out_digest), d);
         g_free(d);
     }
-    pane_fill(b->out_buf, b->out_scroll, b->output, IB_OUT_MAX_H);
-
-    /* ⤢ n'a de sens que si le contenu déborde la hauteur affichée. */
-    gtk_widget_set_visible(b->out_more,
-                           b->cb_showall != NULL &&
-                           (int)n * IB_LINE_PX > IB_OUT_MAX_H);
 
     /* Dépliage automatique, mais seulement tant que RIEN N'EST DÉCIDÉ :
      * une demande en attente doit se lire — on déplie ce qu'on approuve.
@@ -692,10 +694,24 @@ ibox_set_output(GtkWidget *box, const char *text)
      * ibox_decided() a replié la boîte et le résultat qui arrive ne doit
      * plus la rouvrir toute seule. La hauteur reste bornée, donc un
      * output de 30 000 lignes ne coûte ni une seconde de layout, ni
-     * 600 000 pixels de fil. */
+     * 600 000 pixels de fil.
+     *
+     * Le déplié se pose AVANT le remplissage : le pane nait à sa hauteur
+     * finale, et la passe d'allocation qui suit ne RACCOURCIT jamais le
+     * fil — le suivi de la tuile (follow) n'y perd jamais le nord. Dans
+     * l'ordre inverse, replier après avoir rempli faisait disparaître
+     * toute la hauteur de la zone output sous les pieds du bas du fil,
+     * et l'arbitre du scroll y lisait une remontée d'Éric. */
     if (!b->decided)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(b->out_fold),
                                      TRUE);
+
+    pane_fill(b->out_buf, b->out_scroll, b->output, IB_OUT_MAX_H);
+
+    /* ⤢ n'a de sens que si le contenu déborde la hauteur affichée. */
+    gtk_widget_set_visible(b->out_more,
+                           b->cb_showall != NULL &&
+                           (int)n * IB_LINE_PX > IB_OUT_MAX_H);
 }
 
 const char *
