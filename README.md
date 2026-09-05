@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source srcset="resources/svg/banner-light.svg" media="(prefers-color-scheme: dark)">
-    <img src="resources/svg/banner-dark.svg" alt="CodeDashBoard (CDB)" width="600">
+    <source srcset="resources/svg/banner-light.webp" media="(prefers-color-scheme: dark)">
+    <img src="resources/svg/banner-dark.webp" alt="CodeDashBoard (CDB)" width="600">
   </picture>
 </p>
 
