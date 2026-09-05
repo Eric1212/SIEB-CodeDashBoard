@@ -4,7 +4,7 @@
 # Pourquoi un template et pas un fichier figé : Exec= doit porter le préfixe
 # réel de l'installation, et `make install PREFIX=…` reste possible.
 #
-# Trois choix qui se justifient, mesurés sur cette machine :
+# Quatre choix qui se justifient, mesurés sur cette machine :
 #
 #   - pas de `%U` : CDB ne déclare aucun HANDLES_OPEN_URI et aucun
 #     gestionnaire de ligne de commande (src/main.c — argv ne traverse que
@@ -21,18 +21,31 @@
 #     Le hint restant (« TextEditor could be extended with Utility ») est une
 #     heuristique pour les éditeurs utilitaires — pas pour un IDE. Ne pas
 #     « corriger » en ajoutant Utility.
+#   - Actions : une entrée « Nouvelle session » au menu du dock — le Shell
+#     exécute son Exec comme un lancement normal (nouveau PID, qui suit la
+#     logique standard : 000 si seul, dialogue de numéro sinon) — le même
+#     contrat que le bouton « Nouvelle session… » de l'app. Pas de %U (même
+#     raison que plus haut) et pas de DBusActivatable : l'activation D-Bus
+#     exigerait un ID de bus unique, contredit par le G_APPLICATION_NON_UNIQUE
+#     voulu — le binaire n'a rien à exposer, le .desktop suffit.
 
 [Desktop Entry]
 Type=Application
 Version=1.0
+Actions=new-session;
 Name=CodeDashBoard
 GenericName=Dashboard IDE
 GenericName[fr]=IDE tableau de bord
-Comment=Lightweight dashboard IDE oriented toward LLM workflows
-Comment[fr]=IDE tableau de bord léger, orienté vers les flux de travail LLM
+Comment=Lightweight dashboard IDE oriented toward AI workflows
+Comment[fr]=IDE tableau de bord léger, orienté vers les flux de travail IA
 Exec=@PREFIX@/bin/cdb
 Icon=ca.sieb.cdb
 Terminal=false
 Categories=Development;IDE;TextEditor;
 StartupNotify=true
 StartupWMClass=ca.sieb.cdb
+
+[Desktop Action new-session]
+Exec=@PREFIX@/bin/cdb
+Name=New session
+Name[fr]=Nouvelle session
