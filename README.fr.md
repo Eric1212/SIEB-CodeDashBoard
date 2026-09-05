@@ -86,7 +86,7 @@ make       # construit ./cdb et les catalogues .mo
 sudo make install     # puis démarrez CDB depuis le menu d'applications ; retrait : sudo make uninstall
 ```
 
-#### Non-Linux (Windows & macOS)
+#### Non-Linux (Windows & MacOS)
 
 ##### Windows (WSL2)
 
@@ -108,9 +108,9 @@ installation Debian ou Ubuntu native — `install.sh` compris,
 `sudo make install` aussi (WSLg place même l'entrée de bureau dans le menu
 Démarrer de Windows).
 
-##### macOS (Homebrew)
+##### MacOS (Homebrew)
 
-**macOS (Homebrew)** — compilez depuis les sources contre la pile GTK4 de
+**Homebrew** — compilez depuis les sources contre la pile GTK4 de
 Homebrew :
 
 ```sh
@@ -119,10 +119,10 @@ brew install gcc pkgconf gettext make gtk4 gtksourceview5 libadwaita \
 make run   # construit puis lance — la voie express
 # ou en deux temps :
 make       # pkg-config trouve les kegs via PKG_CONFIG_PATH
-./cdb      # XQuartz inutile : GTK4 s'affiche nativement sur macOS
+./cdb      # XQuartz inutile : GTK4 s'affiche nativement sur MacOS
 ```
 
-GTK4 s'affiche nativement sur macOS — XQuartz inutile. Arrêtez-vous là :
+GTK4 s'affiche nativement sur MacOS — XQuartz inutile. Arrêtez-vous là :
 `sudo make install` est une affaire XDG/Linux — /usr est protégé par SIP, et
 les entrées .desktop n'y signifient rien.
 

@@ -86,7 +86,7 @@ make       # builds ./cdb and the .mo catalogs
 sudo make install     # then start CDB from the app menu; undo: sudo make uninstall
 ```
 
-#### Non-Linux (Windows & macOS)
+#### Non-Linux (Windows & MacOS)
 
 ##### Windows (WSL2)
 
@@ -107,9 +107,9 @@ From that Debian shell on, treat CDB exactly as on a native Debian or
 Ubuntu install — `install.sh` included, `sudo make install` too (WSLg even
 surfaces the desktop entry in the Windows Start menu).
 
-##### macOS (Homebrew)
+##### MacOS (Homebrew)
 
-**macOS (Homebrew)** — build from source against Homebrew's GTK4 stack:
+**Homebrew** — build from source against Homebrew's GTK4 stack:
 
 ```sh
 brew install gcc pkgconf gettext make gtk4 gtksourceview5 libadwaita \
@@ -117,10 +117,10 @@ brew install gcc pkgconf gettext make gtk4 gtksourceview5 libadwaita \
 make run   # builds, then launches — the one-shot way
 # or, in two steps:
 make       # pkg-config finds the kegs through PKG_CONFIG_PATH
-./cdb      # no XQuartz needed: GTK4 renders natively on macOS
+./cdb      # no XQuartz needed: GTK4 renders natively on MacOS
 ```
 
-GTK4 renders natively on macOS — no XQuartz needed. Stop there: `sudo make
+GTK4 renders natively on MacOS — no XQuartz needed. Stop there: `sudo make
 install` is XDG/Linux-only — /usr is SIP-protected, and .desktop entries mean
 nothing there.
 
