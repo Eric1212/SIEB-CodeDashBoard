@@ -186,6 +186,11 @@ llm_live_repair_open_tool_calls(LlmCore *c)
             repair.content = g_strdup(
                 _("Interrupted by the CDB restart."));
             repair.tool_call_id = g_strdup(tc->id);
+            /* Transitoire : l'appel était resté SANS réponse sur disque.
+             * Loi d'Éric — pas de réponse, preuve de verdict refusé : le
+             * replay des boîtes en déduit le rouge, la note reste lisible
+             * dans la zone output. Rien de ceci n'est persisté. */
+            repair.repaired = TRUE;
             g_array_append_vals(c->history, &repair, 1);
 
             if (c->answered_tools != NULL)

@@ -2226,6 +2226,33 @@ cdb_kind_label(CdbSpecKind k)
     return CDB_TOOL_NAME;     /* inatteignable ; -Wreturn-type content */
 }
 
+/* L'inverse exact de cdb_kind_label : le nom public vers le kind.
+ * Une seule table des deux côtés — écrire "read" ici ET là serait deux
+ * vérités capables de diverger. FALSE = outil inconnu. */
+static gboolean
+cdb_kind_from_name(const char *name, CdbSpecKind *out)
+{
+    if (name == NULL)
+        return FALSE;
+    if (g_strcmp0(name, CDB_TOOL_NAME) == 0)
+        *out = CDB_SPEC_BASH;
+    else if (g_strcmp0(name, CDB_TOOL_NAME_READ) == 0)
+        *out = CDB_SPEC_READ;
+    else if (g_strcmp0(name, CDB_TOOL_NAME_INSERT) == 0)
+        *out = CDB_SPEC_INSERT;
+    else if (g_strcmp0(name, CDB_TOOL_NAME_REMOVE) == 0)
+        *out = CDB_SPEC_REMOVE;
+    else if (g_strcmp0(name, CDB_TOOL_NAME_REPLACE) == 0)
+        *out = CDB_SPEC_REPLACE;
+    else if (g_strcmp0(name, CDB_TOOL_NAME_CREATE) == 0)
+        *out = CDB_SPEC_CREATE;
+    else if (g_strcmp0(name, CDB_TOOL_NAME_DELETE) == 0)
+        *out = CDB_SPEC_DELETE;
+    else
+        return FALSE;
+    return TRUE;
+}
+
 /* Chaîne empruntée à l'arbre JSON : valable tant que le parser vit, NULL
  * si absente ou de mauvais type. (Rappel : ne jamais libérer le parser
  * avant la dernière utilisation d'une de ces chaînes.) */
@@ -3629,6 +3656,107 @@ done:
         g_object_unref(parser);
 }
 
+/* Le résumé lisible d'un appel fichier — LA source du texte que porte
+ * la barre d'approbation. Extrait de cdb_dispatch_file_tool pour que le
+ * replay (llm_tool_summary) reconstruise EXACTEMENT le même texte depuis
+ * le fil persisté : un seul endroit connait la forme des libellés.
+ * NULL si le kind n'a pas de résumé (BASH, routé ailleurs). */
+static char *
+cdb_file_tool_summary(CdbSpecKind kind, const CdbToolPlan *plan)
+{
+    char *summary = NULL;
+
+    switch (kind) {
+    case CDB_SPEC_READ:
+        summary = g_strdup_printf("read  %s  %ld-%ld",
+                                  plan->path, plan->from_line, plan->to_line);
+        break;
+
+    case CDB_SPEC_INSERT: {
+        guint n = textops_logical_lines(plan->text, strlen(plan->text));
+
+        summary = g_strdup_printf(
+            ngettext("insert  %s  after %ld / before %ld  (+%u line)",
+                     "insert  %s  after %ld / before %ld  (+%u lines)", n),
+            plan->path, plan->before_line, plan->after_line, n);
+        break;
+    }
+
+    case CDB_SPEC_REMOVE: {
+        guint n = (guint)(plan->to_line - plan->from_line + 1);
+
+        summary = g_strdup_printf(
+            ngettext("remove  %s  %ld-%ld  (-%u line)",
+                     "remove  %s  %ld-%ld  (-%u lines)", n),
+            plan->path, plan->from_line, plan->to_line, n);
+        break;
+    }
+
+    case CDB_SPEC_REPLACE:
+        /* k -> k : le plan tient lines.length == to-from+1, donc les deux
+         * chiffres affiche ici sont le MEME nombre et ne peuvent plus
+         * s'ecarter de ce que la jointure produira. */
+        summary = g_strdup_printf(
+            ngettext("replace  %s  %ld-%ld  [%u line -> %u line]",
+                     "replace  %s  %ld-%ld  [%u lines -> %u lines]",
+                     plan->n_lines),
+            plan->path, plan->from_line, plan->to_line,
+            plan->n_lines, plan->n_lines);
+        break;
+
+    case CDB_SPEC_CREATE: {
+        guint added = textops_logical_lines(plan->content,
+                                            strlen(plan->content));
+
+        /* Un seul compteur : le pluriel porte la ligne entiere, donc
+         * l'ordre des mots reste libre pour chaque langue. */
+        summary = g_strdup_printf(
+            ngettext("create  %s  +%u line  (new file)",
+                     "create  %s  +%u lines  (new file)", added),
+            plan->path, added);
+        break;
+    }
+
+    case CDB_SPEC_DELETE: {
+        char     *cnt = NULL;
+        gsize     cl = 0;
+        guint     removed = 0;
+        gboolean  absent = TRUE;
+
+        /* Compter les lignes detruites ici, pour qu'Eric voie la taille du
+         * degat dans la barre d'approbation. Lecture seule. Au replay, le
+         * compte reflète l'état ACTUEL du fichier — léger anachronisme,
+         * assumé : la note du refus, elle, ne ment jamais. */
+        if (g_file_get_contents(plan->path, &cnt, &cl, NULL) && cnt != NULL) {
+            GArray *o = g_array_new(FALSE, FALSE, sizeof(gsize));
+            guint   lc = 0;
+
+            absent = FALSE;
+            textops_line_offsets(cnt, cl, o, &lc);
+            removed = lc;
+            g_array_free(o, TRUE);
+            g_free(cnt);
+        }
+        summary = g_strdup_printf(
+            ngettext("delete  %s  -%u line%s%s",
+                     "delete  %s  -%u lines%s%s", removed),
+            plan->path, removed,
+            absent ? _("   [ABSENT OR UNREADABLE]") : "",
+            (plan->file_hash != NULL && plan->file_hash[0] != '\0')
+                ? _("   [DESTRUCTION CONFIRMED]") : "");
+        break;
+    }
+
+    case CDB_SPEC_BASH:
+        /* Inatteignable : cdb_dispatch_native_call ne route vers cette
+         * fonction qu'un kind != BASH. Pas de default — un kind neuf
+         * doit etre traite ici, pas absorbe en silence. */
+        break;
+    }
+
+    return summary;
+}
+
 /* Outils fichiers : on ne valide ici que la FORME, pour ne pas rendre une
  * barre d'approbation inepte. L'etat du disque est verifie a l'execution. */
 static void
@@ -3664,91 +3792,10 @@ cdb_dispatch_file_tool(LlmCore *c, const LlmToolCall *tc,
     if (!cdb_plan_parse(kind, tc->arguments_json, &plan, &error))
         goto done;
 
-    switch (kind) {
-    case CDB_SPEC_READ:
-        summary = g_strdup_printf("read  %s  %ld-%ld",
-                                  plan.path, plan.from_line, plan.to_line);
-        break;
-
-    case CDB_SPEC_INSERT: {
-        guint n = textops_logical_lines(plan.text, strlen(plan.text));
-
-        summary = g_strdup_printf(
-            ngettext("insert  %s  after %ld / before %ld  (+%u line)",
-                     "insert  %s  after %ld / before %ld  (+%u lines)", n),
-            plan.path, plan.before_line, plan.after_line, n);
-        break;
-    }
-
-    case CDB_SPEC_REMOVE: {
-        guint n = (guint)(plan.to_line - plan.from_line + 1);
-
-        summary = g_strdup_printf(
-            ngettext("remove  %s  %ld-%ld  (-%u line)",
-                     "remove  %s  %ld-%ld  (-%u lines)", n),
-            plan.path, plan.from_line, plan.to_line, n);
-        break;
-    }
-
-    case CDB_SPEC_REPLACE:
-        /* k -> k : le plan tient lines.length == to-from+1, donc les deux
-         * chiffres affiche ici sont le MEME nombre et ne peuvent plus
-         * s'ecarter de ce que la jointure produira. */
-        summary = g_strdup_printf(
-            ngettext("replace  %s  %ld-%ld  [%u line -> %u line]",
-                     "replace  %s  %ld-%ld  [%u lines -> %u lines]",
-                     plan.n_lines),
-            plan.path, plan.from_line, plan.to_line,
-            plan.n_lines, plan.n_lines);
-        break;
-
-    case CDB_SPEC_CREATE: {
-        guint added = textops_logical_lines(plan.content,
-                                            strlen(plan.content));
-
-        /* Un seul compteur : le pluriel porte la ligne entiere, donc
-         * l'ordre des mots reste libre pour chaque langue. */
-        summary = g_strdup_printf(
-            ngettext("create  %s  +%u line  (new file)",
-                     "create  %s  +%u lines  (new file)", added),
-            plan.path, added);
-        break;
-    }
-
-    case CDB_SPEC_DELETE: {
-        char     *cnt = NULL;
-        gsize     cl = 0;
-        guint     removed = 0;
-        gboolean  absent = TRUE;
-
-        /* Compter les lignes detruites ici, pour qu'Eric voie la taille du
-         * degat dans la barre d'approbation. Lecture seule. */
-        if (g_file_get_contents(plan.path, &cnt, &cl, NULL) && cnt != NULL) {
-            GArray *o = g_array_new(FALSE, FALSE, sizeof(gsize));
-            guint   lc = 0;
-
-            absent = FALSE;
-            textops_line_offsets(cnt, cl, o, &lc);
-            removed = lc;
-            g_array_free(o, TRUE);
-            g_free(cnt);
-        }
-        summary = g_strdup_printf(
-            ngettext("delete  %s  -%u line%s%s",
-                     "delete  %s  -%u lines%s%s", removed),
-            plan.path, removed,
-            absent ? _("   [ABSENT OR UNREADABLE]") : "",
-            (plan.file_hash != NULL && plan.file_hash[0] != '\0')
-                ? _("   [DESTRUCTION CONFIRMED]") : "");
-        break;
-    }
-
-    case CDB_SPEC_BASH:
-        /* Inatteignable : cdb_dispatch_native_call ne route vers cette
-         * fonction qu'un kind != BASH. Pas de default — un kind neuf
-         * doit etre traite ici, pas absorbe en silence. */
-        break;
-    }
+    /* Le libellé de la barre : un seul endroit connait la forme des
+     * résumés — cdb_dispatch_file_tool en live, llm_tool_summary au
+     * replay (même texte reconstruit depuis le fil persisté). */
+    summary = cdb_file_tool_summary(kind, &plan);
 
     {
         CdbCmdSpec *spec = g_new0(CdbCmdSpec, 1);
@@ -3775,6 +3822,96 @@ done:
     cdb_plan_clear(&plan);
 }
 
+/* Reconstruit le résumé lisible depuis ce que le fil persiste (nom de
+ * l'outil + arguments_json) : le MÊME texte que la barre a porté en live,
+ * car cdb_file_tool_summary est la source unique des libellés. NULL si
+ * l'outil est inconnu ou les arguments invalides — le replay retombe
+ * alors sur le texte plat, comme pour un appel dont la barre n'a jamais
+ * existé (arguments refusés à la porte). Le bash est reconstruit ici :
+ * live, son résumé est né dans cdb_dispatch_native_call. */
+char *
+llm_tool_summary(const char *name, const char *arguments_json)
+{
+    CdbSpecKind  kind;
+    CdbToolPlan  plan = { 0 };
+    char        *summary = NULL;
+    char        *error = NULL;
+    JsonParser  *parser = NULL;
+    JsonObject  *root;
+
+    if (!cdb_kind_from_name(name, &kind))
+        return NULL;
+
+    if (kind == CDB_SPEC_BASH) {
+        /* Mêmes clés que le live : {terminal, command}. Le numéro
+         * d'onglet persisté est celui qui fut demandé — le montrer est
+         * fidèle, pas anachronique. */
+        long terminal = -1;
+        const char *command = NULL;
+
+        if (arguments_json == NULL)
+            return NULL;
+        parser = json_parser_new();
+        if (!json_parser_load_from_data(parser, arguments_json, -1,
+                                        NULL) ||
+            json_parser_get_root(parser) == NULL ||
+            !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
+            g_object_unref(parser);
+            return NULL;
+        }
+        root = json_node_get_object(json_parser_get_root(parser));
+        terminal = llm_json_int(root, "terminal", -1);
+        if (json_object_has_member(root, "command") &&
+            JSON_NODE_HOLDS_VALUE(
+                json_object_get_member(root, "command")) &&
+            json_node_get_value_type(
+                json_object_get_member(root, "command")) == G_TYPE_STRING)
+            command = json_object_get_string_member(root, "command");
+        if (terminal < 0 || terminal > 9 || command == NULL ||
+            command[0] == '\0') {
+            g_object_unref(parser);
+            return NULL;
+        }
+        summary = g_strdup_printf("bash-%d $ %s", (int)terminal, command);
+        g_object_unref(parser);
+        return summary;
+    }
+
+    /* Même porte NUL que le dispatch (la concaténation évite d'écrire la
+     * séquence d'échappement dans la source) : ce qui fut refusé en live
+     * ne revient pas en résumé au replay. */
+    if (arguments_json != NULL &&
+        strstr(arguments_json, "\\u" "0000") != NULL)
+        return NULL;
+
+    if (!cdb_plan_parse(kind, arguments_json, &plan, &error)) {
+        g_free(error);
+        cdb_plan_clear(&plan);
+        return NULL;
+    }
+    summary = cdb_file_tool_summary(kind, &plan);
+    cdb_plan_clear(&plan);
+    return summary;
+}
+
+/* La note de refus, une seule fois écrite : cdb_decision_refuse la
+ * commet dans le fil, et le replay des boîtes la reconnaît à l'identique
+ * pour peindre le rouge. Gabarit localisé + [NAME_USER] remplacé — si la
+ * langue ou le nom change entre deux sessions, un refus ancien se
+ * déguise en exécution : limite documentée, assumée (le fil est la
+ * preuve, il parle la langue du moment). */
+char *
+llm_refusal_note(LlmCore *c)
+{
+    /* TRANSLATORS: do not translate the [NAME_USER] token — it is
+     * replaced with the configured user name (harness.name_user). */
+    return str_replace_all(
+        _("[NAME_USER] has REFUSED this tool call. This is not a bug: "
+          "it is a decision. Adapt and propose something else."),
+        "[NAME_USER]", c != NULL && c->name_user != NULL
+                           ? c->name_user : g_get_user_name());
+}
+
 /* Valide un appel natif et le place soit dans la file bash, soit dans une
  * réponse d'erreur formelle. Aucun appel ne reste sans réponse. */
 static void
@@ -3799,21 +3936,7 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
         return;
     }
 
-    if (g_strcmp0(tc->name, CDB_TOOL_NAME) == 0)
-        kind = CDB_SPEC_BASH;
-    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_READ) == 0)
-        kind = CDB_SPEC_READ;
-    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_INSERT) == 0)
-        kind = CDB_SPEC_INSERT;
-    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_REMOVE) == 0)
-        kind = CDB_SPEC_REMOVE;
-    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_REPLACE) == 0)
-        kind = CDB_SPEC_REPLACE;
-    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_CREATE) == 0)
-        kind = CDB_SPEC_CREATE;
-    else if (g_strcmp0(tc->name, CDB_TOOL_NAME_DELETE) == 0)
-        kind = CDB_SPEC_DELETE;
-    else {
+    if (!cdb_kind_from_name(tc->name, &kind)) {
         error = g_strdup_printf(
             _("unknown tool \"%s\": this tool does not exist in CDB."),
             tc->name != NULL ? tc->name : _("(unnamed)"));
@@ -4890,12 +5013,9 @@ llm_cdb_results_flush(LlmCore *c)
 void
 cdb_decision_refuse(LlmCore *c, CdbDecision *d)
 {
-    /* TRANSLATORS: do not translate the [NAME_USER] token — it is
-     * replaced with the configured user name (harness.name_user). */
-    char *note = str_replace_all(
-        _("[NAME_USER] has REFUSED this tool call. This is not a bug: "
-          "it is a decision. Adapt and propose something else."),
-        "[NAME_USER]", c->name_user != NULL ? c->name_user : g_get_user_name());
+    /* La note vient de la source unique : le replay des boîtes la
+     * reconnaît à l'identique pour repeindre le rouge après restart. */
+    char *note = llm_refusal_note(c);
     d->state = CDB_A_REFUSED;
     for (guint vi = 0; vi < c->views->len; vi++)
         llm_tile_decision_resolve(g_ptr_array_index(c->views, vi),

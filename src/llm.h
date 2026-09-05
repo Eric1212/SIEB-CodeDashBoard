@@ -393,6 +393,12 @@ typedef struct {
 
     /* LLM_MSG_TOOL_RESULT */
     char *tool_call_id;
+
+    /* Transitoire, JAMAIS persisté : résultat fabriqué par la réparation
+     * au chargement (llmlive.c) — l'appel était resté sans réponse sur
+     * disque. Le replay des boîtes en déduit le verdict. Zéro sur disque :
+     * le fil reste la seule preuve. */
+    gboolean repaired;
 } LlmMsg;
 
 void llm_msg_clear(LlmMsg *m);
@@ -484,6 +490,16 @@ typedef struct {
 /* Rejoue l'historique du core dans TOUTES ses vues (resync après un
  * trim : le fil a raccourci, les miroirs doivent le refléter). */
 void llm_views_replay(LlmCore *c);
+
+/* Reconstruit le résumé lisible d'un appel d'outil depuis ce que le fil
+ * persiste (nom + arguments_json) — le MÊME texte que la barre
+ * d'approbation a porté en live. NULL si l'appel est inconnu ou les
+ * arguments invalides : le replay retombe alors sur le texte plat. */
+char *llm_tool_summary(const char *name, const char *arguments_json);
+
+/* La note de refus : une seule source du gabarit (cdb_decision_refuse
+ * l'écrit, le replay des boîtes la reconnaît). [NAME_USER] remplacé. */
+char *llm_refusal_note(LlmCore *c);
 
 
 /* Trim de l'historique (active.trim) — appelé du SEUL bouton play

@@ -1606,18 +1606,30 @@ llm_slots_load_dialog(LlmTile *t)
             LlmMsg       tm = { 0 };
 
             for (guint k = 0; k < json_array_get_length(ta); k++) {
+                JsonObject  *fn;
                 JsonObject  *to = json_array_get_object_element(ta, k);
                 LlmToolCall *tc = g_new0(LlmToolCall, 1);
 
-                if (json_object_has_member(to, "id"))
+                /* Le slot persiste le BODY RÉSEAU (format OpenAI) :
+                 * name/arguments vivent dans l'objet "function" imbriqué.
+                 * La forme à plat (llm_live.json) reste acceptée — un
+                 * slot importé d'une autre session peut avoir les deux. */
+                fn = to != NULL &&
+                     json_object_has_member(to, "function") &&
+                     JSON_NODE_HOLDS_OBJECT(
+                         json_object_get_member(to, "function"))
+                     ? json_object_get_object_member(to, "function")
+                     : to;
+
+                if (to != NULL && json_object_has_member(to, "id"))
                     tc->id = g_strdup(
                         json_object_get_string_member(to, "id"));
-                if (json_object_has_member(to, "name"))
+                if (fn != NULL && json_object_has_member(fn, "name"))
                     tc->name = g_strdup(
-                        json_object_get_string_member(to, "name"));
-                if (json_object_has_member(to, "arguments"))
+                        json_object_get_string_member(fn, "name"));
+                if (fn != NULL && json_object_has_member(fn, "arguments"))
                     tc->arguments_json = g_strdup(
-                        json_object_get_string_member(to, "arguments"));
+                        json_object_get_string_member(fn, "arguments"));
                 g_ptr_array_add(calls, tc);
             }
 
@@ -1628,33 +1640,13 @@ llm_slots_load_dialog(LlmTile *t)
             tm.content = content;
             tm.tool_calls = calls;
             g_array_append_vals(t->core->history, &tm, 1);
-
-            hist_render_actor_header(t, LLMACTOR_LLM);
-            gtk_text_buffer_get_end_iter(t->hist, &eit);
-            md_insert(t->hist, &eit, content != NULL ? content : "");
-            for (guint k = 0; k < calls->len; k++) {
-                LlmToolCall *tc = g_ptr_array_index(calls, k);
-                char         *line = g_strdup_printf(
-                    "\n〔tool〕 %s %s",
-                    tc->name != NULL ? tc->name : "?",
-                    tc->arguments_json != NULL
-                        ? tc->arguments_json : "{}");
-
-                hist_append(t, line);
-                g_free(line);
-            }
-            hist_append(t, "\n");
             continue;
         }
-
         if (g_strcmp0(role, "tool") == 0) {
             const char *tool_call_id =
                 json_object_has_member(m, "tool_call_id")
                     ? json_object_get_string_member(m, "tool_call_id") : NULL;
             LlmMsg rm = { 0 };
-            const char *shown = content != NULL
-                                    ? content : _("(no new content)");
-
             memset(&rm, 0, sizeof(rm));
             rm.actor = LLMACTOR_CDB;
             rm.local = FALSE;
@@ -1662,14 +1654,6 @@ llm_slots_load_dialog(LlmTile *t)
             rm.content = content;
             rm.tool_call_id = g_strdup(tool_call_id);
             g_array_append_vals(t->core->history, &rm, 1);
-            content = NULL; /* transféré au message */
-
-            hist_render_actor_header(t, LLMACTOR_CDB);
-            hist_ensure_voice_tags(t);
-            gtk_text_buffer_get_end_iter(t->hist, &eit);
-            gtk_text_buffer_insert_with_tags_by_name(
-                t->hist, &eit, shown, -1, "voice-cdb", NULL);
-            hist_append(t, "\n");
             continue;
         }
 
@@ -1716,6 +1700,12 @@ llm_slots_load_dialog(LlmTile *t)
             g_ptr_array_unref(images);
     }
     g_object_unref(parser);
+
+    /* Le fil a été reconstruit SANS rendu : un seul replay refait tout —
+     * en-têtes, boîtes d'outil (verdict déduit du fil), décision en
+     * cours. Miroir : TOUTES les vues du core suivent, pas seulement
+     * celle qui a chargé. */
+    llm_views_replay(t->core);
     llm_scroll_to_end(t);
     llm_live_save(t->core);
 
@@ -2401,6 +2391,90 @@ on_llm_entry_changed(GtkTextBuffer G_GNUC_UNUSED *buf, gpointer data)
     llm_entry_resize(data);
 }
 
+/* box_open vit plus bas (section boîtes interactives) : le replay en a
+ * besoin pour faire renaître les boîtes depuis le fil persisté. */
+static GtkWidget *box_open(LlmTile *t, const char *summary,
+                           const char *tool_call_id, gboolean auto_allowed,
+                           gboolean allowplus);
+
+/* Fait renaître UNE boîte d'outil pendant le replay. Le verdict se
+ * déduit du fil lui-même — loi d'Éric : le fil json est la preuve.
+ *
+ *   - Décision EN COURS au core avec cet id : la boîte renaît EN
+ *     ATTENTE, cliquable — c'est le rendu de la décision, pas une copie ;
+ *     shown_decision protège du double rendu de
+ *     llm_tile_decision_render en fin de replay.
+ *   - Réponse au fil : boîte TRANCHÉE, sans animation (rien ne se
+ *     décide sous les yeux d'Éric). Verte si la réponse est une vraie
+ *     sortie d'outil — le libellé « ✔ executed » devient exact, le
+ *     résultat prouve l'exécution. Rouge si la réponse EST la note de
+ *     refus, ou si le fil n'avait AUCUNE réponse sur disque (réparation
+ *     au chargement, m.repaired) : pas de réponse, verdict refusé.
+ *   - Résumé irréconstructible (outil inconnu, arguments refusés à la
+ *     porte en live) : FALSE — l'appelant garde son texte plat, comme
+ *     le live écrit au fil ce qui n'a jamais eu de boîte.
+ *
+ * Rend TRUE si la boîte est posée. */
+static gboolean
+replay_tool_call(LlmTile *t, LlmCore *c, guint msg_index,
+                 const LlmToolCall *tc)
+{
+    LlmMsg    *res = NULL;
+    GtkWidget *box;
+    char      *summary;
+    gboolean   refused = FALSE;
+
+    if (tc->id == NULL || tc->id[0] == '\0')
+        return FALSE;
+
+    /* Décision en cours : UNE boîte, celle du core, cliquable. */
+    if (c->decision != NULL && c->decision->spec != NULL &&
+        g_strcmp0(c->decision->spec->tool_call_id, tc->id) == 0) {
+        CdbCmdSpec *sp = c->decision->spec;
+
+        box_open(t, sp->summary, sp->tool_call_id, FALSE,
+                 llm_tool_mode_has_plus(sp->mode));
+        t->shown_decision = c->decision;
+        return TRUE;
+    }
+
+    /* Première réponse au fil portant cet id. */
+    for (guint j = msg_index + 1; j < c->history->len && res == NULL; j++) {
+        LlmMsg *r = &g_array_index(c->history, LlmMsg, j);
+
+        if (r->kind == LLM_MSG_TOOL_RESULT &&
+            g_strcmp0(r->tool_call_id, tc->id) == 0)
+            res = r;
+    }
+
+    summary = llm_tool_summary(tc->name, tc->arguments_json);
+    if (summary == NULL)
+        return FALSE;
+
+    /* Née ASK (deux boutons) puis tranchée aussitôt, sans animation :
+     * rien ne se décide sous les yeux d'Éric — le verdict est ancien.
+     * Le câblage on_box_choice reste, mort : la garde d'état du
+     * callback rend un clic sans effet, la décision n'est plus
+     * l'actualité du core. */
+
+    if (res != NULL) {
+        if (res->repaired)
+            refused = TRUE;     /* pas de réponse sur disque : refusé */
+        else if (res->content != NULL) {
+            char *note = llm_refusal_note(c);
+
+            refused = g_strcmp0(res->content, note) == 0;
+            g_free(note);
+        }
+    }
+    box = box_open(t, summary, tc->id, FALSE, FALSE);
+    g_free(summary);
+    ibox_set_choice(box, refused ? IB_CHOICE_NO : IB_CHOICE_YES, FALSE);
+    ibox_decided(box);
+    if (res != NULL)
+        ibox_set_output(box, res->content != NULL ? res->content : "");
+    return TRUE;
+}
 /* Rejoue la conversation du core dans cette vue (attachement) :
  * chaque message avec son en-tête d'acteur, puis le fragment de
  * réponse en cours s'il existe. Appelée après création du buffer. */
@@ -2417,9 +2491,22 @@ llm_tile_replay_history(LlmTile *t)
      * re-rendu après un renommage (llm_views_names_changed) doit partir
      * de zéro — sinon les vieux en-têtes se doublent. */
     gtk_text_buffer_set_text(t->hist, "", -1);
+    /* Le wipe détruit les boîtes ancrées (elles se retirent seules du
+     * registre, voir on_box_destroyed) : la décision affichée n'existe
+     * plus nulle part, shown_decision doit le savoir — le replay la
+     * re-rend par lui-même via replay_tool_call. */
+    t->shown_decision = NULL;
 
     for (guint i = 0; i < c->history->len; i++) {
         LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
+
+        /* Résultat absorbé par la boîte qui le porte : ni en-tête, ni
+         * texte — le live n'écrit rien au fil non plus. L'en-tête
+         * d'acteur saute avec le message, sinon il reste vide. */
+        if (m->kind == LLM_MSG_TOOL_RESULT && m->tool_call_id != NULL &&
+            t->iboxes != NULL &&
+            g_hash_table_contains(t->iboxes, m->tool_call_id))
+            continue;
 
         hist_render_actor_header(t, m->actor);
         gtk_text_buffer_get_end_iter(t->hist, &eit);
@@ -2430,20 +2517,29 @@ llm_tile_replay_history(LlmTile *t)
             for (guint k = 0; m->tool_calls != NULL &&
                  k < m->tool_calls->len; k++) {
                 LlmToolCall *tc = g_ptr_array_index(m->tool_calls, k);
-                char         *line = g_strdup_printf(
-                    "\n〔tool〕 %s %s",
-                    tc->name != NULL ? tc->name : "?",
-                    tc->arguments_json != NULL
-                        ? tc->arguments_json : "{}");
 
-                hist_append(t, line);
-                g_free(line);
+                if (!replay_tool_call(t, c, i, tc)) {
+                    /* Fallback texte plat : appel sans boîte (outil
+                     * inconnu, arguments refusés à la porte, sans id)
+                     * — exactement ce que le live écrit au fil. */
+                    char *line = g_strdup_printf(
+                        "\n〔tool〕 %s %s",
+                        tc->name != NULL ? tc->name : "?",
+                        tc->arguments_json != NULL
+                            ? tc->arguments_json : "{}");
+
+                    hist_append(t, line);
+                    g_free(line);
+                }
             }
         } else if (m->kind == LLM_MSG_TOOL_RESULT) {
             const char *shown = m->content != NULL
                                     ? m->content
                                     : _("(no new content)");
 
+            /* Orphelin ou sans id : texte plat, comme le live écrit au
+             * fil ce qui n'a jamais eu de boîte. (Les résultats
+             * absorbés sont déjà passés par le continue plus haut.) */
             gtk_text_buffer_insert_with_tags_by_name(
                 t->hist, &eit, shown, -1, "voice-cdb", NULL);
         } else if (m->actor == LLMACTOR_LLM) {
@@ -2543,10 +2639,14 @@ ibox_apply_width(LlmTile *t)
     }
 }
 
-/* Fenêtre redimensionnée, pièce réorganisée : les boîtes suivent. */
+
+/* MESURE (sonde /tmp/probe_width, GTK 4.22.4) : un GtkTextView dans un
+ * GtkScrolledWindow n'émet JAMAIS notify::width — la propriété ne
+ * s'annonce pas, l'allocation n'avise personne. L'ajustement horizontal
+ * du scroll, lui, change de page dès la première allocation et à chaque
+ * redimensionnement : c'est LUI le métronome du retaille. */
 static void
-on_tile_width_notify(GObject G_GNUC_UNUSED *obj,
-                     GParamSpec G_GNUC_UNUSED *pspec, gpointer data)
+on_tile_hadjustment_changed(GtkAdjustment G_GNUC_UNUSED *adj, gpointer data)
 {
     ibox_apply_width((LlmTile *) data);
 }
@@ -2592,6 +2692,14 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     gtk_text_view_set_editable(GTK_TEXT_VIEW(t->view), FALSE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(t->view), GTK_WRAP_WORD_CHAR);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(t->view), FALSE);
+    /* tool_call_id → boîte ouverte. Clés copiées (g_free), valeurs
+     * empruntées au TextView (NULL) : voir llm.h. La table doit exister
+     * AVANT le replay : les boîtes qui renaissent du fil s'y enregistrent
+     * (ibox_register) — sans elle, le résultat n'est plus absorbé (il
+     * repart en double au fil) et le rattrapage de largeur ne les voit
+     * pas. */
+    t->iboxes = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                      g_free, NULL);
     llm_tile_replay_history(t);
 
     scroll = gtk_scrolled_window_new();
@@ -3101,15 +3209,16 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
     /* Anti-hang : pas de données pendant 120 s = abandon. */
     g_object_set(t->core->soup, "timeout", 120, "idle-timeout", 180, NULL);
     t->pending_images = g_ptr_array_new_with_free_func(g_free);
-    /* tool_call_id → boîte ouverte. Clés copiées (g_free), valeurs
-     * empruntées au TextView (NULL) : voir llm.h. */
-    t->iboxes = g_hash_table_new_full(g_str_hash, g_str_equal,
-                                      g_free, NULL);
     /* Les boîtes vivent à 90 % de la largeur du fil : il faut donc les
-     * retaille quand la vue change de largeur. Le signal est porté par la
-     * vue elle-même, qui meurt avec la tuile — pas de handler orphelin. */
-    g_signal_connect(t->hist_view, "notify::width",
-                     G_CALLBACK(on_tile_width_notify), t);
+     * retaille quand la vue change de largeur. GtkTextView n'émet JAMAIS
+     * notify::width (sonde /tmp/probe_width, GTK 4.22.4) : le métronome
+     * est l'ajustement horizontal du scroll — sa page change à la
+     * première allocation et à chaque redimensionnement. L'ajustement
+     * vit autant que la vue : pas de handler orphelin. */
+    g_signal_connect(gtk_scrolled_window_get_hadjustment(
+                         GTK_SCROLLED_WINDOW(scroll)),
+                     "changed",
+                     G_CALLBACK(on_tile_hadjustment_changed), t);
     t->slot_origin = -1;
     g_object_set_data(G_OBJECT(box), "cdb-llm-core", core);
     g_object_set_data_full(G_OBJECT(box), "cdb-llm-tile", t, llm_tile_free);
