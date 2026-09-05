@@ -157,8 +157,8 @@ po: pot
 	    fi; \
 	    $(MSGMERGE) --update --no-fuzzy-matching --backup=none \
 	        $(PODIR)/$$l.po $(POT); \
-	    sed -i 's/^# Copyright (C) [0-9-]* \(Éric Boucher (SIEB)\)\.$$/# Copyright (C) $(YEAR) \1./' \
-	        $(PODIR)/$$l.po; \
+	    sed 's/^# Copyright (C) [0-9-]* \(Éric Boucher (SIEB)\)\.$$/# Copyright (C) $(YEAR) \1./' \
+	        $(PODIR)/$$l.po > $(PODIR)/$$l.po.tmp && mv $(PODIR)/$$l.po.tmp $(PODIR)/$$l.po; \
 	done
 
 # Compilation des catalogues binaires (.mo) dans po/locale/<lang>/LC_MESSAGES/.
