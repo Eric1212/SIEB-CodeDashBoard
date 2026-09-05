@@ -2333,7 +2333,7 @@ on_llm_scroll(GtkAdjustment *adj, gpointer data)
     double   upper = gtk_adjustment_get_upper(adj);
     double   page = gtk_adjustment_get_page_size(adj);
 
-    t->follow = (val + page >= upper - 20.0);
+    t->follow = (val + page >= upper - 60.0);
 }
 
 gboolean
