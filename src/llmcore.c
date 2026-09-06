@@ -4291,6 +4291,44 @@ core_history_push(LlmCore *c, LlmActor actor, gboolean local,
     llm_live_save(c);
 }
 
+/* Annonce d'une panne reseau en cours de retry. La cause est le message de
+ * GLib / glib-networking / libsoup : il est DEJA localise par leurs propres
+ * catalogues (« Impossible temporairement de résoudre … », « La connexion a
+ * été interrompue de manière inattendue ») — c'est la seule facon de le dire
+ * sans que CDB traduise ce qu'il n'a pas ecrit. Le g_free est ici et non chez
+ * l'appelant : une chaine formee pour l'annonce n'a pas a lui survivre. */
+static void
+core_announce_retry(LlmCore *c, const char *fmt, const char *cause)
+{
+    char *note = g_strdup_printf(fmt, cause);
+
+    core_cdb_announce(c, note);
+    g_free(note);
+}
+
+/* Abandon en cours de flux : la reponse partielle est d'abord poussee a
+ * l'historique, puis flushlee sur CHAQUE vue — sans cet ordre, l'annonce CDB
+ * s'inserait au-dessus de la queue deja streamed et le texte reussi
+ * s'evaporait au premier re-rendu (loi du miroir : toutes les vues, pas la
+ * seule active). Le chemin annule, juste en dessous, fait deja pareil. */
+static void
+core_announce_net_error(LlmCore *c, GError *error)
+{
+    char *note;
+
+    if (c->reply->len > 0)
+        core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
+    for (guint vi = 0; vi < c->views->len; vi++) {
+        LlmTile *v = g_ptr_array_index(c->views, vi);
+
+        hist_flush_reply(v);
+        llm_slots_title_update(v);
+    }
+    note = g_strdup_printf(_("\n[error: %s]\n"), error->message);
+    core_cdb_announce(c, note);
+    g_free(note);
+}
+
 
 void
 llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
@@ -4324,8 +4362,8 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
     if (error != NULL) {
         gboolean cancelled = g_error_matches(error, G_IO_ERROR,
                                              G_IO_ERROR_CANCELLED);
-        gboolean timed_out = !cancelled &&
-            g_error_matches(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
+        /* Toute panne non annulee est tenue pour provisoire (miroir 5xx). */
+        gboolean retryable = !cancelled;
 
         if (cancelled) {
             g_error_free(error);
@@ -4341,12 +4379,12 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
             llm_request_free(req);
             return;
         }
-        if (timed_out) {
-            /* Timeout en cours de flux (idle ~120 s du provider/proxy).
-             * On relance la requête entière sur la config 5xx. Le
-             * contenu partiel déjà rendu dans les vues sera remplacé
-             * par hist_update_reply au prochain appel (incohérence
-             * len < rendered_len → re-rendu complet depuis reply_mark). */
+        if (retryable) {
+            /* Mort en cours de flux : le fournisseur a lache, un proxy a
+             * coupe, la session TLS est tombee. On relance la requete
+             * entiere sur la config 5xx. Le contenu partiel deja rendu
+             * dans les vues sera remplace par hist_update_reply au
+             * prochain appel (len < rendered_len -> re-rendu complet). */
             LlmRetry5xx rc;
             gboolean    infinite;
 
@@ -4361,19 +4399,19 @@ llm_stream_read(GObject G_GNUC_UNUSED *source, GAsyncResult *res,
                     g_input_stream_close(req->stream, NULL, NULL);
                     g_clear_object(&req->stream);
                 }
-                if (req->attempt == 1) {
-                    core_cdb_announce(c,
-                        _("\n[CDB] Stream timeout — retries in progress…\n"));
-                }
+                if (req->attempt == 1)
+                    core_announce_retry(c,
+                        _("\n[CDB] %s — stream retry in progress…\n"),
+                        error->message);
                 g_error_free(error);
                 g_timeout_add((guint)rc.delay_ms, llm_retry_tick, req);
                 return;
             }
         }
-        if (!timed_out) {
-            for (vi = 0; vi < c->views->len; vi++)
-                hist_append(g_ptr_array_index(c->views, vi), error->message);
-        }
+        /* Abandon : la reponse partielle survit, et la cause passe par
+         * le fil (historisee, rendue sur chaque vue miroir) au lieu d'un
+         * texte brut en marge de la seule vue courante. */
+        core_announce_net_error(c, error);
         g_error_free(error);
         llm_request_free(req);
         return;
@@ -4686,12 +4724,13 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
     if (error != NULL) {
         gboolean cancelled = g_error_matches(error, G_IO_ERROR,
                                              G_IO_ERROR_CANCELLED);
-        gboolean timed_out = !cancelled &&
-            g_error_matches(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
+        /* Miroir de ce qu'etait G_IO_ERROR_TIMED_OUT, elargi a toute la
+         * couche transport : toute panne non annulee est provisoire. */
+        gboolean retryable = !cancelled;
 
-        if (timed_out) {
-            /* G_IO_ERROR_TIMED_OUT : le mur idle (~120 s) du provider ou
-             * d'un proxy. Retryable, sur la même config que les 5xx. */
+        if (retryable) {
+            /* 5xx : un serveur joint mais en panne et un serveur qu'on
+             * ne joint pas meritent le meme rythme. */
             LlmRetry5xx rc;
             gboolean    retry_on;
             gboolean    infinite;
@@ -4705,17 +4744,17 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
             if (retry_on && (infinite || req->attempt < max_retries)) {
                 req->attempt++;
                 g_string_truncate(req->pending, 0);
-                if (req->attempt == 1) {
-                    core_cdb_announce(c,
-                        _("\n[CDB] Timeout — retries in progress…\n"));
-                }
+                if (req->attempt == 1)
+                    core_announce_retry(c,
+                        _("\n[CDB] %s — retries in progress…\n"),
+                        error->message);
                 g_error_free(error);
                 g_timeout_add((guint)delay_ms, llm_retry_tick, req);
                 return;
             }
         }
 
-        if (!cancelled && !timed_out) {
+        if (!cancelled) {   /* epuise ou coupe : l'abandon doit etre dit */
             char *note = g_strdup_printf(_("\n[error: %s]\n"),
                                          error->message);
 
