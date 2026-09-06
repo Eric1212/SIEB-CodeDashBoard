@@ -531,14 +531,66 @@ typedef struct LlmTile {      /* historique (GtkTextView, non éditable) */
     LlmConfig   *cfg;
     gboolean     busy;      /* requête en cours */
     gboolean     in_reasoning; /* delta courant = thinking */
-    gboolean     follow;     /* scroll auto actif (user en bas) */
+    /* ----- suivi de scroll du fil -------------------------------------
+     * Une loi : follow est la POSITION de la vitre, pas un souvenir
+     * d'intention. Deux drapeaux, un seul arbitre (on_llm_scroll, qui
+     * lit la position à chaque mouvement). Toute la mécanique vit dans la
+     * section « SUIVI DE SCROLL DU FIL » de llmtile.c ; ces champs n'en
+     * sont que l'état. */
+    gboolean     follow;      /* « la vitre est au bas : on la y
+                               * maintient ». Allumé par l'arbitre quand la
+                               * position y est (à moins de SLACK px), par
+                               * la présentation d'un fil (pin_bottom), et
+                               * par une descente qui rejoint le bas (à
+                               * moins d'ARRIVE px). ÉTEINT par l'arbitre
+                               * dès que la vitre quitte le bas en
+                               * remontant — qu'y ait mis la main ou le
+                               * TextView : dans les deux cas la ramener
+                               * serait la voler (exigence 4). */
+    gboolean     pin_bottom;  /* « PRÉSENTE ce fil » (replay — donc
+                               * démarrage, re-rendu, trim —, slot, import,
+                               * fil neuf). Présenter n'est pas suivre : le
+                               * fil doit se coller au bas pendant que son
+                               * layout bouge encore, alors que la position
+                               * lue à cet instant dirait « on ne suit
+                               * pas ». Le pin ne fait QUE ça et ne décrète
+                               * rien de durable : il meurt sur preuve
+                               * d'immobilité (bornes calmes depuis
+                               * CDB_PIN_STABLE_MS, horloge qui ne part
+                               * qu'une fois la vue mappée) ou au premier
+                               * mouvement qui remonte. */
+    double       last_val;    /* position vue au dernier mouvement : c'est
+                               * ce qui donne le SENS. Le geste, lui, est
+                               * muet — aucun capteur de molette ni
+                               * d'ascenseur n'est branché, et la loi s'en
+                               * passe : une value qui baisse est un
+                               * départ, une value qui monte et arrive est
+                               * un retour. */
+    guint        scroll_idle; /* timeout glissant de la preuve
+                               * d'immobilité du pin ; retiré au
+                               * llm_tile_free, comme les autres sources */
+    guint        reglue_idle; /* idle de recollement différé, posé par
+                               * "changed" et coalescé ; retiré au
+                               * llm_tile_free */
     GtkAdjustment *adj;      /* adjustment vertical de l'historique :
-                              * scroll mécanique (set_value), sans
-                              * déplacer le curseur ni dépendre du
-                              * layout asynchrone de la vue */
+                              * les deux écouteurs du suivi, et la cible des
+                              * positions absolues du clavier
+                              * (llm_tile_scroll_to). Le RECOLLEMENT ne passe
+                              * jamais par un set_value ici — borne lue en
+                              * retard, effacée à l'allocation d'après — mais
+                              * par glue_mark, l'API du TextView. */
     gsize        rendered_len; /* nb d'octets de reply déjà rendus dans
                                * le fil (rendu incrémental) */
-    GtkTextMark *reply_mark;/* marque de fin de la réponse en streaming */
+    GtkTextMark *reply_mark;/* marque du DÉBUT de la réponse en cours :
+                             * llm_tile_turn_reset la pose à l'ouverture de
+                             * chaque tour et elle n'en bouge pas pendant le
+                             * stream. Ce n'est PAS le bas du fil — s'y
+                             * ancrer ramènerait le haut de la réponse à
+                             * l'écran dès qu'elle dépasse la vitre. */
+    GtkTextMark *glue_mark; /* marque à gravité DROITE, repoussée après le
+                             * dernier octet à chaque passe : la vraie
+                             * ancre du recollement
+                             * (llm_tile_scroll_glue), créée à la demande. */
     GPtrArray   *pending_images; /* images collées, envoyées au prochain tour */
     GtkWidget   *model_btn; /* sélecteur de modèle (menu, label = actif) */
     GtkWidget   *slots_btn; /* bouton menu persistance (slots JSON) */

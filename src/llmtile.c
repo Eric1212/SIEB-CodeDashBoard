@@ -69,6 +69,19 @@ llm_tile_free(gpointer data)
         g_source_remove(t->credits_timer_id);
         t->credits_timer_id = 0;
     }
+    /* Le suivi de scroll du fil : même famille encore. Le timeout glissant
+     * du pin et l'idle de recollement tiennent tous deux la tuile ; survivre
+     * à son démontage les ferait tomber sur une vue détruite. Ils sont
+     * retirés ICI et non à un "destroy" du TextView : une tuile a UN seul
+     * endroit de démontage de ses sources différées, et c'est celui-ci. */
+    if (t->scroll_idle != 0) {
+        g_source_remove(t->scroll_idle);
+        t->scroll_idle = 0;
+    }
+    if (t->reglue_idle != 0) {
+        g_source_remove(t->reglue_idle);
+        t->reglue_idle = 0;
+    }
     if (t->pending_images != NULL)
         g_ptr_array_unref(t->pending_images);
     /* cfg EMPRUNTÉE à App (app->llm_cfg) : PAS libérée ici — main()
@@ -1706,7 +1719,7 @@ llm_slots_load_dialog(LlmTile *t)
      * cours. Miroir : TOUTES les vues du core suivent, pas seulement
      * celle qui a chargé. */
     llm_views_replay(t->core);
-    llm_scroll_to_end(t);
+    /* chaque vue pose son pin en fin de replay — rien d'autre ici */
     llm_live_save(t->core);
 
     t->slot_origin = slot;
@@ -1909,6 +1922,12 @@ llm_slots_import_dialog(LlmTile *t)
     }
 }
 
+/* Suivi de scroll du fil : la section est plus bas dans ce fichier (avec
+ * llm_scroll_to_end), la déclaration est anticipée pour le même motif que
+ * llm_tile_replay_history — présenter un fil se commande d'un peu partout. */
+static void
+llm_tile_pin_bottom(LlmTile *t);
+
 void
 llm_chat_clear_dialog(LlmTile *t)
 {
@@ -1947,6 +1966,15 @@ llm_chat_clear_dialog(LlmTile *t)
         g_free(b);
     }
     llm_slots_title_update(t);
+    /* LE FIL NEUF SE PRÉSENTE AU BAS — exigence 2. Vider le chat ouvre un
+     * fil : le buffer est vide, il n'y a donc rien à coller, mais c'est
+     * ici que l'intention se décrète. Suivre un fil qui n'a pas encore de
+     * scroll, c'est le suivre DÈS qu'il en prend un : le pin remet follow
+     * à TRUE (le vidage trouvait parfois un fil décollé — l'utilisateur
+     * avait scrollé avant de vider, et son fil neuf ne se suivait plus
+     * jamais) et le premier "changed", à la première ligne qui déborde la
+     * vitre, recolle. */
+    llm_tile_pin_bottom(t);
 
     core_cdb_announce(t->core, _("current chat cleared."));
 }
@@ -2313,18 +2341,209 @@ on_llm_send_clicked(GtkButton G_GNUC_UNUSED *btn, gpointer data)
     g_free(prompt); /* copie : l'entry a été vidée */
 }
 
+/* =====================================================================
+ * SUIVI DE SCROLL DU FIL
+ * =====================================================================
+ * Quatre exigences, une loi. Et la loi tient en une phrase :
+
+ *     follow est la POSITION de la vitre, pas un souvenir d'intention.
+ *
+ * La vitre est au bas du fil -> on suit. Elle n'y est plus -> on ne suit
+ * plus, et PERSONNE ne l'y ramène. C'est tout.
+ *
+ * Cette loi est celle de HEAD (le commit 42134c5 d'Éric : un seul
+ * prédicat, `val + page >= upper - 60`). Tout ce chantier a consisté à
+ * la protéger contre des artefacts — clamp d'un bloc thinking qui se
+ * replie, viewport que le TextView repositionne — et chaque protection
+ * ajoutée a rendu le drapeau PLUS difficile à éteindre que la vitre. Le
+ * résultat, signalé par Éric à plusieurs tours : « quand j'utilise la
+ * barre de défilement, elle reste collée au bas pendant que le follow
+ * est actif ». Un drapeau contredit par sa propre vitre.
+ *
+ * Le prix de la loi, assumé : un repositionnement interne du TextView à
+ * bornes fixes (un « glide ») nous coûtera le suivi, comme à un humain.
+ * C'est LE bon échange — l'inverse vole la vitre à l'utilisateur, et
+ * c'est la plainte. Si un glide se déclenche vraiment en pratique, le
+ * signe en sera un `follow=0` qui tombe pendant un stream sans que la
+ * souris ait bougé, et il faudra alors aller couper le tir à sa
+ * source (un widget enfant qui revendique le viewport) au lieu de
+ * masquer le symptôme avec un drapeau qui ment.
+ *
+ * Ce qui reste, et pourquoi :
+ *
+ *   llm_tile_scroll_glue  un seul endroit sait coller, par une MARQUE du
+ *          TextView. Mesuré (sonde /tmp/probe_scroll, GTK 4.22.4) : trois
+ *          lignes insérées laissent `upper` à sa valeur précédente — le
+ *          signal "changed" tombe APRÈS l'insertion, à l'allocation
+ *          d'après. Un set_value posé à l'insertion vise donc une borne
+ *          périmée. D'où l'idle différé, après le frame.
+ *   pin_bottom   « PRÉSENTE ce fil » (démarrage, slot, import, trim, fil
+ *          neuf). Présenter n'est pas suivre : le fil doit se coller au
+ *          bas pendant que son layout bouge encore, alors que la position
+ *          lue à cet instant dirait « on ne suit pas ». Le pin ne fait
+ *          que ça, il ne décrète rien de durable, et il meurt sur une
+ *          preuve d'immobilité — ou au premier mouvement qui remonte.
+ *   reglue_idle  le suiveur : chaque mue des bornes redemande un
+ *          recollement, si follow ou pin le demande.
+ *   clavier      le défilement est à notre charge, mesuré : un TextView
+ *          non éditable, curseur invisible, ne défile PAS sur Page/↑↓ —
+ *          ses touches déplacent le curseur, pas la vitre.
+ *
+ * Ce qui a été retiré, parce qu'il ne servait qu'à faire durer le
+ * drapeau : le drapeau `scrolling`, le jeton `human`, la tenue `holding`,
+ * le contrôleur de molette et les capteurs de l'ascenseur. Ces
+ * capteurs ne tiraient pas (aucune ligne « tenu=1 » ni « LÂCHÉ » sur les
+ * trois runs instrumentés, alors qu'Éric se servait de la barre) : la loi
+ * ne doit pas dépendre d'une pièce dont on n'a jamais vu un seul
+ * fonctionnement. */
+
+/* Les deux seuils. SLACK (60 px) est le réglage d'Éric, calé à la main —
+ * c'est lui qui dit si on est « au bas », et donc si on décroche : à 60
+ * px, un cran de molette vers le haut décolle sans effort, ce qu'il
+ * voulait. ARRIVE (160 px) ne sert qu'à REJOINRRE : un cran de molette
+ * vaut 90 px sur son fil (mesuré aux traces), et à 60 px une descente ne
+ * pouvait jamais rattraper un bas qui fuit pendant un stream. La bande
+ * entre les deux est de l'hystérésis assumée : on sort vite, on rentre
+ * généreusement. */
+#define CDB_FOLLOW_SLACK   60.0
+#define CDB_FOLLOW_ARRIVE  160.0
+#define CDB_PIN_STABLE_MS  100   /* immobilité des bornes = fin du layout */
+#define CDB_PIN_PRIORITY  (G_PRIORITY_HIGH_IDLE + 20)
+                                 /* idle ET timeout : ils tournent APRÈS le
+                                  * frame de layout, l'upper y est frais */
+
+/* ----- le geste de recollement --------------------------------------- */
+/* La dernière ligne au bas de la vue. Un seul endroit sait coller, et il
+ * ne décrète rien : il ne touche que la vitre, et c'est la position qui
+ * en sortira qui dira si on suit.
+ *
+ * L'ancre est une marque à gravité DROITE, repoussée après le dernier
+ * octet : elle vit vraiment à la fin du buffer, y compris en cours de
+ * stream où reply_mark, elle, reste au DÉBUT du tour (s'y ancrer
+ * ramenait le haut de la réponse à l'écran dès qu'elle dépassait la
+ * vitre — exigence 2 cassée). scroll_mark_onscreen est l'API du TextView:
+ * elle recolle À TRAVERS son propre layout, contrairement à un set_value
+ * posé entre deux validations de widgets. */
+static void
+llm_tile_scroll_glue(LlmTile *t)
+{
+    GtkTextIter end;
+
+    if (t->hist == NULL || t->view == NULL)
+        return;
+
+    gtk_text_buffer_get_end_iter(t->hist, &end);
+    if (t->glue_mark == NULL)
+        t->glue_mark = gtk_text_buffer_create_mark(t->hist, NULL, &end,
+                                                   FALSE);
+    else
+        gtk_text_buffer_move_mark(t->hist, t->glue_mark, &end);
+
+    gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(t->view),
+                                       t->glue_mark);
+}
+
+/* Suite des chemins de rendu (hist_update_reply, envoi d'un prompt).
+ * Aucun garde ici : le garde est la loi elle-même, dans l'arbitre — une
+ * vitre décollée par la main ne revient pas d'elle-même, et le collant
+ * ne s'appuie que sur follow ou sur le pin. */
 void
 llm_scroll_to_end(LlmTile *t)
 {
-    double upper, page;
-
-    if (!t->follow || t->adj == NULL)
+    if (!t->follow && !t->pin_bottom)
         return;
-    upper = gtk_adjustment_get_upper(t->adj);
-    page = gtk_adjustment_get_page_size(t->adj);
-    gtk_adjustment_set_value(t->adj, upper - page);
+    llm_tile_scroll_glue(t);
 }
 
+/* ----- la présentation d'un fil : le pin ----------------------------- */
+
+static void
+llm_tile_pin_lift(LlmTile *t)
+{
+    if (t->scroll_idle != 0) {
+        g_source_remove(t->scroll_idle);
+        t->scroll_idle = 0;
+    }
+    t->pin_bottom = FALSE;
+}
+
+static gboolean
+llm_tile_pin_timeout(LlmTile *t)
+{
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("[pin] bornes stables -> levé\n");
+    t->scroll_idle = 0;
+    t->pin_bottom = FALSE;
+    return G_SOURCE_REMOVE;
+}
+
+/* Repousse la preuve d'immobilité. Un seul endroit connaît l'horloge.
+ *
+ * PAS D'HORLOGE TANT QUE LA VUE N'EST PAS MAPPÉE. À la création d'une
+ * tuile — démarrage de CDB, re-rendu du layout, slot chargé avant
+ * allocation — les bornes valent encore 0 et le scroll n'existe pas. Une
+ * horloge qui tourne dès la pose faisait expirer le pin PENDANT le
+ * montage de la fenêtre, et le fil se présentait en haut : l'exigence 1
+ * n'était jamais remplie. L'horloge ne part donc qu'à la première mue
+ * des bornes — la première allocation réelle, page_size de 0 à la
+ * hauteur de la vitre, ce qui est exactement « le scroll devient
+ * disponible », exigence 2. Voir on_llm_adj_changed(). */
+static void
+llm_tile_pin_rearm(LlmTile *t)
+{
+    if (t->hist_view == NULL || !gtk_widget_get_mapped(t->hist_view))
+        return;
+    if (t->scroll_idle != 0)
+        g_source_remove(t->scroll_idle);
+    t->scroll_idle = g_timeout_add_full(CDB_PIN_PRIORITY,
+                                        CDB_PIN_STABLE_MS,
+                                        (GSourceFunc)llm_tile_pin_timeout,
+                                        t, NULL);
+}
+
+/* Présenter un fil : replay — donc démarrage de CDB, re-rendu du layout,
+ * chargement de slot, import, trim ouvrant un fil neuf — et fil neuf
+ * vidé par l'humain (exigences 1, 2, 3).
+ *
+ * Le pin pose follow avec lui, mais ce n'est PAS un décret durable : la
+ * première vitre qu'on trouve hors du bas l'éteint, et un mouvement qui
+ * remonte éteint aussi le pin. Le pin ne sert qu'à traverser la mue du
+ * layout, le temps que les bornes se stabilisent. */
+static void
+llm_tile_pin_bottom(LlmTile *t)
+{
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("[pin] pose (mapped=%d)\n",
+                   t->hist_view != NULL &&
+                   gtk_widget_get_mapped(t->hist_view));
+    t->pin_bottom = TRUE;
+    t->follow = TRUE;
+    llm_tile_scroll_glue(t);
+    llm_tile_pin_rearm(t);
+}
+
+/* ----- l'arbitre : value-changed ------------------------------------- */
+/* La loi, en quatre branches. `gap` est la distance de la vitre au bas
+ * du fil : c'est LE seul fait qui compte, et il est lu à chaque
+ * mouvement, jamais retenu comme une opinion.
+ *
+ *   au bas            on suit. C'est la branche qui absorbe les CLAMPS :
+ *                     quand un thinking se replie, upper recule et GTK
+ *                     tire value avec lui — la vitre se retrouve pile au
+ *                     nouveau bas, gap ~ 0, le suivi survit sans avoir
+ *                     eu à être « protégé » de quoi que ce soit. C'était
+ *                     le rôle de tout l'appareillage supprimé.
+ *   remontée          on ne suit plus, et la présentation s'efface. Une
+ *                     vitre qu'on monte est un départ, qu'y ait mis la
+ *                     main ou le TextView : dans les deux cas, la
+ *                     ramener en bas serait la lui voler.
+ *   descente qui
+ *   rejoint           le suivi revient, dans la fenêtre large
+ *                     (CDB_FOLLOW_ARRIVE) — c'est ce qui rend le
+ *                     retour possible pendant un stream.
+ *   le reste          on ne touche à rien (une descente encore loin du
+ *                     bas : la main chemine, ce n'est ni un départ ni
+ *                     une arrivée). */
 void
 on_llm_scroll(GtkAdjustment *adj, gpointer data)
 {
@@ -2332,8 +2551,116 @@ on_llm_scroll(GtkAdjustment *adj, gpointer data)
     double   val = gtk_adjustment_get_value(adj);
     double   upper = gtk_adjustment_get_upper(adj);
     double   page = gtk_adjustment_get_page_size(adj);
+    double   gap = upper - page - val;
 
-    t->follow = (val + page >= upper - 60.0);
+    if (gap <= CDB_FOLLOW_SLACK) {
+        t->follow = TRUE;
+    } else if (val < t->last_val - 0.5) {
+        t->follow = FALSE;
+        llm_tile_pin_lift(t);
+    } else if (val > t->last_val + 0.5 && gap <= CDB_FOLLOW_ARRIVE) {
+        t->follow = TRUE;
+    }
+
+    t->last_val = val;
+
+    if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr("[scroll] val=%.0f upper=%.0f page=%.0f gap=%.0f "
+                   "follow=%d pin=%d\n",
+                   val, upper, page, gap, t->follow, t->pin_bottom);
+}
+
+/* ----- le suiveur : changed ------------------------------------------ */
+/* Les bornes changent quand le fil grandit — mais à l'allocation
+ * SUIVANTE, après l'insertion (mesuré). Chaque mue redemande donc un
+ * recollement, posé en idle prioritaire pour s'exécuter après le frame,
+ * là où l'upper est frais. Coalescé : la rafale de "changed" d'un stream
+ * ne pose jamais deux idles. */
+static gboolean
+llm_tile_reglue_idle(LlmTile *t)
+{
+    t->reglue_idle = 0;
+    if (t->pin_bottom || t->follow)
+        llm_tile_scroll_glue(t);
+    return G_SOURCE_REMOVE;
+}
+
+static void
+on_llm_adj_changed(GtkAdjustment *adj, gpointer data)
+{
+    LlmTile *t = data;
+
+    (void)adj;
+
+    if (t->reglue_idle == 0)
+        t->reglue_idle = g_idle_add_full(CDB_PIN_PRIORITY,
+                                         (GSourceFunc)llm_tile_reglue_idle,
+                                         t, NULL);
+    /* Une mue des bornes dit deux choses : le fil a bougé (recollement)
+     * et le layout N'EST PAS ENCORE STABLE (elle repousse la preuve
+     * d'immobilité du pin). C'est aussi là que l'horloge du pin démarre
+     * si sa pose a trouvé la vue unmappée. */
+    if (t->pin_bottom)
+        llm_tile_pin_rearm(t);
+}
+
+/* ----- le clavier : un défilement que GTK ne fait pas ---------------- */
+/* MESURÉ aux traces : Page_Up, Page_Down, Up, Down ne déplaçaient RIEN —
+ * des salves de « [pin] levé » sans aucune ligne « [scroll] » derrière.
+ * Un GtkTextView non éditable, curseur invisible, défile en suivant son
+ * curseur ; or le curseur du fil est parqué à la fin du buffer. Demander
+ * une page vers le haut ne peut rien faire : il n'y a rien au-dessus de
+ * la fin. Le défilement clavier est donc à notre charge.
+ *
+ * Et il n'a besoin d'aucun drapeau : on déplace la vitre, l'arbitre lit
+ * la position et décide. Une Page_Down qui arrive au bas rallume donc le
+ * suivi toute seule ; une Page_Up l'éteint toute seule. */
+
+/* Le pas d'une ligne, mesuré sur le widget et non deviné : get_iter_
+ * location().height. Le fil coupe ses lignes (WRAP_WORD_CHAR), une ligne
+ * d'affichage n'est pas une ligne de buffer. */
+#define CDB_LINE_PX_FALLBACK 20.0
+
+static double
+llm_tile_line_px(LlmTile *t)
+{
+    GtkTextIter  it;
+    GdkRectangle r;
+
+    if (t->view == NULL || t->adj == NULL)
+        return CDB_LINE_PX_FALLBACK;
+    gtk_text_view_get_line_at_y(GTK_TEXT_VIEW(t->view), &it,
+                                (int) gtk_adjustment_get_value(t->adj),
+                                NULL);
+    gtk_text_view_get_iter_location(GTK_TEXT_VIEW(t->view), &it, &r);
+    return r.height > 0 ? (double) r.height : CDB_LINE_PX_FALLBACK;
+}
+
+/* Vise une position absolue, clampée ICI sur les bornes courantes — pas
+ * subie de GTK sur une borne lue en retard. Vitre déjà au but : rien à
+ * faire, et surtout aucun mouvement à simuler. */
+static void
+llm_tile_scroll_to(LlmTile *t, double to)
+{
+    double val = gtk_adjustment_get_value(t->adj);
+    double max = gtk_adjustment_get_upper(t->adj) -
+                 gtk_adjustment_get_page_size(t->adj);
+
+    if (max < 0.0)
+        max = 0.0;              /* fil plus court que la vitre */
+    if (to < 0.0)
+        to = 0.0;
+    if (to > max)
+        to = max;
+    if (to == val)
+        return;
+    gtk_adjustment_set_value(t->adj, to);
+}
+
+static void
+llm_tile_scroll_by(LlmTile *t, double dy)
+{
+    llm_tile_scroll_to(t, gtk_adjustment_get_value(t->adj) + dy);
 }
 
 gboolean
@@ -2344,45 +2671,54 @@ on_llm_hist_key(GtkEventControllerKey G_GNUC_UNUSED *ctrl,
                 gpointer data)
 {
     LlmTile *t = data;
-    double   upper, page;
+    double   page;
 
     if (t == NULL || t->adj == NULL)
         return FALSE;
 
-    /* Home/End simples ou Ctrl+Home/Ctrl+End. On ignore les autres
-     * combinaisons modifiées pour laisser GTK gérer sélection/actions. */
+    /* Home/End simples ou Ctrl+Home/Ctrl+End. Les autres combinaisons
+     * modifiées sont laissées à GTK (sélection, actions). */
     if ((state & GDK_SHIFT_MASK) != 0)
         return FALSE;
     if ((state & GDK_CONTROL_MASK) == 0 &&
         (state & ~GDK_CONTROL_MASK) != 0)
         return FALSE;
 
+    /* Aucune de ces touches ne décrète follow : elles déplacent la vitre
+     * et la loi — qui lit la position — fait le reste. */
     switch (keyval) {
     case GDK_KEY_Home:
     case GDK_KEY_KP_Home:
-        gtk_adjustment_set_value(t->adj, 0.0);
+        llm_tile_scroll_to(t, 0.0);
         return TRUE;
     case GDK_KEY_End:
     case GDK_KEY_KP_End:
-        t->follow = TRUE;
-        upper = gtk_adjustment_get_upper(t->adj);
+        /* Autorité : la fin du fil, exactement — pas « assez près pour
+         * que scroll_mark_onscreen daigne bouger ». */
         page = gtk_adjustment_get_page_size(t->adj);
-        gtk_adjustment_set_value(t->adj, upper - page);
+        llm_tile_scroll_to(t, gtk_adjustment_get_upper(t->adj) - page);
+        return TRUE;
+    case GDK_KEY_Page_Up:
+    case GDK_KEY_KP_Page_Up:
+        page = gtk_adjustment_get_page_size(t->adj);
+        llm_tile_scroll_by(t, -(page - 2.0 * llm_tile_line_px(t)));
+        return TRUE;
+    case GDK_KEY_Page_Down:
+    case GDK_KEY_KP_Page_Down:
+        page = gtk_adjustment_get_page_size(t->adj);
+        llm_tile_scroll_by(t, page - 2.0 * llm_tile_line_px(t));
+        return TRUE;
+    case GDK_KEY_Up:
+    case GDK_KEY_KP_Up:
+        llm_tile_scroll_by(t, -llm_tile_line_px(t));
+        return TRUE;
+    case GDK_KEY_Down:
+    case GDK_KEY_KP_Down:
+        llm_tile_scroll_by(t, llm_tile_line_px(t));
         return TRUE;
     default:
         return FALSE;
     }
-}
-
-void
-on_scrollbar_pressed(GtkGestureClick G_GNUC_UNUSED *g,
-                     int G_GNUC_UNUSED n,
-                     double G_GNUC_UNUSED x, double G_GNUC_UNUSED y,
-                     gpointer data)
-{
-    LlmTile *t = data;
-
-    t->follow = FALSE;
 }
 
 void
@@ -2570,7 +2906,13 @@ llm_tile_replay_history(LlmTile *t)
         gtk_text_buffer_move_mark(t->hist, t->reply_mark, &eit);
 
     llm_tile_decision_render(t);
-    llm_scroll_to_end(t);
+    /* PRÉSENTER le fil : le replay le déclare ici, et non chez ses
+     * appelants — loi du miroir, toute vue qui se greffe sur un core
+     * déjà peuplé passe par lui, donc aucune ne peut être oubliée.
+     * Le buffer vient d'être vidé puis rempli d'un bloc : thinking nés
+     * ouverts qui se replient, boîtes ibox allouées par vagues, les
+     * bornes bougeront longtemps encore. Section « SUIVI DE SCROLL ». */
+    llm_tile_pin_bottom(t);
 }
 
 /* Les noms des acteurs ont changé (Settings → LLM → Harness → Noms) :
@@ -2700,21 +3042,44 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
      * pas. */
     t->iboxes = g_hash_table_new_full(g_str_hash, g_str_equal,
                                       g_free, NULL);
-    llm_tile_replay_history(t);
-
+    /* ----- fenêtre scrollée et dispositif de suivi -------------------- */
+    /* LE DISPOSITIF EST POSÉ AVANT LE REPLAY, qui vient dernier. C'est le
+     * replay qui PRÉSENTE le fil (llm_tile_pin_bottom, fin de
+     * llm_tile_replay_history), et une présentation a besoin de son
+     * adjustment et de ses deux écouteurs pour exister. L'ordre ancien
+     * (replay premier) faisait poser le pin sur t->adj == NULL, sans
+     * aucun signal branché pour le rattraper : l'exigence 1 — au
+     * démarrage, le fil se présente en bas — n'était pas remplie. */
     scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
                                    GTK_POLICY_AUTOMATIC,
                                    GTK_POLICY_AUTOMATIC);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), t->view);
-    /* Suivi auto tant que le user reste en bas de la vue. L'adjustment
-     * est gardé : llm_scroll_to_end pilote la position mécaniquement. */
+
     t->follow = TRUE;
     t->adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroll));
+    /* "value-changed" : l'arbitre, qui juge un mouvement humain et non
+     * un pas du code. "changed" : le suiveur, parce que les bornes ne
+     * gonflent qu'à l'allocation qui suit l'insertion. Les deux sources
+     * différées de la section (timeout du pin, idle de recollement) sont
+     * retirées au llm_tile_free, avec les autres. */
     g_signal_connect(t->adj, "value-changed",
                      G_CALLBACK(on_llm_scroll), t);
+    g_signal_connect(t->adj, "changed",
+                     G_CALLBACK(on_llm_adj_changed), t);
 
-    /* Home/End : scroll explicite de l'historique. */
+    /* Le clavier : seul capteur posé ici. Ses touches de défilement sont à
+     * notre charge, mesuré : un TextView non éditable, curseur invisible,
+     * ne défile pas sur Page/↑↓ — il déplace son curseur, pas la vitre.
+     *
+     * PAS de capteur de molette, PAS de gesture sur l'ascenseur, et
+     * c'est délibéré (exigence 4) : la loi lit la POSITION de la vitre à
+     * chaque mouvement, donc un geste qui remonte décolle le suivi sans
+     * qu'on ait eu à le reconnaître, et un geste qui descend le reprend.
+     * Les capteurs qu'il y avait ici ne tiraient d'ailleurs pas — trois
+     * runs instrumentés, zéro trace de « tenu » alors qu'Éric se servait
+     * de la barre : une loi ne doit pas dépendre d'une pièce dont on
+     * n'a jamais vu un seul fonctionnement. */
     {
         GtkEventController *key = gtk_event_controller_key_new();
 
@@ -2724,17 +3089,10 @@ llm_tile_new(LlmCore *core, const LlmConfig *cfg, GActionGroup *actions,
                          G_CALLBACK(on_llm_hist_key), t);
         gtk_widget_add_controller(t->hist_view, key);
     }
-    /* Toute pression sur la scrollbar détache le suivi immédiatement. */
-    {
-        GtkWidget         *sb =
-            gtk_scrolled_window_get_vscrollbar(GTK_SCROLLED_WINDOW(scroll));
-        GtkGesture *gc = gtk_gesture_click_new();
 
-        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gc), 0);
-        g_signal_connect(gc, "pressed",
-                         G_CALLBACK(on_scrollbar_pressed), t);
-        gtk_widget_add_controller(sb, GTK_EVENT_CONTROLLER(gc));
-    }
+    /* Le fil persisté se présente ici, au bas : le replay finit sur
+     * llm_tile_pin_bottom(). */
+    llm_tile_replay_history(t);
 
     /* Saisie multi-lignes : GtkTextView dans un scrolled-window (1 ligne
      * au repos, jusqu'à 8, puis scroll interne). Entrée = saut de ligne ;

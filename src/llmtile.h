@@ -229,12 +229,11 @@ on_llm_hist_key(GtkEventControllerKey G_GNUC_UNUSED *ctrl,
                 gpointer data)
 ;
 
-void
-on_scrollbar_pressed(GtkGestureClick G_GNUC_UNUSED *g,
-                     int G_GNUC_UNUSED n,
-                     double G_GNUC_UNUSED x, double G_GNUC_UNUSED y,
-                     gpointer data)
-;
+/* Pas de handler de molette ni d'ascenseur ici, et c'est voulu : la loi
+ * du suivi lit la POSITION de la vitre à chaque mouvement (on_llm_scroll),
+ * ce qui rend ces capteurs inutiles. Ils ont existé et sont supprimés —
+ * trois runs instrumentés n'ont jamais montré un seul déclenchement du
+ * gesture posé sur l'ascenseur, alors qu'Éric s'en servait. */
 
 void
 on_llm_entry_changed(GtkTextBuffer G_GNUC_UNUSED *buf, gpointer data);
