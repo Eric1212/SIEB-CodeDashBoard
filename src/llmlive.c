@@ -151,7 +151,8 @@ llm_live_repair_open_tool_calls(LlmCore *c)
 
     n = c->history->len;
     for (guint i = 0; i < n; i++) {
-        LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
+        LlmMsg    *m = &g_array_index(c->history, LlmMsg, i);
+        GPtrArray *ids; /* ids d'appels SANS réponse de ce message */
 
         if (m->kind == LLM_MSG_TOOL_RESULT && m->tool_call_id != NULL &&
             c->answered_tools != NULL)
@@ -162,19 +163,30 @@ llm_live_repair_open_tool_calls(LlmCore *c)
             m->tool_calls == NULL)
             continue;
 
+        /* Tout append plus bas REALLOQUE c->history : m, son tool_calls
+         * et chaque tc pointent dans l'ancien bloc. La condition
+         * k < m->tool_calls->len relisait donc la mémoire libérée dès
+         * le premier appel réparé — use-after-free sous ASan, corruption
+         * muette en release. Les ids sont copiés AVANT d'écrire : plus
+         * aucun pointeur ne survit à l'append. */
+        ids = g_ptr_array_new_with_free_func(g_free);
         for (guint k = 0; k < m->tool_calls->len; k++) {
             LlmToolCall *tc = g_ptr_array_index(m->tool_calls, k);
+
+            if (tc->id != NULL && tc->id[0] != '\0')
+                g_ptr_array_add(ids, g_strdup(tc->id));
+        }
+
+        for (guint k = 0; k < ids->len; k++) {
+            const char *id = g_ptr_array_index(ids, k);
             gboolean     answered = FALSE;
             LlmMsg       repair;
-
-            if (tc->id == NULL || tc->id[0] == '\0')
-                continue;
 
             for (guint j = i + 1; j < c->history->len && !answered; j++) {
                 LlmMsg *r = &g_array_index(c->history, LlmMsg, j);
 
                 answered = r->kind == LLM_MSG_TOOL_RESULT &&
-                           g_strcmp0(r->tool_call_id, tc->id) == 0;
+                           g_strcmp0(r->tool_call_id, id) == 0;
             }
             if (answered)
                 continue;
@@ -185,7 +197,7 @@ llm_live_repair_open_tool_calls(LlmCore *c)
             repair.kind = LLM_MSG_TOOL_RESULT;
             repair.content = g_strdup(
                 _("Interrupted by the CDB restart."));
-            repair.tool_call_id = g_strdup(tc->id);
+            repair.tool_call_id = g_strdup(id);
             /* Transitoire : l'appel était resté SANS réponse sur disque.
              * Loi d'Éric — pas de réponse, preuve de verdict refusé : le
              * replay des boîtes en déduit le rouge, la note reste lisible
@@ -195,8 +207,9 @@ llm_live_repair_open_tool_calls(LlmCore *c)
 
             if (c->answered_tools != NULL)
                 g_hash_table_add(c->answered_tools,
-                                 g_strdup(tc->id));
+                                 g_strdup(id));
         }
+        g_ptr_array_unref(ids);
     }
 }
 
