@@ -1849,6 +1849,167 @@ llm_json_int(JsonObject *obj, const char *member, long fallback)
 static void llm_process_tool_delta(LlmCore *c, JsonObject *obj,
                                    guint choice_index);
 
+/* Chaine d'un membre, NULL si absent ou d'un autre type. Les deux fils ne
+ * mettent pas les memes champs au meme endroit, et le chat rend parfois une
+ * chaine la ou Responses rend null : un get direct coute un critical
+ * json-glib. D'ou ce lecteur unique, partage par le body et par le flux. */
+static const char *
+resp_str(JsonObject *o, const char *member)
+{
+    JsonNode *n;
+
+    if (o == NULL || !json_object_has_member(o, member))
+        return NULL;
+    n = json_object_get_member(o, member);
+    if (n == NULL || !JSON_NODE_HOLDS_VALUE(n) ||
+        json_node_get_value_type(n) != G_TYPE_STRING)
+        return NULL;
+    return json_node_get_string(n);
+}
+
+/* Definie plus bas, avec la table qu'elle manipule. Meme raison que la
+ * declaration anticipee de llm_process_tool_delta juste au-dessus : le
+ * parseur de flux vit avant l'accumulateur qu'il nourrit. */
+static LlmPendingToolCall *pending_tool_get(LlmCore *c, long index,
+                                            long fallback_index);
+
+/* Evenement du fil « Responses ».
+ *
+ * Ce qui n'est PAS ici est decide, pas oublie :
+ *   - le raisonnement arrive en item {type:reasoning, encrypted_content,
+ *     summary:[]}. Aucun texte lisible, mesure ce soir sur ce gateway. Poser
+ *     un « 〔thinking〕 » sur du vide serait mentir a l'ecran : les balises
+ *     de pensee ne sont donc jamais ouvertes sur ce fil.
+ *   - la fin de flux n'est pas « data: [DONE] » mais response.completed ; la
+ *     fermeture du stream, elle, est commune (llm_stream_read) et n'est pas
+ *     dupliquee.
+ *   - l'usage ne vient que dans response.completed, jamais chunk par chunk.
+ *
+ * Ce qui est REUTILISE : la table des appels en attente. pending_tool_get()
+ * et llm_finalize_pending_tools() restent les seuls juges de ce qu'est un
+ * appel valide — ce handler alimente la meme table, il n'invente pas une
+ * seconde decision. C'est ce qui garde l'agentique identique d'un fil a
+ * l'autre. output_index sert de cle : c'est le champ que le gateway reprend
+ * dans chaque .delta.
+ */
+static void
+llm_handle_responses_line(LlmCore *c, JsonObject *obj)
+{
+    const char *type = resp_str(obj, "type");
+
+    if (type == NULL)
+        return;
+
+    /* Texte : champ « delta », pas « content ». */
+    if (g_strcmp0(type, "response.output_text.delta") == 0) {
+        const char *piece = resp_str(obj, "delta");
+
+        if (piece != NULL && piece[0] != '\0')
+            g_string_append(c->reply, piece);
+        return;
+    }
+
+    /* Ouverture d'un appel : l'item porte deja name et call_id, les .delta
+     * ne portent que des arguments. Un item « reasoning » ou « message »
+     * passe par ici sans rien faire : c'est voulu, pas un trou. */
+    if (g_strcmp0(type, "response.output_item.added") == 0) {
+        JsonNode           *in = json_object_get_member(obj, "item");
+        JsonObject         *it;
+        LlmPendingToolCall *p;
+        const char         *cid, *nm;
+
+        if (in == NULL || !JSON_NODE_HOLDS_OBJECT(in))
+            return;
+        it = json_node_get_object(in);
+        if (g_strcmp0(resp_str(it, "type"), "function_call") != 0)
+            return;
+
+        p   = pending_tool_get(c, llm_json_int(obj, "output_index", 0), 0);
+        cid = resp_str(it, "call_id");
+        nm  = resp_str(it, "name");
+        g_free(p->id);
+        p->id = g_strdup(cid != NULL ? cid : "");
+        g_free(p->name);
+        p->name = g_strdup(nm != NULL ? nm : "");
+        return;
+    }
+
+    if (g_strcmp0(type, "response.function_call_arguments.delta") == 0) {
+        const char *piece = resp_str(obj, "delta");
+
+        if (piece == NULL)
+            return;
+        g_string_append(pending_tool_get(
+                            c, llm_json_int(obj, "output_index", 0), 0)
+                            ->arguments,
+                        piece);
+        return;
+    }
+
+    /* Filet : un gateway qui ne fragmente pas ne rend QUE le .done. Sans
+     * cette branche les arguments resteraient vides et l'appel serait juge
+     * incomplet, donc jete, par la finalisation. Le test sur l'accumulateur
+     * vide empeche le doublement quand .delta a deja tout rendu — mesure : ce
+     * gateway rend un .delta complet PUIS un .done complet. */
+    if (g_strcmp0(type, "response.function_call_arguments.done") == 0) {
+        const char         *args = resp_str(obj, "arguments");
+        LlmPendingToolCall *p;
+
+        if (args == NULL)
+            return;
+        p = pending_tool_get(c, llm_json_int(obj, "output_index", 0), 0);
+        if (p->arguments->len == 0)
+            g_string_append(p->arguments, args);
+        return;
+    }
+
+    if (g_strcmp0(type, "response.completed") == 0) {
+        JsonNode   *rn = json_object_get_member(obj, "response");
+        JsonObject *resp, *usage;
+
+        if (rn == NULL || !JSON_NODE_HOLDS_OBJECT(rn))
+            return;
+        resp = json_node_get_object(rn);
+
+        /* Le tour peut se clore en erreur sans que le HTTP en soit une :
+         * le dire, sinon l'ecran montre une reponse tronquee sans raison.
+         * core_cdb_announce ne prend qu'une chaine (llmcore.c:4940), d'ou le
+         * printf et son liberation. */
+        if (json_object_has_member(resp, "error") &&
+            !JSON_NODE_HOLDS_NULL(json_object_get_member(resp, "error")) &&
+            JSON_NODE_HOLDS_OBJECT(json_object_get_member(resp, "error"))) {
+            const char *err = resp_str(
+                json_object_get_object_member(resp, "error"), "message");
+
+            if (err != NULL) {
+                char *msg = g_strdup_printf(_("\n[error: %s]\n"), err);
+
+                core_cdb_announce(c, msg);
+                g_free(msg);
+            }
+        }
+
+        if (!json_object_has_member(resp, "usage") ||
+            !JSON_NODE_HOLDS_OBJECT(json_object_get_member(resp, "usage")))
+            return;
+        usage = json_object_get_object_member(resp, "usage");
+        for (guint vi = 0; c->views != NULL && vi < c->views->len; vi++) {
+            LlmTile *t = g_ptr_array_index(c->views, vi);
+
+            t->tokens_sent = llm_json_int(usage, "input_tokens",
+                                          t->tokens_sent);
+            t->tokens_received = llm_json_int(usage, "output_tokens",
+                                              t->tokens_received);
+            t->tokens_context = llm_json_int(usage, "total_tokens",
+                                             t->tokens_sent +
+                                             t->tokens_received);
+            t->tokens_estimated = FALSE;
+            llm_status_update(t);
+        }
+        return;
+    }
+}
+
 /* Traite une ligne SSE « data: … ». */
 void
 llm_handle_sse_line(LlmCore *c, const char *line)
@@ -1875,6 +2036,18 @@ llm_handle_sse_line(LlmCore *c, const char *line)
         return;
     }
     obj = json_node_get_object(json_parser_get_root(parser));
+    /* Second langage : l'evenement se nomme lui-meme dans son payload, donc
+     * le dispatch n'a pas a connaitre le modele ni le fournisseur. La voie
+     * habituelle ne voit jamais passer un type « response. ». */
+    if (resp_str(obj, "type") != NULL &&
+        g_str_has_prefix(resp_str(obj, "type"), "response.")) {
+        llm_handle_responses_line(c, obj);
+        for (guint vi = 0; c->views != NULL && vi < c->views->len; vi++)
+            hist_update_reply(g_ptr_array_index(c->views, vi));
+        g_object_unref(parser);
+        return;
+    }
+
     /* Bilan tokens : par vue (bandeau propre à chacune). */
     for (guint vi = 0; c->views != NULL && vi < c->views->len; vi++) {
         LlmTile *t = g_ptr_array_index(c->views, vi);
@@ -6240,6 +6413,345 @@ llm_history_trim(LlmCore *c)
     llm_views_replay(c);
 }
 
+/* ------------------------------------------------------------------ */
+/* Fil « Responses » : second langage d'OpenAI, meme transport.        */
+/*                                                                     */
+/* « OpenAI-compatible », chez CDB, veut dire chat/completions. Ce fil */
+/* n'en est pas une variante : c'est l'autre API d'OpenAI, et c'est le */
+/* serveur qui l'a formule ce soir — « unknown parameter `messages` », */
+/* « unknown parameter `reasoning_effort` », « tools[0] did not match  */
+/* any supported type ». Meme cadrage SSE, memes lignes « data: », pas  */
+/* les memes noms.                                                     */
+/*                                                                     */
+/* La voie habituelle ne traverse rien d'ici : les trois branchements  */
+/* sont un choix d'URL et un choix de body dans llm_send, plus un      */
+/* dispatch dans llm_handle_sse_line.                                  */
+/* ------------------------------------------------------------------ */
+
+/* Le seul endroit du binaire ou ce slug est ecrit. Un deuxieme modele sur
+ * ce fil se declare ici et nulle part ailleurs. */
+static gboolean
+llm_model_is_responses(const char *model)
+{
+    return g_strcmp0(model, "muse-spark-1.3-contributor-free") == 0;
+}
+
+/* URL du fil. Mesure du 7 sep 2026 : ce modele rend 500 sur
+ * /chat/completions (avec et sans X-Session-Id, 3 tentatives) et 200 sur
+ * /responses ; les gratuits nemotron rendent l'inverse. Les deux fils sont
+ * disjoints, pas redondants — aucun ne remplace l'autre. */
+static char *
+llm_chat_url(const char *base, const char *model)
+{
+    return g_strdup_printf("%s/%s", base,
+                           llm_model_is_responses(model)
+                               ? "responses" : "chat/completions");
+}
+
+/* Y a-t-il quelque chose a mettre dans content ? Le chat tolere un
+ * content:"" ; un item Responses vide n'a rien a dire et se paie en
+ * silence ou en refus. */
+static gboolean
+resp_has_parts(JsonNode *content)
+{
+    if (content == NULL || JSON_NODE_HOLDS_NULL(content))
+        return FALSE;
+    if (JSON_NODE_HOLDS_VALUE(content))
+        return json_node_get_value_type(content) == G_TYPE_STRING &&
+               json_node_get_string(content) != NULL &&
+               json_node_get_string(content)[0] != '\0';
+    if (JSON_NODE_HOLDS_ARRAY(content))
+        return json_array_get_length(json_node_get_array(content)) > 0;
+    return FALSE;
+}
+
+/* content -> tableau de parts. Le nom de la part suit le porteur :
+ * input_text cote utilisateur, output_text cote assistant. Les images
+ * changent de forme ({image_url:{url}} -> input_image:url) : ce mapping
+ * n'est PAS verifie, le modele n'a recu aucune image dans mes sondes. Il
+ * est ecrit pour ne rien perdre, pas pour etre sur. */
+static void
+resp_parts(JsonBuilder *b, JsonNode *content, const char *part_type)
+{
+    json_builder_set_member_name(b, "content");
+    json_builder_begin_array(b);
+
+    if (JSON_NODE_HOLDS_VALUE(content)) {
+        const char *s = json_node_get_string(content);
+        const char *t = (s != NULL) ? s : "";
+
+        json_builder_begin_object(b);
+        json_builder_set_member_name(b, "type");
+        json_builder_add_string_value(b, part_type);
+        json_builder_set_member_name(b, "text");
+        json_builder_add_string_value(b, t);
+        json_builder_end_object(b);
+    } else if (JSON_NODE_HOLDS_ARRAY(content)) {
+        JsonArray *parts = json_node_get_array(content);
+
+        for (guint i = 0; i < json_array_get_length(parts); i++) {
+            JsonNode   *pn = json_array_get_element(parts, i);
+            JsonObject *po;
+            const char *pt;
+
+            if (pn == NULL || !JSON_NODE_HOLDS_OBJECT(pn))
+                continue;
+            po = json_node_get_object(pn);
+            pt = resp_str(po, "type");
+
+            if (g_strcmp0(pt, "text") == 0) {
+                const char *txt = resp_str(po, "text");
+
+                json_builder_begin_object(b);
+                json_builder_set_member_name(b, "type");
+                json_builder_add_string_value(b, part_type);
+                json_builder_set_member_name(b, "text");
+                json_builder_add_string_value(b, txt != NULL ? txt : "");
+                json_builder_end_object(b);
+            } else if (g_strcmp0(pt, "image_url") == 0 &&
+                       json_object_has_member(po, "image_url") &&
+                       JSON_NODE_HOLDS_OBJECT(
+                           json_object_get_member(po, "image_url"))) {
+                const char *url = resp_str(
+                    json_object_get_object_member(po, "image_url"), "url");
+
+                json_builder_begin_object(b);
+                json_builder_set_member_name(b, "type");
+                json_builder_add_string_value(b, "input_image");
+                json_builder_set_member_name(b, "image_url");
+                json_builder_add_string_value(b, url != NULL ? url : "");
+                json_builder_end_object(b);
+            }
+        }
+    }
+    json_builder_end_array(b);
+}
+
+/* tools[] : le chat imbrique {type,function:{name,description,parameters}},
+ * Responses met les champs a plat. La forme plate est acceptee (le modele a
+ * emis un function_call), la forme chat refusee 400. */
+static void
+resp_tools(JsonBuilder *b, JsonArray *tools)
+{
+    json_builder_set_member_name(b, "tools");
+    json_builder_begin_array(b);
+
+    for (guint i = 0; i < json_array_get_length(tools); i++) {
+        JsonNode   *tn = json_array_get_element(tools, i);
+        JsonObject *to, *fn;
+        const char *nm;
+
+        if (tn == NULL || !JSON_NODE_HOLDS_OBJECT(tn))
+            continue;
+        to = json_node_get_object(tn);
+        fn = (json_object_has_member(to, "function") &&
+              JSON_NODE_HOLDS_OBJECT(json_object_get_member(to, "function")))
+                 ? json_object_get_object_member(to, "function")
+                 : to;
+
+        nm = resp_str(fn, "name");
+        json_builder_begin_object(b);
+        json_builder_set_member_name(b, "type");
+        json_builder_add_string_value(b, "function");
+        json_builder_set_member_name(b, "name");
+        json_builder_add_string_value(b, nm != NULL ? nm : "");
+        if (resp_str(fn, "description") != NULL) {
+            json_builder_set_member_name(b, "description");
+            json_builder_add_string_value(b, resp_str(fn, "description"));
+        }
+        if (json_object_has_member(fn, "parameters")) {
+            json_builder_set_member_name(b, "parameters");
+            json_builder_add_value(b, json_node_copy(
+                json_object_get_member(fn, "parameters")));
+        }
+        json_builder_end_object(b);
+    }
+    json_builder_end_array(b);
+}
+
+/* Traduit un body chat deja construit en body Responses. On relit le JSON
+ * plutot que de toucher aux 289 lignes de llm_body_build : la correspondance
+ * se lit d'un bloc et la voie habituelle reste intacte.
+ *
+ *   system             -> instructions   (une consigne, plus un message)
+ *   user / assistant   -> items de role  (content -> parts nommees)
+ *   assistant.tool_calls -> UN item function_call par appel
+ *   role:"tool"        -> function_call_output (call_id, output)
+ *   stream_options     -> tombe          (l'usage vient dans le dernier
+ *                                          evenement, pas dans un chunk)
+ *   reasoning_effort   -> reasoning.effort
+ */
+static char *
+llm_body_to_responses(const char *chat_body)
+{
+    JsonParser  *parser = json_parser_new();
+    JsonNode    *rootn;
+    JsonObject  *root;
+    JsonBuilder *b;
+    JsonNode    *an;
+    char        *out;
+
+    if (!json_parser_load_from_data(parser, chat_body, -1, NULL)) {
+        g_object_unref(parser);
+        return g_strdup(chat_body);
+    }
+    rootn = json_parser_get_root(parser);
+    if (rootn == NULL || !JSON_NODE_HOLDS_OBJECT(rootn)) {
+        g_object_unref(parser);
+        return g_strdup(chat_body);
+    }
+    root = json_node_get_object(rootn);
+
+    b = json_builder_new();
+    json_builder_begin_object(b);
+
+    json_builder_set_member_name(b, "model");
+    json_builder_add_string_value(b,
+        resp_str(root, "model") != NULL ? resp_str(root, "model") : "");
+    json_builder_set_member_name(b, "stream");
+    json_builder_add_boolean_value(b, TRUE);
+
+    /* Sans ce champ le gateway met effort "high" : mesure ce soir, 319 a
+     * 372 jetons de raisonnement par tour sur ce modele, pour une reponse
+     * de 34 jetons. Le mapper c'est rendre a l'utilisateur son reglage. */
+    if (resp_str(root, "reasoning_effort") != NULL) {
+        json_builder_set_member_name(b, "reasoning");
+        json_builder_begin_object(b);
+        json_builder_set_member_name(b, "effort");
+        json_builder_add_string_value(b, resp_str(root, "reasoning_effort"));
+        json_builder_end_object(b);
+    }
+    if (resp_str(root, "tool_choice") != NULL) {
+        json_builder_set_member_name(b, "tool_choice");
+        json_builder_add_string_value(b, resp_str(root, "tool_choice"));
+    }
+
+    an = json_object_has_member(root, "tools")
+             ? json_object_get_member(root, "tools") : NULL;
+    if (an != NULL && JSON_NODE_HOLDS_ARRAY(an))
+        resp_tools(b, json_node_get_array(an));
+
+    an = json_object_has_member(root, "messages")
+             ? json_object_get_member(root, "messages") : NULL;
+    if (an != NULL && JSON_NODE_HOLDS_ARRAY(an)) {
+        JsonArray *msgs   = json_node_get_array(an);
+        gboolean   opened = FALSE;
+
+        for (guint i = 0; i < json_array_get_length(msgs); i++) {
+            JsonNode   *en = json_array_get_element(msgs, i);
+            JsonObject *m;
+            const char *role;
+            JsonNode   *ct;
+
+            if (en == NULL || !JSON_NODE_HOLDS_OBJECT(en))
+                continue;
+            m = json_node_get_object(en);
+            role = resp_str(m, "role");
+            if (role == NULL)
+                continue;
+
+            if (g_strcmp0(role, "system") == 0) {
+                if (resp_str(m, "content") != NULL) {
+                    json_builder_set_member_name(b, "instructions");
+                    json_builder_add_string_value(b,
+                                                  resp_str(m, "content"));
+                }
+                continue;
+            }
+
+            if (!opened) {
+                json_builder_set_member_name(b, "input");
+                json_builder_begin_array(b);
+                opened = TRUE;
+            }
+
+            /* Le resultat d'un outil n'est pas un message : c'est un item. */
+            if (g_strcmp0(role, "tool") == 0) {
+                const char *cid = resp_str(m, "tool_call_id");
+                const char *s   = resp_str(m, "content");
+
+                json_builder_begin_object(b);
+                json_builder_set_member_name(b, "type");
+                json_builder_add_string_value(b, "function_call_output");
+                json_builder_set_member_name(b, "call_id");
+                json_builder_add_string_value(b, cid != NULL ? cid : "");
+                json_builder_set_member_name(b, "output");
+                json_builder_add_string_value(b, s != NULL ? s : "");
+                json_builder_end_object(b);
+                continue;
+            }
+
+            /* Un message assistant peut porter ET un texte ET des appels.
+             * Le serveur les rend dans cet ordre (sonde du 7 sep 2026 :
+             * message "phase:commentary" puis function_call) — on preserve
+             * l'ordre, un modele qui voit l'appel avant sa phrase n'est plus
+             * le modele qu'on a teste. */
+            ct = json_object_has_member(m, "content")
+                     ? json_object_get_member(m, "content") : NULL;
+            if (resp_has_parts(ct)) {
+                json_builder_begin_object(b);
+                json_builder_set_member_name(b, "role");
+                json_builder_add_string_value(b, role);
+                resp_parts(b, ct,
+                    g_strcmp0(role, "assistant") == 0
+                        ? "output_text" : "input_text");
+                json_builder_end_object(b);
+            }
+
+            if (!json_object_has_member(m, "tool_calls") ||
+                !JSON_NODE_HOLDS_ARRAY(
+                    json_object_get_member(m, "tool_calls")))
+                continue;
+            {
+                JsonArray *calls = json_object_get_array_member(m,
+                                                                "tool_calls");
+
+                for (guint k = 0; k < json_array_get_length(calls); k++) {
+                    JsonNode   *cn = json_array_get_element(calls, k);
+                    JsonObject *co, *fo;
+                    const char *v;
+
+                    if (cn == NULL || !JSON_NODE_HOLDS_OBJECT(cn))
+                        continue;
+                    co = json_node_get_object(cn);
+                    fo = (json_object_has_member(co, "function") &&
+                          JSON_NODE_HOLDS_OBJECT(
+                              json_object_get_member(co, "function")))
+                             ? json_object_get_object_member(co, "function")
+                             : co;
+
+                    json_builder_begin_object(b);
+                    json_builder_set_member_name(b, "type");
+                    json_builder_add_string_value(b, "function_call");
+                    json_builder_set_member_name(b, "name");
+                    v = resp_str(fo, "name");
+                    json_builder_add_string_value(b, v != NULL ? v : "");
+                    json_builder_set_member_name(b, "arguments");
+                    v = resp_str(fo, "arguments");
+                    json_builder_add_string_value(b, v != NULL ? v : "{}");
+                    json_builder_set_member_name(b, "call_id");
+                    v = resp_str(co, "id");
+                    json_builder_add_string_value(b, v != NULL ? v : "");
+                    json_builder_end_object(b);
+                }
+            }
+        }
+        if (opened)
+            json_builder_end_array(b);
+    }
+
+    json_builder_end_object(b);
+    {
+        JsonNode *res = json_builder_get_root(b);
+
+        out = json_to_string(res, FALSE);
+        json_node_unref(res);
+    }
+    g_object_unref(b);
+    g_object_unref(parser);
+    return out;
+}
+
 void
 llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
 {
@@ -6254,12 +6766,22 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     c->cur_req = req;
     req->core = c;
     req->attempt = 0;
-    req->url = g_strdup_printf("%s/chat/completions", c->cfg->api_url);
+    req->url = llm_chat_url(c->cfg->api_url, c->cfg->model);
 
     if (c->cfg->api_key != NULL && c->cfg->api_key[0] != '\0')
         req->auth = g_strdup_printf("Bearer %s", c->cfg->api_key);
 
     req->body = llm_body_build(t);
+    /* Second langage : le corps est construit par llm_body_build (intacte),
+     * puis traduit ici. Juste avant la sauvegarde du slot — un slot est « le
+     * body BRUT tel qu'envoyé » (llmslots.c:4), donc c'est la forme fil qu'il
+     * doit garder, pas une reconstitution. */
+    if (llm_model_is_responses(c->cfg->model)) {
+        char *wire = llm_body_to_responses(req->body);
+
+        g_free(req->body);
+        req->body = wire;
+    }
     llm_slots_last_save(req->body);
 
     /* Espion wire : CDB_DEBUG=2 vide le body EXACT envoyé au fournisseur,
