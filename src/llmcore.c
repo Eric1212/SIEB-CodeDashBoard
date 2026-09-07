@@ -30,6 +30,7 @@
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 #include <glib/gstdio.h>
+#include <glib/guuid.h>
 #include <string.h>
 #include <gdk/gdkkeysyms.h>
 
@@ -45,6 +46,19 @@
 #define LLM_APP_REFERER    "https://github.com/Eric1212/SIEB-CodeDashBoard"
 #define LLM_APP_TITLE      "CodeDashBoard"
 #define LLM_APP_CATEGORIES "programming-app"
+
+/* UUID de session HTTP — UN PAR PROCESSUS. OpenCode Zen cale son tier gratuit
+ * et son quota sur X-Session-Id : en rotater un par requete multiplerait notre
+ * client apparent et franchirait le plafond au lieu d'y faire face. */
+static char *llm_session_uuid;
+
+static const char *
+llm_session_uuid_get(void)
+{
+    if (llm_session_uuid == NULL)
+        llm_session_uuid = g_uuid_string_random();
+    return llm_session_uuid;
+}
 
 /* ------------------------------------------------------------------ */
 /* Config                                                             */
@@ -4881,6 +4895,14 @@ llm_send_attempt(LlmRequest *req)
     soup_message_headers_append(soup_message_get_request_headers(msg),
                                 "X-OpenRouter-Categories",
                                 LLM_APP_CATEGORIES);
+    /* Session HTTP : OpenCode Zen ne sert son tier gratuit qu'au client
+     * OpenCode, et en decide par ce header (mesure du 7 sep 2026 : sans lui,
+     * 400 MissingSessionID sur tous les modeles gratuits ; avec,
+     * nemotron-3-ultra-free -> 200). Pose a TOUS les providers : les autres
+     * l'ignorent — verifie sur HyperCharm authentifie, 3+3 requetes, jetons
+     * et cout identiques dans les deux bras. */
+    soup_message_headers_append(soup_message_get_request_headers(msg),
+                                "X-Session-Id", llm_session_uuid_get());
 
     soup_message_set_request_body_from_bytes(
         msg, "application/json",
