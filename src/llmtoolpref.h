@@ -43,6 +43,24 @@ void llm_config_save_tool_mode(const char *name, LlmToolProfile profile,
 
 /* Profil actif (persisté dans llm.json active.profile). */
 LlmToolProfile llm_config_active_profile(void);
+
+/* Règles bash par motif du profil (Forme 1, spec §1+§6) : copie
+ * possédée de LlmBashRule* (ordre = déclaration, tie §2). NULL si
+ * le profil est sans `rules` (bypass 4.9 : l'appelant ne touche pas
+ * à `mode`). Inconnues ignorées + journal CDB_DEBUG=1 (spec 4.10). */
+struct _GPtrArray *llm_config_bash_rules(LlmToolProfile profile);
+void llm_config_bash_rules_free(struct _GPtrArray *rules);
+
+/* Conversions verdict <-> mode (spec §5 hook) : le hook substitue
+ * le verdict à `mode` ; `off`/`deny` sont traités à part (refus). */
+int llm_tool_mode_to_bash(LlmToolMode mode);
+LlmToolMode llm_bash_verdict_to_mode(int verdict, LlmToolMode fallback);
+
+/* Écriture des règles bash d'un profil (spec §6+§7) : recharger
+ * l'arbre, muter modes[profil] = { mode, rules }, réécrire.
+ * `kept` = LlmBashRule* dans l'ordre voulu (tie §2). */
+void llm_config_save_bash_rules(LlmToolProfile profile,
+                                struct _GPtrArray *kept);
 void           llm_config_set_active_profile(LlmToolProfile profile);
 
 #endif /* CDB_LLMTOOLPREF_H */

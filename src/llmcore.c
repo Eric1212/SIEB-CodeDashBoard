@@ -4174,6 +4174,42 @@ cdb_dispatch_native_call(LlmCore *c, const LlmToolCall *tc)
         error = g_strdup(_("missing or empty command."));
         goto done;
     }
+    /* Règles bash par motif (spec §5 : hook entre l.4176 et l.4187).
+     * Bypass 4.9 : sans `rules` pour le profil actif, `mode` passe
+     * tel quel — pas de découpage, pas de motifs. Sinon le verdict
+     * de règle se substitue à `mode` ; `off`/`deny` = refus via
+     * `error + goto done` (spec 4.7). `tab` est intouché (spec 4.8). */
+    {
+        LlmToolProfile prof = llm_config_active_profile();
+        GPtrArray     *rules = llm_config_bash_rules(prof);
+        LlmBashVerdict fb;
+        LlmBashVerdict v;
+
+        if (rules != NULL && rules->len > 0) {
+            fb = llm_tool_mode_to_bash(mode);
+            v = llm_bash_verdict_command(rules, command, fb);
+            if (v == LLM_BASH_OFF || v == LLM_BASH_DENY) {
+                char *msg = g_strdup_printf(
+                    v == LLM_BASH_DENY
+                    ? _("bash refused by profile policy: %s")
+                    : _("bash tool bypass attempted in this profile: %s"),
+                    command);
+                core_cdb_announce(c, msg);
+                g_free(msg);
+                error = g_strdup_printf(
+                    v == LLM_BASH_DENY
+                    ? _("refused by the profile policy: %s")
+                    : _("tool disabled in the current profile: %s"),
+                    command);
+                llm_config_bash_rules_free(rules);
+                goto done;
+            }
+            if (v != LLM_BASH_MODE && v != LLM_BASH_INVALID)
+                mode = llm_bash_verdict_to_mode(v, mode);
+        }
+        if (rules != NULL)
+            llm_config_bash_rules_free(rules);
+    }
 
     {
         CdbCmdSpec *spec = g_new0(CdbCmdSpec, 1);
@@ -5002,7 +5038,7 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
         }
 
         if (status != 200) {
-            char msg[128];
+            char msg[512];   /* 128 coupait le motif, dernier champ de l'erreur */
             char err_body[1024] = "";
             gsize nerr = 0;
 
@@ -6726,9 +6762,15 @@ llm_body_to_responses(const char *chat_body)
                     json_builder_set_member_name(b, "name");
                     v = resp_str(fo, "name");
                     json_builder_add_string_value(b, v != NULL ? v : "");
+                    /* arguments doit etre du JSON VALIDE, et le champ ne peut
+                     * pas etre absent non plus (mesures : "" -> 400 « must be
+                     * valid JSON », champ omis -> 400 « missing required field »).
+                     * Or un appel dont aucun fragment n'est arrive arrive ici
+                     * avec "" : g_string_free d'un GString neuf. Le fil chat
+                     * l'encaisse, pas celui-ci — d'ou le {}, pas le NULL. */
                     json_builder_set_member_name(b, "arguments");
                     v = resp_str(fo, "arguments");
-                    json_builder_add_string_value(b, v != NULL ? v : "{}");
+                    json_builder_add_string_value(b, (v && v[0]) ? v : "{}");
                     json_builder_set_member_name(b, "call_id");
                     v = resp_str(co, "id");
                     json_builder_add_string_value(b, v != NULL ? v : "");

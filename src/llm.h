@@ -32,6 +32,7 @@
 #define CDB_LLM_H
 
 #include <gtk/gtk.h>
+#include "llmbashrules.h"    /* LlmBashRule : règles bash par motif (spec §1) */
 #include <json-glib/json-glib.h>   /* JsonNode / JsonObject : membres étrangers de llm.json */
 
 /* Configuration LLM chargée depuis llm.json (possédée par App).
@@ -281,10 +282,15 @@ extern const char *const LLM_TOOL_MODE_NAMES[LLM_TOOL_MODE_COUNT];
 gboolean llm_tool_mode_is_auto(LlmToolMode m);    /* ALLOW ou ALLOW+      */
 gboolean llm_tool_mode_has_plus(LlmToolMode m);   /* ASK+ ou ALLOW+       */
 
-/* Préférence d'un outil natif : un mode PAR profil. */
+/* Préférence d'un outil natif : un mode PAR profil, plus les
+ * règles bash par motif (Forme 1, spec docs/bashrules-spec.md §1 :
+ * objet { mode, rules } par profil ; `rules` = NULL si absent).
+ * L'ordre du GPtrArray est l'ordre de déclaration (tie §2) ;
+ * jamais de GHashTable (perdrait l'ordre). */
 typedef struct {
     char        *name;
     LlmToolMode  modes[LLM_PROFILE_COUNT];
+    GPtrArray   *rules[LLM_PROFILE_COUNT]; /* LlmBashRule*, NULL si absent */
 } LlmToolPref;
 
 void llm_retry429_load(LlmRetry429 *out);

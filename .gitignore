@@ -23,11 +23,6 @@ third_party/.tree-tmp-*
 # son manifest sont versionnés, pas le programme compilé.
 tools/refresh_third_party
 
-# Binaire du test de la couche pure (make check) : meme raison que
-# ci-dessus, sa source (tools/test_textops.c) est versionnee, pas le
-# programme compile.
-tools/test_textops
-
 # CLAUDE.md : le contrat de travail entre Éric Boucher et son employé LLM
 # (Claude) — les règles, la nomenclature, les lois d'architecture. Pas une
 # documentation destinée au public du dépôt. Il était versionné et donc publié

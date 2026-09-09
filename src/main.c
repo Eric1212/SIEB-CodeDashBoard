@@ -3741,6 +3741,8 @@ static GtkWidget *build_provider_form(const char *provider_name);
 static GtkWidget *build_harness_form(void);
 static GtkWidget *build_names_form(void);
 static GtkWidget *build_tools_form(void);
+static GtkWidget *build_tools_form_with_rules(void);
+static GtkWidget *build_bash_rules_section(LlmToolProfile prof);
 static void on_tool_mode_clicked(GtkButton *btn, gpointer data);
 static GtkWidget *build_initprompt_editor(void);
 static GtkWidget *build_language_form(void);
@@ -3793,7 +3795,7 @@ build_settings_section(const SettingsSection *sec)
     else if (g_strcmp0(sec->id, "Init-Prompt") == 0)
         body = build_initprompt_editor();
     else if (g_strcmp0(sec->id, "Tools") == 0)
-        body = build_tools_form();
+        body = build_tools_form_with_rules();
     else if (g_strcmp0(sec->id, "Language") == 0)
         body = build_language_form();
     else if (g_strcmp0(sec->id, "Sounds") == 0)
@@ -4408,6 +4410,235 @@ build_tools_form(void)
 
     llm_tools_prefs_free(prefs);
     return grid;
+}
+
+/* Grille + 3 sous-sections règles bash (spec §7 : section inline
+ * sous la grille, pas de dialogue ; le JSON reste le stockage). */
+static GtkWidget *
+build_tools_form_with_rules(void)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    GtkWidget *grid = build_tools_form();
+
+    gtk_box_append(GTK_BOX(box), grid);
+    for (guint p = 0; p < LLM_PROFILE_COUNT; p++)
+        gtk_box_append(GTK_BOX(box),
+                       build_bash_rules_section((LlmToolProfile)p));
+    return box;
+}
+
+/* Règles bash : 7 verdicts longs (§3), hors gettext (clés JSON).
+ * Menu fermé ⇒ valeur inconnue impossible par construction (§7). */
+static const char *const BASH_VERDICT_LABELS[] = {
+    "off", "ask", "askplus", "allow", "allowplus", "deny", "mode"
+};
+
+typedef struct {
+    GtkWidget     *box;      /* lignes de la sous-section */
+    GtkWidget     *entry;    /* motif de la ligne "nouvelle" */
+    GtkDropDown   *verdict;  /* verdict de la ligne "nouvelle" */
+    LlmToolProfile prof;
+} BashRulesCtx;
+
+static void
+bash_rules_add_row(GtkWidget *box, LlmToolProfile prof,
+                   const char *pattern, const char *verdict_str);
+
+static void
+on_bash_rule_remove_clicked(GtkButton *btn, gpointer data)
+{
+    BashRulesCtx *ctx = data;
+    GtkWidget    *row = g_object_get_data(G_OBJECT(btn), "rule-row");
+    GtkWidget    *entry = g_object_get_data(G_OBJECT(btn), "rule-entry");
+    GtkDropDown  *drop = g_object_get_data(G_OBJECT(btn), "rule-verdict");
+    const char   *pat;
+    GPtrArray    *rules;
+    GPtrArray    *kept;
+    guint         sel;
+
+    if (ctx == NULL || row == NULL || entry == NULL || drop == NULL)
+        return;
+    pat = gtk_editable_get_text(GTK_EDITABLE(entry));
+    sel = gtk_drop_down_get_selected(drop);
+    if (pat == NULL || pat[0] == '\0')
+        return;
+    rules = llm_config_bash_rules(ctx->prof);
+    kept = g_ptr_array_new();
+    for (guint i = 0; i < rules->len; i++) {
+        LlmBashRule *r = g_ptr_array_index(rules, i);
+
+        /* Retire la ligne : même motif ET même verdict (une ligne
+         * parmi des doublons affichés ne tue pas ses jumelles). */
+        if (g_strcmp0(r->pattern, pat) == 0 &&
+            g_strcmp0(llm_bash_verdict_name(r->verdict),
+                      sel < G_N_ELEMENTS(BASH_VERDICT_LABELS)
+                      ? BASH_VERDICT_LABELS[sel] : "") == 0)
+            continue;
+        g_ptr_array_add(kept, r);
+    }
+    llm_config_save_bash_rules(ctx->prof, kept);
+    g_ptr_array_unref(kept);
+    llm_config_bash_rules_free(rules);
+    gtk_box_remove(GTK_BOX(ctx->box), row);
+    sfx_play_feedback();
+}
+
+static void
+on_bash_rule_add_clicked(GtkButton *btn, gpointer data)
+{
+    BashRulesCtx *ctx = data;
+    const char   *pat;
+    guint         sel;
+    GPtrArray    *rules;
+
+    if (ctx == NULL || ctx->entry == NULL || ctx->verdict == NULL)
+        return;
+    pat = gtk_editable_get_text(GTK_EDITABLE(ctx->entry));
+    if (pat == NULL || pat[0] == '\0')
+        return;
+    sel = gtk_drop_down_get_selected(ctx->verdict);
+    rules = llm_config_bash_rules(ctx->prof);
+    {
+        LlmBashRule *r = llm_bash_rule_new(
+            pat, sel < G_N_ELEMENTS(BASH_VERDICT_LABELS)
+                 ? BASH_VERDICT_LABELS[sel] : "mode",
+            rules->len);
+
+        if (r != NULL)
+            g_ptr_array_add(rules, r);
+    }
+    llm_config_save_bash_rules(ctx->prof, rules);
+    bash_rules_add_row(ctx->box, ctx->prof, pat,
+                       sel < G_N_ELEMENTS(BASH_VERDICT_LABELS)
+                       ? BASH_VERDICT_LABELS[sel] : "mode");
+    llm_config_bash_rules_free(rules);
+    gtk_editable_set_text(GTK_EDITABLE(ctx->entry), "");
+    sfx_play_feedback();
+    (void)btn;
+}
+
+static void
+bash_rules_add_row(GtkWidget *box, LlmToolProfile prof G_GNUC_UNUSED,
+                   const char *pattern, const char *verdict_str)
+{
+    GtkWidget   *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget   *entry = gtk_entry_new();
+    GtkWidget   *drop;
+    GtkWidget   *rm;
+    GtkStringList *sl;
+    guint        sel = 6; /* "mode" par défaut */
+    BashRulesCtx *ctx = g_object_get_data(G_OBJECT(box), "rules-ctx");
+
+    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_LABELS); i++)
+        if (g_strcmp0(BASH_VERDICT_LABELS[i], verdict_str) == 0) {
+            sel = i;
+            break;
+        }
+    gtk_editable_set_text(GTK_EDITABLE(entry),
+                          pattern != NULL ? pattern : "");
+    gtk_widget_set_hexpand(entry, TRUE);
+    gtk_widget_set_margin_start(row, 24);
+    sl = gtk_string_list_new(NULL);
+    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_LABELS); i++)
+        gtk_string_list_append(sl, BASH_VERDICT_LABELS[i]);
+    drop = gtk_drop_down_new(G_LIST_MODEL(sl), NULL);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(drop), sel);
+    /* PAS d'unref : le GtkDropDown garde une ref sur son modèle mais
+     * la libère AVANT sa propre fin de dispose quand la ligne est
+     * retirée — unref immédiat = use-after-free au retrait (SEGV
+     * g_list_model_get_n_items, repro /tmp/rowvar.c). Le modèle vit
+     * et meurt avec sa ligne : fuite nulle, crash nul. */
+    rm = gtk_button_new_with_label("×");
+    gtk_widget_add_css_class(rm, "flat");
+    g_object_set_data(G_OBJECT(rm), "rule-row", row);
+    g_object_set_data(G_OBJECT(rm), "rule-entry", entry);
+    g_object_set_data(G_OBJECT(rm), "rule-verdict", drop);
+    g_signal_connect(rm, "clicked",
+                     G_CALLBACK(on_bash_rule_remove_clicked), ctx);
+    gtk_box_append(GTK_BOX(row), entry);
+    gtk_box_append(GTK_BOX(row), drop);
+    gtk_box_append(GTK_BOX(row), rm);
+    gtk_box_append(GTK_BOX(box), row);
+}
+
+/* Sous-section règles d'un profil : lignes dynamiques + ligne d'ajout
+ * (spec §7 : section inline sous la grille, pas de dialogue ; le JSON
+ * reste le stockage, jamais une UI). */
+static GtkWidget *
+build_bash_rules_section(LlmToolProfile prof)
+{
+    GtkWidget    *sec = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    GtkWidget    *header_btn = gtk_toggle_button_new();
+    GtkWidget    *add_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget    *add_btn = gtk_button_new_with_label(_("+ Line"));
+    BashRulesCtx *ctx = g_new0(BashRulesCtx, 1);
+    GtkStringList *sl;
+    GPtrArray    *rules;
+
+    /* Tête accordéon : même motif que build_settings_section
+     * (bouton plat + flèche, revealer fermé par défaut). */
+    gtk_widget_add_css_class(header_btn, "flat");
+    gtk_button_set_child(GTK_BUTTON(header_btn), NULL);
+    {
+        GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        GtkWidget *arrow = gtk_label_new("›");
+        GtkWidget *title = gtk_label_new(llm_profile_label(prof));
+
+        gtk_widget_add_css_class(title, "titlebar-brand");
+        gtk_widget_set_halign(title, GTK_ALIGN_START);
+        gtk_widget_set_hexpand(title, TRUE);
+        gtk_widget_set_halign(arrow, GTK_ALIGN_START);
+        g_object_set_data(G_OBJECT(header_btn), "arrow", arrow);
+        gtk_box_append(GTK_BOX(hbox), arrow);
+        gtk_box_append(GTK_BOX(hbox), title);
+        gtk_button_set_child(GTK_BUTTON(header_btn), hbox);
+    }
+    ctx->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    ctx->prof = prof;
+    g_object_set_data_full(G_OBJECT(ctx->box), "rules-ctx", ctx, g_free);
+    g_object_set_data(G_OBJECT(sec), "rules-ctx", ctx);
+    rules = llm_config_bash_rules(prof);
+    for (guint i = 0; i < rules->len; i++) {
+        LlmBashRule *r = g_ptr_array_index(rules, i);
+
+        bash_rules_add_row(ctx->box, prof, r->pattern,
+                           llm_bash_verdict_name(r->verdict));
+    }
+    llm_config_bash_rules_free(rules);
+    ctx->entry = gtk_entry_new();
+    gtk_widget_set_hexpand(ctx->entry, TRUE);
+    gtk_widget_set_margin_start(add_row, 24);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(ctx->entry),
+                                   _("pattern, e.g. git log*"));
+    sl = gtk_string_list_new(NULL);
+    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_LABELS); i++)
+        gtk_string_list_append(sl, BASH_VERDICT_LABELS[i]);
+    ctx->verdict = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(sl), NULL));
+    gtk_drop_down_set_selected(ctx->verdict, 1); /* "ask" par défaut */
+    /* PAS d'unref (même motif que bash_rules_add_row ci-dessus). */
+    g_signal_connect(add_btn, "clicked",
+                     G_CALLBACK(on_bash_rule_add_clicked), ctx);
+    gtk_box_append(GTK_BOX(add_row), ctx->entry);
+    gtk_box_append(GTK_BOX(add_row), GTK_WIDGET(ctx->verdict));
+    gtk_box_append(GTK_BOX(add_row), add_btn);
+    /* Le contenu (lignes + ajout) vit dans un revealer fermé. */
+    {
+        GtkWidget *body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+        GtkWidget *revealer = gtk_revealer_new();
+
+        gtk_box_append(GTK_BOX(body), ctx->box);
+        gtk_box_append(GTK_BOX(body), add_row);
+        g_object_bind_property(header_btn, "active",
+                               revealer, "reveal-child",
+                               G_BINDING_DEFAULT);
+        g_signal_connect(header_btn, "toggled",
+                         G_CALLBACK(on_settings_section_toggled), NULL);
+        gtk_revealer_set_child(GTK_REVEALER(revealer), body);
+        gtk_revealer_set_reveal_child(GTK_REVEALER(revealer), FALSE);
+        gtk_box_append(GTK_BOX(sec), header_btn);
+        gtk_box_append(GTK_BOX(sec), revealer);
+    }
+    return sec;
 }
 
 
