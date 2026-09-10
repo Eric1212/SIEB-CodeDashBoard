@@ -799,11 +799,16 @@ llm_config_save_bash_rules(LlmToolProfile profile, GPtrArray *kept)
                                   i);
             if (c != NULL)
                 g_ptr_array_add(target->rules[profile], c);
-    /* Invariant v2 : `kept` vide (tout supprimé via `×`) → seed 176, */
-    /* jamais `{}` sur disque. Pour `{"*": "mode"}` seul : s'arrêter à 1. */
+        }
+    /* Invariant v2 : `kept` vide (tout supprimé via `×`) → seed 176,
+     * jamais `{}` sur disque. Pour `{"*": "mode"}` seul : s'arrêter à 1. */
+    /* Le test est HORS boucle, et c'est un piège qui y a vécu : l'accolade
+     * fermante du for était posée juste après lui. Le test ne courait donc
+     * jamais sur un `kept` vide, et, sur un `kept` plein, seulement après un
+     * ajout — donc avec `len` déjà >= 1. Le seed était inatteignable : `{}`
+     * partait au disque. Mesuré HEAD 0 règle, corrigé 176. */
     if (target->rules[profile]->len == 0)
         bash_seed_rules(target->rules[profile]);
-        }
 
     if (json_parser_load_from_file(parser, path, NULL) &&
         json_parser_get_root(parser) != NULL &&
