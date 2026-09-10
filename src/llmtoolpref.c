@@ -587,10 +587,10 @@ llm_tools_effective_mode(const char *name)
     return mode;
 }
 
-/* Seed officiel : motifs de list.txt, verdict askplus partout —
- * sauf "*" qui reste "mode" (neutre, spec §2). Base de travail
- * d'Éric = matière du seed, pas seed brut : les valeurs list.txt
- * (allowplus/off/deny) sont ses réglages, pas le défaut CDB. */
+/* Seed officiel : les motifs de list.txt, et rien d'autre. Chaque ligne
+ * herite du profil ("mode") — le seed fournit la matiere a regler, pas une
+ * politique. En "askplus" il en etait une : une regle tranche avant le
+ * profil, donc ces 175 motifs demandaient encore sous YOLO (mesure). */
 static const char *const BASH_SEED_PATTERNS[] = {
 #include "llmbashseed.inc"
 };
@@ -608,7 +608,7 @@ bash_seed_rules(GPtrArray *out)
         return;
     for (guint i = 0; i < n; i++) {
         LlmBashRule *r = llm_bash_rule_new(BASH_SEED_PATTERNS[i],
-                                           (i == 0) ? "mode" : "askplus",
+                                           "mode",
                                            i);
 
         if (r != NULL)
