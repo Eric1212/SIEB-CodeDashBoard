@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cdb 0.1\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-08 22:39-0400\n"
+"POT-Creation-Date: 2026-09-10 00:31-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -83,7 +83,7 @@ msgstr ""
 msgid "Explorer"
 msgstr ""
 
-#: src/layout.c:361 src/main.c:6597
+#: src/layout.c:361 src/main.c:6927
 msgid "Settings"
 msgstr ""
 
@@ -1383,7 +1383,7 @@ msgstr ""
 msgid "CDB: failed to write active profile: %s\n"
 msgstr ""
 
-#: src/llmtoolpref.c:834
+#: src/llmtoolpref.c:839
 #, c-format
 msgid "CDB: failed to write bash rules: %s\n"
 msgstr ""
@@ -1682,7 +1682,7 @@ msgstr ""
 msgid "Replace all"
 msgstr ""
 
-#: src/main.c:3909 src/main.c:5236 src/main.c:5325
+#: src/main.c:3909 src/main.c:5566 src/main.c:5655
 msgid "Saved ✓"
 msgstr ""
 
@@ -1690,253 +1690,258 @@ msgstr ""
 msgid "Tool"
 msgstr ""
 
-#: src/main.c:4573
+#: src/main.c:4778 src/main.c:4835
+#, c-format
+msgid "CDB: bash pattern refused (profile %s): \"%s\" -> \"%s\" [%s]\n"
+msgstr ""
+
+#: src/main.c:4901
 msgid "+ Line"
 msgstr ""
 
-#: src/main.c:4612
+#: src/main.c:4942
 msgid "pattern, e.g. git log*"
 msgstr ""
 
-#: src/main.c:4665
+#: src/main.c:4995
 msgid ""
 "Applied at once to everything created from now on: new tiles, dialogs, and "
 "what CDB sends to the model. Screens already open keep their language."
 msgstr ""
 
-#: src/main.c:4766
+#: src/main.c:5096
 msgid ""
 "No locale is installed for this language. Install it (locale-gen), then "
 "restart CDB."
 msgstr ""
 
-#: src/main.c:4803
+#: src/main.c:5133
 msgid "current language"
 msgstr ""
 
-#: src/main.c:4892
+#: src/main.c:5222
 msgid "current theme"
 msgstr ""
 
-#: src/main.c:4917
+#: src/main.c:5247
 msgid "Light"
 msgstr ""
 
-#: src/main.c:4918
+#: src/main.c:5248
 msgid "Dark"
 msgstr ""
 
-#: src/main.c:4920
+#: src/main.c:5250
 msgid ""
 "The choice applies at once and survives restarts: the system's light/dark "
 "setting no longer rules."
 msgstr ""
 
-#: src/main.c:4990
+#: src/main.c:5320
 msgid "Play this sound"
 msgstr ""
 
-#: src/main.c:5031
+#: src/main.c:5361
 #, c-format
 msgid "%s (system)"
 msgstr ""
 
-#: src/main.c:5069
+#: src/main.c:5399
 msgid "End-of-turn sound (when the wait ends):"
 msgstr ""
 
-#: src/main.c:5074
+#: src/main.c:5404
 msgid "Change sound (a choice, a save):"
 msgstr ""
 
-#: src/main.c:5079
+#: src/main.c:5409
 msgid ""
 "▶ plays the sound as a test, even when the switch is off. Silent if no audio "
 "player is installed."
 msgstr ""
 
-#: src/main.c:5094
+#: src/main.c:5424
 msgid "Retry on HTTP 429:"
 msgstr ""
 
-#: src/main.c:5096 src/main.c:5104
+#: src/main.c:5426 src/main.c:5434
 msgid "Retries (0 = infinite):"
 msgstr ""
 
-#: src/main.c:5097 src/main.c:5105
+#: src/main.c:5427 src/main.c:5435
 msgid "Delay between attempts (ms):"
 msgstr ""
 
-#: src/main.c:5102
+#: src/main.c:5432
 msgid "Retry on HTTP 5xx:"
 msgstr ""
 
-#: src/main.c:5245
+#: src/main.c:5575
 msgid "User name"
 msgstr ""
 
-#: src/main.c:5246
+#: src/main.c:5576
 msgid "Assistant name"
 msgstr ""
 
-#: src/main.c:5247 src/main.c:5422 src/main.c:5458
+#: src/main.c:5577 src/main.c:5752 src/main.c:5788
 msgid "Save"
 msgstr ""
 
-#: src/main.c:5377
+#: src/main.c:5707
 #, c-format
 msgid "CDB: Init-Prompt scheme=%s found=%d\n"
 msgstr ""
 
-#: src/main.c:5454
+#: src/main.c:5784
 msgid "API key:"
 msgstr ""
 
-#: src/main.c:5456
+#: src/main.c:5786
 msgid "Allowed models:"
 msgstr ""
 
-#: src/main.c:5471
+#: src/main.c:5801
 msgid "(optional)"
 msgstr ""
 
-#: src/main.c:5473 src/main.c:5478 src/main.c:5482
+#: src/main.c:5803 src/main.c:5808 src/main.c:5812
 msgid "(empty: all models)"
 msgstr ""
 
-#: src/main.c:5476
+#: src/main.c:5806
 msgid "HyperCharm key…"
 msgstr ""
 
-#: src/main.c:5549
+#: src/main.c:5879
 msgid "(to come: endpoint, model, API key…)"
 msgstr ""
 
-#: src/main.c:5556
+#: src/main.c:5886
 msgid "Retry on error"
 msgstr ""
 
-#: src/main.c:5557
+#: src/main.c:5887
 msgid "Names"
 msgstr ""
 
-#: src/main.c:5558
+#: src/main.c:5888
 msgid "Init-Prompt"
 msgstr ""
 
-#: src/main.c:5561
+#: src/main.c:5891
 msgid "Harness"
 msgstr ""
 
-#: src/main.c:5562
+#: src/main.c:5892
 msgid "Tools"
 msgstr ""
 
-#: src/main.c:5563
+#: src/main.c:5893
 msgid "Providers"
 msgstr ""
 
-#: src/main.c:5569
+#: src/main.c:5899
 msgid "Theme"
 msgstr ""
 
-#: src/main.c:5570
+#: src/main.c:5900
 msgid "Language"
 msgstr ""
 
-#: src/main.c:5571
+#: src/main.c:5901
 msgid "Sounds"
 msgstr ""
 
-#: src/main.c:5574
+#: src/main.c:5904
 msgid "General"
 msgstr ""
 
-#: src/main.c:5575
+#: src/main.c:5905
 msgid "(to come: token, user, repo defaults…)"
 msgstr ""
 
-#: src/main.c:5576
+#: src/main.c:5906
 msgid "LLM"
 msgstr ""
 
-#: src/main.c:5611
+#: src/main.c:5941
 msgid ""
 "Empty\n"
 "(reserved slot)"
 msgstr ""
 
-#: src/main.c:5706
+#: src/main.c:6036
 msgid "Split horizontally"
 msgstr ""
 
-#: src/main.c:5707
+#: src/main.c:6037
 msgid "Split vertically"
 msgstr ""
 
-#: src/main.c:5743
+#: src/main.c:6073
 msgid "Remove this tile"
 msgstr ""
 
-#: src/main.c:5753
+#: src/main.c:6083
 msgid "Group"
 msgstr ""
 
-#: src/main.c:5763
+#: src/main.c:6093
 msgid "Split group horizontally"
 msgstr ""
 
-#: src/main.c:5764
+#: src/main.c:6094
 msgid "Split group vertically"
 msgstr ""
 
-#: src/main.c:5778
+#: src/main.c:6108
 msgid "Collapse group to this piece"
 msgstr ""
 
-#: src/main.c:5788
+#: src/main.c:6118
 msgid "Remove group"
 msgstr ""
 
-#: src/main.c:6096
+#: src/main.c:6426
 msgid "CDB: window.json merged into layout.json\n"
 msgstr ""
 
-#: src/main.c:6234
+#: src/main.c:6564
 #, c-format
 msgid "CDB: modal limit of %d reached"
 msgstr ""
 
-#: src/main.c:6268
+#: src/main.c:6598
 msgid "Settings — CodeDashBoard"
 msgstr ""
 
-#: src/main.c:6316
+#: src/main.c:6646
 msgid "CDB: readlink /proc/self/exe failed"
 msgstr ""
 
-#: src/main.c:6349
+#: src/main.c:6679
 msgid "CDB: failed to spawn the new session"
 msgstr ""
 
-#: src/main.c:6503
+#: src/main.c:6833
 #, c-format
 msgid "CDB: no locale installed for language %s\n"
 msgstr ""
 
-#: src/main.c:6596
+#: src/main.c:6926
 msgid "About CDB"
 msgstr ""
 
-#: src/main.c:6598
+#: src/main.c:6928
 msgid "Exit"
 msgstr ""
 
-#: src/main.c:6622
+#: src/main.c:6952
 msgid "New window"
 msgstr ""
 
-#: src/main.c:6623
+#: src/main.c:6953
 msgid "New session…"
 msgstr ""
 

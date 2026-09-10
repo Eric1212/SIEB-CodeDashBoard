@@ -4427,16 +4427,97 @@ build_tools_form_with_rules(void)
     return box;
 }
 
-/* Règles bash : 7 verdicts longs (§3), hors gettext (clés JSON).
- * Menu fermé ⇒ valeur inconnue impossible par construction (§7). */
-static const char *const BASH_VERDICT_LABELS[] = {
-    "off", "ask", "askplus", "allow", "allowplus", "deny", "mode"
+/* Règles bash : les 7 verdicts longs (spec §3), hors gettext — ce sont les
+ * clés JSON de llm.json, et le libellé du bouton EST ce mot, tel qu'il part
+ * au disque. Pas d'index intermédiaire entre l'écran et le fichier : rien à
+ * faire correspondre, donc rien à décaler. Menu fermé ⇒ une valeur inconnue
+ * est impossible par construction (§7) : le cycle ne la peut pas. */
+static const char *const BASH_VERDICT_CYCLE[] = {
+    "off", "deny", "mode", "ask", "askplus", "allow", "allowplus"
 };
+
+/* Cet ordre est un réglage choisi, pas une échelle : off protège, deny fige,
+ * mode s'efface, puis les concessions ask → askplus → allow → allowplus.
+ * Ce n'est PAS llm_bash_severity() (deny > off > askplus > ask > allowplus >
+ * allow) et ce n'est pas non plus la monotone de la grille Tools — un clic
+ * ne rend plus CDB plus permissif, il déplace un curseur. Ne pas « corriger
+ * » en triant. */
+static_assert(G_N_ELEMENTS(BASH_VERDICT_CYCLE) == LLM_BASH_INVALID,
+              "le cycle doit nommer exactement les verdicts du moteur");
+
+/* Position d'un nom dans le cycle ; 0 si hors table. Le nom ne vient jamais
+ * d'une saisie : toujours llm_bash_verdict_name() ou le cycle lui-même, donc
+ * « hors table » ne peut pas arriver — 0 est un garde-fou, pas une branche. */
+static guint
+bash_verdict_cycle_index(const char *name)
+{
+    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_CYCLE); i++)
+        if (g_strcmp0(BASH_VERDICT_CYCLE[i], name) == 0)
+            return i;
+    return 0;
+}
+
+/* Le cran suivant, en boucle. */
+static const char *
+bash_verdict_next(const char *name)
+{
+    return BASH_VERDICT_CYCLE[(bash_verdict_cycle_index(name) + 1) %
+                              G_N_ELEMENTS(BASH_VERDICT_CYCLE)];
+}
+
+/* Un nom mal orthographié dans le cycle (« ask_plus ») se lirait
+ * LLM_BASH_INVALID côté moteur : llm_bash_rule_new() rendrait NULL et la
+ * ligne disparaîtrait au prochain chargement sans un seul mot. Le
+ * static_assert ci-dessus compte les verdicts mais ne lit aucune chaîne —
+ * ce contrôle court à l'ouverture de chaque sous-section. */
+static gboolean
+bash_verdict_cycle_is_valid(void)
+{
+    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_CYCLE); i++)
+        if (llm_bash_verdict_parse(BASH_VERDICT_CYCLE[i])
+            == LLM_BASH_INVALID)
+            return FALSE;
+    return TRUE;
+}
+
+/* Largeur du plus long libellé du cycle : c'est elle qui fige le bouton,
+ * pour qu'un clic ne déplace pas la ligne. Comptée sur la table, jamais un
+ * nombre recopié — un verdict plus long ajouté au moteur se loge tout seul.
+ * Jetons ASCII uniquement : strlen suffit. */
+static gint
+bash_verdict_label_width(void)
+{
+    gint max = 0;
+
+    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_CYCLE); i++) {
+        gint l = (gint) strlen(BASH_VERDICT_CYCLE[i]);
+
+        if (l > max)
+            max = l;
+    }
+    return max;
+}
+
+/* L'état d'un bouton-verdict vit dans le bouton, en clé JSON : c'est ce que
+ * lit le clic suivant, et ce que lira le « + Line ». */
+static void
+verdict_button_set(GtkButton *btn, const char *name)
+{
+    GtkWidget *lbl;
+
+    if (name == NULL)
+        name = BASH_VERDICT_CYCLE[0];
+    lbl = gtk_button_get_child(btn);
+    if (lbl != NULL && GTK_IS_LABEL(lbl))
+        gtk_label_set_text(GTK_LABEL(lbl), name);
+    g_object_set_data_full(G_OBJECT(btn), "verdict-name",
+                           g_strdup(name), g_free);
+}
 
 typedef struct {
     GtkWidget     *box;      /* lignes de la sous-section */
     GtkWidget     *entry;    /* motif de la ligne "nouvelle" */
-    GtkDropDown   *verdict;  /* verdict de la ligne "nouvelle" */
+    GtkWidget     *verdict;  /* bouton cyclable de la ligne "nouvelle" */
     LlmToolProfile prof;
 } BashRulesCtx;
 
@@ -4444,43 +4525,276 @@ static void
 bash_rules_add_row(GtkWidget *box, LlmToolProfile prof,
                    const char *pattern, const char *verdict_str);
 
+/* Index de la ligne dans la box des règles, -1 si elle n'y est plus. La box
+ * ne contient QUE des lignes de règles, dans l'ordre de déclaration — le
+ * même que celui du tableau relu du disque : le dict JSON garde l'ordre
+ * d'insertion et le save réécrit dans l'ordre du tableau (vérifié, les 176
+ * motifs du seed ressortent dans l'ordre de llmbashseed.inc). Donc ligne i
+ * == règle i, sans avoir à inventer un identifiant que llm.json ne sait pas
+ * stocker. La ligne et sa règle entrent et sortent ensemble — le "+ Line"
+ * ajoute des deux côtés, le × retire des deux : c'est tout l'invariant. */
+static gint
+rule_row_index(GtkWidget *box, GtkWidget *row)
+{
+    GtkWidget *child;
+    gint       i = 0;
+
+    if (box == NULL || row == NULL)
+        return -1;
+    for (child = gtk_widget_get_first_child(box); child != NULL;
+         child = gtk_widget_get_next_sibling(child), i++)
+        if (child == row)
+            return i;
+    return -1;
+}
+
 static void
 on_bash_rule_remove_clicked(GtkButton *btn, gpointer data)
 {
     BashRulesCtx *ctx = data;
     GtkWidget    *row = g_object_get_data(G_OBJECT(btn), "rule-row");
-    GtkWidget    *entry = g_object_get_data(G_OBJECT(btn), "rule-entry");
-    GtkDropDown  *drop = g_object_get_data(G_OBJECT(btn), "rule-verdict");
-    const char   *pat;
     GPtrArray    *rules;
     GPtrArray    *kept;
-    guint         sel;
+    gint          idx;
 
-    if (ctx == NULL || row == NULL || entry == NULL || drop == NULL)
+    /* Une ligne s'identifie par sa POSITION, pas par son contenu.
+     *
+     * Ni par le motif : l'entry est éditable à l'écran et n'est jamais
+     * repersévée, alors l'ancien code comparait le texte SAISI — après
+     * une retouche, le × enlevait le widget sans rien trouver au disque
+     * et la règle survivait, invisible. Ni par le verdict : c'est
+     * justement ce que le bouton cyclable fait bouger (voir rule_row_index). */
+    if (ctx == NULL || ctx->box == NULL || row == NULL)
         return;
-    pat = gtk_editable_get_text(GTK_EDITABLE(entry));
-    sel = gtk_drop_down_get_selected(drop);
-    if (pat == NULL || pat[0] == '\0')
-        return;
+    idx = rule_row_index(ctx->box, row);
     rules = llm_config_bash_rules(ctx->prof);
-    kept = g_ptr_array_new();
-    for (guint i = 0; i < rules->len; i++) {
-        LlmBashRule *r = g_ptr_array_index(rules, i);
-
-        /* Retire la ligne : même motif ET même verdict (une ligne
-         * parmi des doublons affichés ne tue pas ses jumelles). */
-        if (g_strcmp0(r->pattern, pat) == 0 &&
-            g_strcmp0(llm_bash_verdict_name(r->verdict),
-                      sel < G_N_ELEMENTS(BASH_VERDICT_LABELS)
-                      ? BASH_VERDICT_LABELS[sel] : "") == 0)
-            continue;
-        g_ptr_array_add(kept, r);
+    if (idx < 0 || (guint) idx >= rules->len) {
+        llm_config_bash_rules_free(rules);
+        return;
     }
+    kept = g_ptr_array_new();
+    for (guint i = 0; i < rules->len; i++)
+        if ((gint) i != idx)
+            g_ptr_array_add(kept, g_ptr_array_index(rules, i));
     llm_config_save_bash_rules(ctx->prof, kept);
     g_ptr_array_unref(kept);
     llm_config_bash_rules_free(rules);
+    /* La ligne part : on coupe son identifiant au champ AVANT le démontage.
+     * Sans ça, un focus qui lâcherait pendant que GTK détruit la rangée
+     * tomberait dans on_bash_rule_pattern_commit() et, le tableau ayant déjà
+     * perdu une règle, écrirait un motif sur la voisine qui hérite de son
+     * index. Le commit ne juge pas, il obéit à l'index qu'on lui donne. */
+    {
+        GtkWidget *ent = g_object_get_data(G_OBJECT(row), "rule-entry");
+
+        if (ent != NULL)
+            g_object_set_data(G_OBJECT(ent), "rule-row", NULL);
+    }
     gtk_box_remove(GTK_BOX(ctx->box), row);
     sfx_play_feedback();
+}
+
+/* Clic sur le verdict d'une ligne : un cran du cycle, écrit, ré-affiché —
+ * le geste exact des boutons de mode de la grille Tools plus haut, et le
+ * même rapport au disque : la relure fait foi, pas ce que l'écran montre.
+ * Les deux peuvent diverger (autre session, JSON retouché à la main) ; le
+ * clic les recolle au lieu d'empiler l'écart.
+ *
+ * Le dropdown, lui, n'avait AUCUN handler : changer le verdict d'une ligne
+ * déjà enregistrée ne sauvait rien (vérifié — aucun notify::selected dans
+ * tout main.c). Le réglage était affiché, pas stocké.
+ *
+ * "rule-row" absent ⇒ bouton d'attente (ligne "+ Line") : rien au disque à
+ * réécrire, il tourne pour son propre compte jusqu'à l'ajout. */
+static void
+on_bash_rule_verdict_clicked(GtkButton *btn, gpointer data)
+{
+    BashRulesCtx *ctx = data;
+    GtkWidget    *row = g_object_get_data(G_OBJECT(btn), "rule-row");
+    const char   *shown = g_object_get_data(G_OBJECT(btn), "verdict-name");
+    const char   *next;
+
+    if (ctx == NULL || shown == NULL)
+        return;
+    next = bash_verdict_next(shown);
+
+    if (row != NULL) {
+        gint      idx = rule_row_index(ctx->box, row);
+        GPtrArray *rules = llm_config_bash_rules(ctx->prof);
+        gboolean  ok = FALSE;
+
+        if (idx >= 0 && (guint) idx < rules->len) {
+            LlmBashRule *cur = g_ptr_array_index(rules, idx);
+            /* Repart du verdict relu, et du motif relu — pas de l'entry. */
+            const char  *want = bash_verdict_next(
+                                    llm_bash_verdict_name(cur->verdict));
+            LlmBashRule *fresh = llm_bash_rule_new(cur->pattern, want,
+                                                   cur->ordre);
+
+            if (fresh != NULL) {
+                next = llm_bash_verdict_name(fresh->verdict);
+                llm_bash_rule_free(cur);
+                g_ptr_array_index(rules, idx) = fresh;
+                llm_config_save_bash_rules(ctx->prof, rules);
+                ok = TRUE;
+            }
+        }
+        llm_config_bash_rules_free(rules);
+        if (!ok)
+            return;   /* rien n'est écrit : le bouton ne ment pas */
+    }
+    verdict_button_set(GTK_BUTTON(btn), next);
+    sfx_play_feedback();
+}
+
+/* Fabrique un bouton-verdict : plat, comme ceux de la grille Tools, largeur
+ * figée au plus long libellé du cycle pour qu'un clic ne fasse pas balloter
+ * la ligne. C'est le prix d'un cycle sans menu — payé une fois ici, pas à
+ * chaque redraw. `row` NULL ⇒ bouton d'attente, sans identifiant. */
+static GtkWidget *
+verdict_button_new(const char *name, BashRulesCtx *ctx, GtkWidget *row)
+{
+    GtkWidget *btn = gtk_button_new();
+    GtkWidget *lbl = gtk_label_new(NULL);
+
+    gtk_widget_add_css_class(btn, "flat");
+    gtk_label_set_width_chars(GTK_LABEL(lbl), bash_verdict_label_width());
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.5);
+    gtk_button_set_child(GTK_BUTTON(btn), lbl);
+    if (row != NULL)
+        g_object_set_data(G_OBJECT(btn), "rule-row", row);
+    verdict_button_set(GTK_BUTTON(btn), name);
+    g_signal_connect(btn, "clicked",
+                     G_CALLBACK(on_bash_rule_verdict_clicked), ctx);
+    return btn;
+}
+
+/* Le motif d'une règle est la CLÉ sous laquelle elle vit dans llm.json : deux
+ * lignes du même motif n'y coexistent pas, la seconde écrase la première au
+ * save. Mesure (llm_config_save_bash_rules, 3 règles dont 2 au motif
+ * "git *") : 2 règles au fichier pour 3 à l'écran — et la relecture ne rend
+ * plus le même compte, ce qui décalerait d'un cran toutes les lignes
+ * d'après par rapport à leur règle. D'où le refus, ici et à l'ajout.
+ * `skip` = index à ne pas considérer : se renommer soi-même n'est pas une
+ * collision. À l'ajout, `skip` = -1, il n'y a pas encore de ligne. */
+static gboolean
+bash_pattern_taken(GPtrArray *rules, const char *pattern, gint skip)
+{
+    for (guint i = 0; i < rules->len; i++) {
+        LlmBashRule *r = g_ptr_array_index(rules, i);
+
+        if ((gint) i != skip && g_strcmp0(r->pattern, pattern) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* Fin d'édition du motif : ici c'est la CLÉ du dict JSON qui change de nom,
+ * donc la règle se réécrit EN PLACE, à son index, sans rien resemeler.
+ *
+ * Le save part à la fin d'édition, jamais à la frappe. Un save complet ne
+ * coûte que 1,80 ms (mesure, 528 règles en mémoire) — ce n'est pas la
+ * raison. La raison est que chaque touche renommerait la clé ("g", "gi",
+ * "git "), et qu'une collision en cours de route effondrerait deux règles
+ * en une seule : mesure, 3 règles remises au save dont 2 du même motif, le
+ * fichier n'en porte plus que 2. Écran et disque séparés sous les doigts,
+ * et l'index de ligne ne désignerait plus la bonne règle.
+ *
+ * Deux refus, chacun payé d'une réversion du texte : un champ doit montrer
+ * ce qui est écrit, pas ce qui a été tapé. Motif vide (le constructeur le
+ * refuse déjà) ou motif déjà porté par une AUTRE ligne. */
+static void
+on_bash_rule_pattern_commit(GtkWidget *entry, gpointer data)
+{
+    BashRulesCtx *ctx = data;
+    GtkWidget    *row;
+    const char   *last;
+    const char   *why = NULL;
+    char         *typed;
+    gint          idx;
+    GPtrArray    *rules;
+    gboolean      wrote = FALSE;
+
+    if (ctx == NULL || ctx->box == NULL || entry == NULL)
+        return;
+    /* Le focus peut lâcher pendant que la fenêtre se détruit : le champ est
+     * en train de mourir, ses données avec. On ne touche plus rien. */
+    if (gtk_widget_in_destruction(entry))
+        return;
+    row = g_object_get_data(G_OBJECT(entry), "rule-row");
+    last = g_object_get_data(G_OBJECT(entry), "rule-pattern");
+    if (row == NULL || last == NULL)
+        return;                 /* la ligne d'ajout : rien à écrire */
+    typed = g_strdup(gtk_editable_get_text(GTK_EDITABLE(entry)));
+    if (g_strcmp0(typed, last) == 0) {
+        g_free(typed);
+        return;                 /* rien n'a changé : aucune écriture */
+    }
+    idx = rule_row_index(ctx->box, row);
+    rules = llm_config_bash_rules(ctx->prof);
+    if (idx >= 0 && (guint) idx < rules->len) {
+        LlmBashRule *cur = g_ptr_array_index(rules, idx);
+        LlmBashRule *fresh = NULL;
+
+        if (typed[0] == '\0')
+            why = "empty";
+        else {
+            /* La clé du dict ne souffre pas deux lignes du même motif : la
+             * seconde écrase la première au save, et le compte relu ne
+             * correspond plus à l'écran — c'est ce que garde
+             * bash_pattern_taken(), qui ignore notre propre index. */
+            if (bash_pattern_taken(rules, typed, idx))
+                why = "duplicate";
+        }
+        if (why == NULL) {
+            fresh = llm_bash_rule_new(typed,
+                                      llm_bash_verdict_name(cur->verdict),
+                                      cur->ordre);
+            if (fresh != NULL) {
+                llm_bash_rule_free(cur);
+                g_ptr_array_index(rules, idx) = fresh;
+                llm_config_save_bash_rules(ctx->prof, rules);
+                wrote = TRUE;
+            } else
+                why = "invalid";
+        }
+    } else
+        why = "desync";
+    llm_config_bash_rules_free(rules);
+
+    if (wrote) {
+        /* La copie est posée APRES le texte : set_data_full libère
+         * l’ancienne, que `last` pointe encore. */
+        gtk_editable_set_text(GTK_EDITABLE(entry), typed);
+        g_object_set_data_full(G_OBJECT(entry), "rule-pattern",
+                               g_strdup(typed), g_free);
+        sfx_play_feedback();
+    } else {
+        gtk_editable_set_text(GTK_EDITABLE(entry), last);
+        /* Ce qui suit le crochet est un JETON de diagnostic, jamais une
+         * phrase : empty | duplicate | invalid | desync. Hors gettext, comme
+         * les verdicts — il se grep, il ne se lit pas à voix haute. */
+        if (g_getenv("CDB_DEBUG") != NULL)
+            g_printerr(_("CDB: bash pattern refused (profile %s): "
+                         "\"%s\" -> \"%s\" [%s]\n"),
+                       llm_profile_name(ctx->prof), last, typed,
+                       why != NULL ? why : "?");
+    }
+    g_free(typed);
+}
+
+/* Le motif se commite aussi quand on quitte la ligne sans appuyer sur
+ * Entrée. Le notifier part également à l'ENTRÉE en focus — filtré ici — et
+ * peut partir pendant la destruction du champ — filtré là-haut, dans
+ * on_bash_rule_pattern_commit(). */
+static void
+on_bash_rule_pattern_focus_out(GtkWidget *entry, GParamSpec *pspec,
+                               gpointer data)
+{
+    (void) pspec;
+    if (gtk_widget_has_focus(entry))
+        return;
+    on_bash_rule_pattern_commit(entry, data);
 }
 
 static void
@@ -4488,7 +4802,7 @@ on_bash_rule_add_clicked(GtkButton *btn, gpointer data)
 {
     BashRulesCtx *ctx = data;
     const char   *pat;
-    guint         sel;
+    const char   *verdict;
     GPtrArray    *rules;
 
     if (ctx == NULL || ctx->entry == NULL || ctx->verdict == NULL)
@@ -4496,24 +4810,32 @@ on_bash_rule_add_clicked(GtkButton *btn, gpointer data)
     pat = gtk_editable_get_text(GTK_EDITABLE(ctx->entry));
     if (pat == NULL || pat[0] == '\0')
         return;
-    sel = gtk_drop_down_get_selected(ctx->verdict);
+    /* Le verdict en attente est porté par le bouton, en clé JSON : plus
+     * d'index à reconvertir contre une table. "mode" si le bouton n'a pas
+     * de nom — impossible par construction, mais jamais de règle sur NULL. */
+    verdict = g_object_get_data(G_OBJECT(ctx->verdict), "verdict-name");
+    if (verdict == NULL)
+        verdict = "mode";
     rules = llm_config_bash_rules(ctx->prof);
-    {
-        LlmBashRule *r = llm_bash_rule_new(
-            pat, sel < G_N_ELEMENTS(BASH_VERDICT_LABELS)
-                 ? BASH_VERDICT_LABELS[sel] : "mode",
-            rules->len);
+    /* Motif déjà porté par une autre ligne : la clé du dict collisionnerait
+     * et le save effondrerait les deux règles en une seule — mesure, 3
+     * règles remises au save, 2 au fichier. Dans ce cas rien n'est ajouté,
+     * rien n'est écrit, et le champ garde la frappe sous les yeux. */
+    if (!bash_pattern_taken(rules, pat, -1)) {
+        LlmBashRule *r = llm_bash_rule_new(pat, verdict, rules->len);
 
-        if (r != NULL)
+        if (r != NULL) {
             g_ptr_array_add(rules, r);
-    }
-    llm_config_save_bash_rules(ctx->prof, rules);
-    bash_rules_add_row(ctx->box, ctx->prof, pat,
-                       sel < G_N_ELEMENTS(BASH_VERDICT_LABELS)
-                       ? BASH_VERDICT_LABELS[sel] : "mode");
+            llm_config_save_bash_rules(ctx->prof, rules);
+            bash_rules_add_row(ctx->box, ctx->prof, pat, verdict);
+            gtk_editable_set_text(GTK_EDITABLE(ctx->entry), "");
+            sfx_play_feedback();
+        }
+    } else if (g_getenv("CDB_DEBUG") != NULL)
+        g_printerr(_("CDB: bash pattern refused (profile %s): "
+                     "\"%s\" -> \"%s\" [%s]\n"),
+                   llm_profile_name(ctx->prof), "", pat, "duplicate");
     llm_config_bash_rules_free(rules);
-    gtk_editable_set_text(GTK_EDITABLE(ctx->entry), "");
-    sfx_play_feedback();
     (void)btn;
 }
 
@@ -4523,40 +4845,46 @@ bash_rules_add_row(GtkWidget *box, LlmToolProfile prof G_GNUC_UNUSED,
 {
     GtkWidget   *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget   *entry = gtk_entry_new();
-    GtkWidget   *drop;
+    GtkWidget   *vbtn;
     GtkWidget   *rm;
-    GtkStringList *sl;
-    guint        sel = 6; /* "mode" par défaut */
     BashRulesCtx *ctx = g_object_get_data(G_OBJECT(box), "rules-ctx");
 
-    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_LABELS); i++)
-        if (g_strcmp0(BASH_VERDICT_LABELS[i], verdict_str) == 0) {
-            sel = i;
-            break;
-        }
+    /* verdict_str vient soit du disque (llm_bash_verdict_name), soit du
+     * bouton d'ajout : dans les deux cas une clé JSON, jamais un index.
+     * Il ne reste qu'un mot à poser sur le bouton, et c'est le mot écrit
+     * dans llm.json — plus de table à faire correspondre, donc plus de
+     * décalage possible. La recherche linéaire de l'ancienne table est
+     * tombée avec le dropdown ; celle du cycle ne sert qu'au clic. */
     gtk_editable_set_text(GTK_EDITABLE(entry),
                           pattern != NULL ? pattern : "");
     gtk_widget_set_hexpand(entry, TRUE);
     gtk_widget_set_margin_start(row, 24);
-    sl = gtk_string_list_new(NULL);
-    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_LABELS); i++)
-        gtk_string_list_append(sl, BASH_VERDICT_LABELS[i]);
-    drop = gtk_drop_down_new(G_LIST_MODEL(sl), NULL);
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(drop), sel);
-    /* PAS d'unref : le GtkDropDown garde une ref sur son modèle mais
-     * la libère AVANT sa propre fin de dispose quand la ligne est
-     * retirée — unref immédiat = use-after-free au retrait (SEGV
-     * g_list_model_get_n_items, repro /tmp/rowvar.c). Le modèle vit
-     * et meurt avec sa ligne : fuite nulle, crash nul. */
+    /* Le texte du champ n'est pas une saisie libre : c'est la clé sous
+     * laquelle sa règle est écrite. La copie de ce que dit le disque sert à
+     * ne rien écrire quand rien n'a changé, et à faire reverdir le champ si
+     * le motif est refusé. Deux façons de finir l'édition, un seul geste. */
+    g_object_set_data_full(G_OBJECT(entry), "rule-pattern",
+                           g_strdup(pattern != NULL ? pattern : ""), g_free);
+    g_object_set_data(G_OBJECT(entry), "rule-row", row);
+    g_object_set_data(G_OBJECT(row), "rule-entry", entry);
+    g_signal_connect(entry, "activate",
+                     G_CALLBACK(on_bash_rule_pattern_commit), ctx);
+    g_signal_connect(entry, "notify::has-focus",
+                     G_CALLBACK(on_bash_rule_pattern_focus_out), ctx);
+
+    /* Verdict : un bouton plat qui tourne d'un cran par clic, le geste
+     * des modes dans la grille Tools plus haut. `row` est son
+     * identifiant : c'est par la position de la ligne que le clic
+     * retrouvera LA règle à réécrire (voir rule_row_index). */
+    vbtn = verdict_button_new(verdict_str, ctx, row);
     rm = gtk_button_new_with_label("×");
     gtk_widget_add_css_class(rm, "flat");
     g_object_set_data(G_OBJECT(rm), "rule-row", row);
-    g_object_set_data(G_OBJECT(rm), "rule-entry", entry);
-    g_object_set_data(G_OBJECT(rm), "rule-verdict", drop);
+    /* Le × ne porte que sa ligne : l'identifiant n'est plus le contenu. */
     g_signal_connect(rm, "clicked",
                      G_CALLBACK(on_bash_rule_remove_clicked), ctx);
     gtk_box_append(GTK_BOX(row), entry);
-    gtk_box_append(GTK_BOX(row), drop);
+    gtk_box_append(GTK_BOX(row), vbtn);
     gtk_box_append(GTK_BOX(row), rm);
     gtk_box_append(GTK_BOX(box), row);
 }
@@ -4572,8 +4900,10 @@ build_bash_rules_section(LlmToolProfile prof)
     GtkWidget    *add_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget    *add_btn = gtk_button_new_with_label(_("+ Line"));
     BashRulesCtx *ctx = g_new0(BashRulesCtx, 1);
-    GtkStringList *sl;
     GPtrArray    *rules;
+
+    /* Le cycle doit se lire côté moteur : voir bash_verdict_cycle_is_valid. */
+    g_warn_if_fail(bash_verdict_cycle_is_valid());
 
     /* Tête accordéon : même motif que build_settings_section
      * (bouton plat + flèche, revealer fermé par défaut). */
@@ -4610,16 +4940,16 @@ build_bash_rules_section(LlmToolProfile prof)
     gtk_widget_set_margin_start(add_row, 24);
     gtk_entry_set_placeholder_text(GTK_ENTRY(ctx->entry),
                                    _("pattern, e.g. git log*"));
-    sl = gtk_string_list_new(NULL);
-    for (guint i = 0; i < G_N_ELEMENTS(BASH_VERDICT_LABELS); i++)
-        gtk_string_list_append(sl, BASH_VERDICT_LABELS[i]);
-    ctx->verdict = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(sl), NULL));
-    gtk_drop_down_set_selected(ctx->verdict, 1); /* "ask" par défaut */
-    /* PAS d'unref (même motif que bash_rules_add_row ci-dessus). */
+    /* Verdict en attente : le geste des boutons de mode de la grille Tools
+     * plus haut — un clic = un cran du cycle, "ask" par défaut comme avant.
+     * Pas de "rule-row" sur ce bouton : sa ligne n'existe pas encore au
+     * disque, il tourne à vide jusqu'au "+ Line". Le GtkDropDown est tombé,
+     * son modèle avec — donc plus de use-after-free (repro /tmp/rowvar.c). */
+    ctx->verdict = verdict_button_new("ask", ctx, NULL);
     g_signal_connect(add_btn, "clicked",
                      G_CALLBACK(on_bash_rule_add_clicked), ctx);
     gtk_box_append(GTK_BOX(add_row), ctx->entry);
-    gtk_box_append(GTK_BOX(add_row), GTK_WIDGET(ctx->verdict));
+    gtk_box_append(GTK_BOX(add_row), ctx->verdict);
     gtk_box_append(GTK_BOX(add_row), add_btn);
     /* Le contenu (lignes + ajout) vit dans un revealer fermé. */
     {
