@@ -4,7 +4,7 @@ CFLAGS  := -std=c23 -Wall -Wextra -O2 -g
 # plus bas — modifier un .h recompile les .o dépendants (fini les stale
 # objects silencieux après une édition d'en-tête).
 CFLAGS  += -MMD -MP
-PKGS    := gtk4 gtksourceview-5 libadwaita-1 json-glib-1.0 vte-2.91-gtk4 libsoup-3.0
+PKGS    := gtk4 gtksourceview-5 libadwaita-1 json-glib-1.0 vte-2.91-gtk4 libsoup-3.0 gio-unix-2.0
 CFLAGS  += $(shell pkg-config --cflags $(PKGS))
 LIBS    := $(shell pkg-config --libs $(PKGS))
 

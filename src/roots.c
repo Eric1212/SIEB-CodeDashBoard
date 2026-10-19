@@ -696,3 +696,24 @@ roots_current_project(GListStore *roots, GHashTable *multi_paths)
     }
     return inside; /* NULL si rien */
 }
+
+
+/* Chemin ABSOLU du projet contenant path (le projet lui-meme si path en
+ * est la racine). NULL si path hors tout projet ou roots NULL. Contrairement
+ * a roots_project_path (chemin court d'affichage), c'est la valeur qu'on
+ * donne a un executable : ou travailler, pas comment l'afficher. */
+char *
+roots_project_abs(GListStore *roots, const char *path)
+{
+    RootEntry *pr;
+    char      *out;
+
+    if (roots == NULL || path == NULL)
+        return NULL;
+    pr = find_project_for_path(roots, path);
+    if (pr == NULL)
+        return NULL;
+    out = g_strdup(pr->path);
+    g_object_unref(pr);
+    return out;
+}

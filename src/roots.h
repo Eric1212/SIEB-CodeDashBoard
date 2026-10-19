@@ -90,6 +90,11 @@ gboolean roots_delete_recursive(const char *path);
  * Retourne un chemin g_strdup (à libérer) ou NULL si rien de résoluble. */
 char *roots_current_project(GListStore *roots, GHashTable *multi_paths);
 
+/* Chemin ABSOLU du projet contenant path — la valeur qu'on donne a un
+ * executable (ou travailler), pas celle qu'on affiche. NULL si hors
+ * tout projet. g_strdup a liberer. */
+char *roots_project_abs(GListStore *roots, const char *path);
+
 /* Chemin court « basename-du-projet/relatif » d'un chemin absolu, pour le nom
  * de la fenêtre. Projet contenant path, sinon path tel quel ; NULL si path
  * NULL. Renvoie une chaîne g_strdup (à libérer). */

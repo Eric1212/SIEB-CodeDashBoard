@@ -500,6 +500,17 @@ update_modified_indicator(App *app)
         if (app->header_file != NULL)
             gtk_label_set_text(app->header_file, "");
     }
+    /* Dossier de travail du CLI OpenCode : le projet du fichier courant.
+     * Meme declencheur que la barre de titre, meme source (roots) : ce que
+     * le titre montre est l'endroit ou le CLI travaillera. Mesure du
+     * 19 oct : sans cela, un CDB lance depuis le bureau cherchait les
+     * depot dans /home/eric, le cwd du processus. */
+    if (app->llm_core != NULL) {
+        char *proj = roots_project_abs(app->roots, app->current_file);
+
+        g_free(app->llm_core->workdir_hint);
+        app->llm_core->workdir_hint = proj;   /* NULL si hors projet */
+    }
     window_title_sync(app);   /* nom de fenêtre : composition à part, plus haut */
 }
 
@@ -3786,7 +3797,7 @@ build_settings_section(const SettingsSection *sec)
      * « Est un provider » se lit au catalogue (LLM_PROVIDERS), pas à une
      * liste de noms : ajouter un provider ne fait plus toucher ce fichier.
      * Le test porte sur sec->id, jamais le titre, qui est traduisible. */
-    if (llm_provider_default_url(sec->id) != NULL)
+    if (llm_provider_is_known(sec->id))
         body = build_provider_form(sec->id);
     else if (g_strcmp0(sec->id, "Retry on error") == 0)
         body = build_harness_form();
@@ -3859,14 +3870,29 @@ on_provider_save_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
     GtkWidget  *w = GTK_WIDGET(btn);
     const char *provider = g_object_get_data(G_OBJECT(w), "provider");
     GtkWidget  *key_entry = g_object_get_data(G_OBJECT(w), "key-entry");
+    GtkWidget  *bin_entry = g_object_get_data(G_OBJECT(w), "bin-entry");
     GtkWidget  *status = g_object_get_data(G_OBJECT(w), "status");
-    const char *key = gtk_editable_get_text(GTK_EDITABLE(key_entry));
+    const char *key = (bin_entry != NULL)
+        ? gtk_editable_get_text(GTK_EDITABLE(bin_entry))
+        : gtk_editable_get_text(GTK_EDITABLE(key_entry));
     GtkWidget  *top = gtk_widget_get_ancestor(w, GTK_TYPE_WINDOW);
     App        *app = (top != NULL)
                           ? g_object_get_data(G_OBJECT(top), "cdb-app")
                           : NULL;
 
     llm_config_save_provider(provider, key);
+
+    /* OpenCode-CLI : la policy CLI part avec le bouton Save — un seul
+     * geste d'enregistrement pour tout le formulaire. */
+    {
+        GtkWidget *agent_e = g_object_get_data(G_OBJECT(w), "agent-entry");
+        GtkWidget *auto_s  = g_object_get_data(G_OBJECT(w), "auto-switch");
+
+        if (agent_e != NULL && auto_s != NULL)
+            llm_config_save_cli(provider,
+                gtk_editable_get_text(GTK_EDITABLE(agent_e)),
+                gtk_switch_get_active(GTK_SWITCH(auto_s)));
+    }
 
     /* Le fichier est écrit : il reste à le REALISER. llm.json ne connaît
      * aucun chemin d'invalidation, donc sans ce qui suit la clé neuve ne
@@ -5777,6 +5803,49 @@ build_initprompt_editor(void)
     return box;
 }
 
+static void on_bin_browse_response(GObject *source, GAsyncResult *res,
+                                   gpointer data);
+
+/* Handler du bouton « … » du champ Binary : ouvre un file chooser. */
+static void
+on_bin_browse_clicked(GtkButton *btn, gpointer G_GNUC_UNUSED data)
+{
+    GtkWidget *entry = g_object_get_data(G_OBJECT(btn), "entry");
+    GtkWidget *win = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_WINDOW);
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+
+    gtk_file_dialog_set_title(dialog, _("Select opencode binary"));
+    gtk_file_dialog_set_initial_folder(dialog,
+        g_file_new_for_path(g_get_home_dir()));
+    gtk_file_dialog_open(dialog, GTK_WINDOW(win), NULL,
+        on_bin_browse_response, entry);
+}
+
+/* Callback du file chooser : remplit l'entry avec le chemin choisi. */
+static void
+on_bin_browse_response(GObject *source, GAsyncResult *res, gpointer data)
+{
+    GtkWidget *entry = data;
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
+    GError *error = NULL;
+    GFile *file = gtk_file_dialog_open_finish(dialog, res, &error);
+
+    if (error != NULL) {
+        g_warning("CDB bin browse: %s", error->message);
+        g_error_free(error);
+        return;
+    }
+    if (file != NULL) {
+        char *path = g_file_get_path(file);
+
+        if (path != NULL) {
+            gtk_editable_set_text(GTK_EDITABLE(entry), path);
+            g_free(path);
+        }
+        g_object_unref(file);
+    }
+}
+
 static GtkWidget *
 build_provider_form(const char *provider_name)
 {
@@ -5785,17 +5854,59 @@ build_provider_form(const char *provider_name)
     GtkWidget *key_entry = gtk_entry_new();
     GtkWidget *model_lbl = gtk_label_new(_("Allowed models:"));
     GtkWidget *model_entry = gtk_entry_new();
+    GtkWidget *bin_lbl = NULL, *bin_entry = NULL;
+    GtkWidget *agent_lbl = NULL, *agent_entry = NULL;
+    GtkWidget *auto_lbl = NULL, *auto_sw = NULL;
     GtkWidget *save_btn = gtk_button_new_with_label(_("Save"));
     GtkWidget *status = gtk_label_new("");
+
+    GtkWidget *bin_btn = NULL;
+
+    if (g_strcmp0(provider_name, "OpenCode-CLI") == 0) {
+        bin_lbl = gtk_label_new(_("Binary:"));
+        bin_entry = gtk_entry_new();
+        gtk_entry_set_placeholder_text(GTK_ENTRY(bin_entry), "opencode");
+        bin_btn = gtk_button_new_with_label("…");
+        gtk_widget_set_tooltip_text(bin_btn, _("Browse…"));
+        g_object_set_data(G_OBJECT(bin_btn), "entry", bin_entry);
+        g_signal_connect(bin_btn, "clicked",
+                         G_CALLBACK(on_bin_browse_clicked), NULL);
+        /* Policy des tools opencode : le CLI a SA boucle d'approbation,
+         * inexistante en mode run non interactif (mesure : « date »
+         * refusee par permissions). --agent choisit un agent declare
+         * dans la config opencode, --auto approuve ce qui n'est pas
+         * explicitement refuse. Les deux sont ici, explicites, par
+         * defaut fermes — CDB ne cede aucun droit de son propre chef. */
+        agent_lbl = gtk_label_new(_("opencode agent:"));
+        agent_entry = gtk_entry_new();
+        gtk_entry_set_placeholder_text(GTK_ENTRY(agent_entry),
+                                       _("(default)"));
+        auto_lbl = gtk_label_new(_("Auto-approve tools"));
+        auto_sw = gtk_switch_new();
+        gtk_widget_set_halign(agent_lbl, GTK_ALIGN_START);
+        gtk_widget_set_halign(auto_lbl, GTK_ALIGN_START);
+        gtk_widget_set_halign(auto_sw, GTK_ALIGN_START);
+        gtk_widget_set_hexpand(agent_entry, TRUE);
+        gtk_widget_set_tooltip_text(auto_sw, _(
+            "Let opencode run its own tools (--auto). "
+            "CDB's approval bar does NOT apply to them."));
+    }
 
     gtk_widget_set_halign(key_lbl, GTK_ALIGN_START);
     gtk_widget_set_halign(model_lbl, GTK_ALIGN_START);
     gtk_widget_set_hexpand(key_entry, TRUE);
     gtk_widget_set_hexpand(model_entry, TRUE);
+
     /* La clé est un secret : affichage masqué. OpenCode Zen et KiloGateway
-     * marchent SANS clé — liste à classer au catalogue si un 3e arrive. */
+     * marchent SANS clé — liste à classer au catalogue si un 3e arrive.
+     * OpenCode-CLI n'a PAS de clé (spawn local), son champ est masqué. */
     gtk_entry_set_visibility(GTK_ENTRY(key_entry), FALSE);
-    if (g_strcmp0(provider_name, "OpenCode") == 0 ||
+    if (g_strcmp0(provider_name, "OpenCode-CLI") == 0) {
+        gtk_widget_set_visible(key_lbl, FALSE);
+        gtk_widget_set_visible(key_entry, FALSE);
+        gtk_entry_set_placeholder_text(GTK_ENTRY(model_entry),
+                                       _("nemotron-3.5-lightning-free, …"));
+    } else if (g_strcmp0(provider_name, "OpenCode") == 0 ||
         g_strcmp0(provider_name, "KiloGateway") == 0) {
         gtk_entry_set_placeholder_text(GTK_ENTRY(key_entry),
                                        _("(optional)"));
@@ -5819,8 +5930,19 @@ build_provider_form(const char *provider_name)
         char *saved_key = llm_config_get_api_key(provider_name);
 
         if (saved_key != NULL && saved_key[0] != '\0')
-            gtk_editable_set_text(GTK_EDITABLE(key_entry), saved_key);
+            /* OpenCode-CLI : la « clé » est le chemin du binaire. */
+            gtk_editable_set_text(GTK_EDITABLE(bin_entry != NULL ? bin_entry : key_entry), saved_key);
         g_free(saved_key);
+    /* Ouverture : l'etat du fichier prime sur le widget. */
+    if (agent_entry != NULL) {
+        char *agent = llm_config_get_cli_agent(provider_name);
+
+        if (agent != NULL && agent[0] != '\0')
+            gtk_editable_set_text(GTK_EDITABLE(agent_entry), agent);
+        g_free(agent);
+    }
+    if (auto_sw != NULL)
+        gtk_switch_set_active(GTK_SWITCH(auto_sw), llm_config_get_cli_auto(provider_name));
     }
     /* Préremplit le filtre (indépendant du provider actif). */
     {
@@ -5847,6 +5969,12 @@ build_provider_form(const char *provider_name)
     g_object_set_data_full(G_OBJECT(save_btn), "provider",
                            g_strdup(provider_name), g_free);
     g_object_set_data(G_OBJECT(save_btn), "key-entry", key_entry);
+    if (bin_entry != NULL)
+        g_object_set_data(G_OBJECT(save_btn), "bin-entry", bin_entry);
+    if (agent_entry != NULL)
+        g_object_set_data(G_OBJECT(save_btn), "agent-entry", agent_entry);
+    if (auto_sw != NULL)
+        g_object_set_data(G_OBJECT(save_btn), "auto-switch", auto_sw);
     g_object_set_data(G_OBJECT(save_btn), "status", status);
     g_signal_connect(save_btn, "clicked",
                      G_CALLBACK(on_provider_save_clicked), NULL);
@@ -5854,8 +5982,11 @@ build_provider_form(const char *provider_name)
     gtk_widget_add_css_class(status, "dim-label");
 
     /* Suggestions de modèles depuis /models du provider : champ vide →
-     * liste complète (focus ou icône), le popup reste disponible ensuite. */
-    if (llm_provider_default_url(provider_name) != NULL)
+     * liste complète (focus ou icône), le popup reste disponible ensuite.
+     * Un provider sans endpoint propre (OpenCode-CLI) declare models_from
+     * au catalogue : la LISTE est empruntée, mais le FILTRE reste au vrai
+     * provider — s->provider n'est jamais le fournisseur preté. */
+    if (llm_provider_models_url(provider_name) != NULL)
         model_suggest_attach(model_entry, provider_name, grid);
 
     gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
@@ -5863,12 +5994,28 @@ build_provider_form(const char *provider_name)
     gtk_widget_set_margin_start(grid, 24);
     gtk_widget_set_margin_top(grid, 6);
     gtk_widget_set_margin_bottom(grid, 6);
-    gtk_grid_attach(GTK_GRID(grid), key_lbl, 0, 0, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), key_entry, 1, 0, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), model_lbl, 0, 1, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), model_entry, 1, 1, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), save_btn, 1, 2, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), status, 1, 3, 1, 1);
+    /* OpenCode-CLI : binaire ligne 0, policy CLI (agent + auto) lignes
+     * 1-2, puis modele/save/status. Autres providers : cle, modele,
+     * save, status — l'ordre d'avant, sans y toucher. */
+    {
+        int r = 0;
+        if (bin_lbl != NULL) {
+            gtk_grid_attach(GTK_GRID(grid), bin_lbl, 0, r, 1, 1);
+            gtk_grid_attach(GTK_GRID(grid), bin_entry, 1, r, 1, 1);
+            gtk_grid_attach(GTK_GRID(grid), bin_btn, 2, r++, 1, 1);
+            gtk_grid_attach(GTK_GRID(grid), agent_lbl, 0, r, 1, 1);
+            gtk_grid_attach(GTK_GRID(grid), agent_entry, 1, r++, 1, 1);
+            gtk_grid_attach(GTK_GRID(grid), auto_lbl, 0, r, 1, 1);
+            gtk_grid_attach(GTK_GRID(grid), auto_sw, 1, r++, 1, 1);
+        } else {
+            gtk_grid_attach(GTK_GRID(grid), key_lbl, 0, r, 1, 1);
+            gtk_grid_attach(GTK_GRID(grid), key_entry, 1, r++, 1, 1);
+        }
+        gtk_grid_attach(GTK_GRID(grid), model_lbl, 0, r, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), model_entry, 1, r++, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), save_btn, 1, r++, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), status, 1, r, 1, 1);
+    }
     return grid;
 }
 
@@ -5880,6 +6027,7 @@ build_settings(App *app G_GNUC_UNUSED)
         { "HyperCharm", "HyperCharm", NULL, NULL, 0 },   /* formulaire provider */
         { "KiloGateway", "KiloGateway", NULL, NULL, 0 }, /* formulaire provider */
         { "OpenCode",   "OpenCode",   NULL, NULL, 0 },   /* formulaire provider */
+        { "OpenCode-CLI", "OpenCode-CLI", NULL, NULL, 0 }, /* formulaire provider */
         { "OpenRouter", "OpenRouter", NULL, NULL, 0 },   /* formulaire provider */
     };
     static const SettingsSection harness_subs[] = {

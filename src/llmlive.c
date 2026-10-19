@@ -107,6 +107,15 @@ llm_live_save(LlmCore *c)
 
     obj = json_object_new();
     json_object_set_array_member(obj, "messages", arr);
+    /* Session OpenCode-CLI : survit au redemarrage — la conversation
+     * continue ou elle etait, au lieu d'ouvrir une session neuve du CLI
+     * pendant que le fil, lui, se souvient de l'ancienne. */
+    if (c->oc_session != NULL)
+        json_object_set_string_member(obj, "opencode_session",
+                                      c->oc_session);
+    if (c->oc_session_dir != NULL)
+        json_object_set_string_member(obj, "opencode_session_dir",
+                                      c->oc_session_dir);
     root = json_node_new(JSON_NODE_OBJECT);
     json_node_take_object(root, obj);
     data = json_to_string(root, TRUE);
@@ -241,6 +250,18 @@ llm_live_load(LlmCore *c)
         return;
     }
     obj = json_node_get_object(root);
+    /* Session OpenCode-CLI retrouvee : le prochain run du CLI reprendra
+     * la conversation d'avant le redemarrage (--session <id>). */
+    if (c->oc_session == NULL &&
+        json_object_has_member(obj, "opencode_session"))
+        c->oc_session =
+            g_strdup(json_object_get_string_member(obj,
+                                                   "opencode_session"));
+    if (c->oc_session_dir == NULL &&
+        json_object_has_member(obj, "opencode_session_dir"))
+        c->oc_session_dir =
+            g_strdup(json_object_get_string_member(obj,
+                                                   "opencode_session_dir"));
     if (!json_object_has_member(obj, "messages")) {
         json_node_unref(root);
         return;

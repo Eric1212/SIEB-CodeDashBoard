@@ -43,6 +43,13 @@ typedef struct {
     char *model;           /* modèle actif ("stealth/ox-alpha") */
     char *api_url;         /* base API du provider actif */
     char *api_key;         /* clé du provider actif */
+    /* OpenCode-CLI seulement : agent a lancer (--agent, NULL = defaut
+     * d'opencode) et auto-approbation de SES tools (--auto). La policy
+     * d'approbation de CDB (barre ASK/ALLOW) ne s'applique pas au CLI :
+     * c'est opencode qui execute ses propres tools chez nous — le choix
+     * est explicite, par defaut ferme (cli_auto FALSE). */
+    char     *cli_agent;
+    gboolean  cli_auto;
 } LlmConfig;
 
 /* Charge ~/.config/cdb/<NNN>/llm.json ; NULL si absent/invalide
@@ -87,6 +94,8 @@ void llm_models_free(LlmModelInfo *models);
 
 /* URL de base d'un provider connu ; NULL si inconnu. */
 const char *llm_provider_default_url(const char *provider);
+const char *llm_provider_models_url(const char *provider);
+gboolean llm_provider_is_known(const char *provider);
 
 /* ------------------------------------------------ */
 /* Solde du provider (GET {api_url}/credits)         */
@@ -125,6 +134,14 @@ gboolean llm_credits_fetch(const char *provider, LlmCreditsCallback cb,
 /* Clé API sauvegardée d'un provider (indépendant du provider actif).
  * get : chaîne g_strdup à libérer ; NULL si absente. */
 char *llm_config_get_api_key(const char *provider);
+
+/* Policy OpenCode-CLI : agent passe au CLI (--agent) et auto-approbation
+ * de SES tools (--auto). get : NULL/FALSE = defaut ferme. save : ecrit
+ * les deux membres sous le provider, agent vide = membre retire. */
+char *llm_config_get_cli_agent(const char *provider);
+gboolean llm_config_get_cli_auto(const char *provider);
+void llm_config_save_cli(const char *provider, const char *agent,
+                         gboolean au);
 
 /* Filtre de modèles autorisés du provider (chaîne brute : liste séparée
  * par virgules d'ids exacts). NULL/"" = tous les modèles.
@@ -450,6 +467,25 @@ typedef struct {
     gboolean      loop_alive;
     gboolean      in_reasoning; /* delta courant = thinking */
     GString      *reply;     /* réponse en cours d'accumulation */
+    /* Session du CLI OpenCode (provider « OpenCode-CLI ») : id capturee
+     * dans le JSON stdout du premier run, rejouee par --session ensuite.
+     * CDB en est SEUL proprietaire — jamais --continue, qui reprend la
+     * derniere session du repertoire, y compris un opencode TUI live de
+     * l'utilisateur (mesure du 18 oct : conversation detournee, reponses
+     * enchevetrees). NULL = aucune session creee. */
+    /* LOI DU PROVIDER CLI (19 oct, decision d'Eric Boucher) : aucun demon,
+     * jamais. Le run part en --standalone, donc le serveur qui tient cette
+     * session est NOTRE ENFANT DIRECT : il meurt avec le cycle, la RAM est
+     * rendue des que busy passe a pret. Sans ce drapeau, opencode run n'est
+     * qu'un client branche sur un service partage (serve --service) que
+     * systemd --user nous survit — et qui, lui, n'habite PAS le workdir
+     * qu'on croit lui donner (voir opencode_cli_spawn, mesures). */
+    char         *oc_session;
+    /* Projet auquel cette session appartient (opencode range ses sessions
+     * par repertoire). Le spawn compare : dossier courant different de
+     * oc_session_dir => session oubliee, une neuve nait dans le nouveau
+     * projet. NULL = pas encore de session. */
+    char         *oc_session_dir;
     GArray       *history;   /* LlmMsg[] : fil de conversation envoyé */
     GPtrArray    *views;     /* vues attachées (pointeurs empruntés) */
     /* Ressources de session (empruntées à App, vivent plus longtemps) */
@@ -481,6 +517,11 @@ typedef struct {
     LlmConfig    *cfg;
     GListStore   *roots;
     GHashTable   *multi_paths;
+    /* Dossier de travail suggere au CLI OpenCode : le projet du fichier
+     * courant, tenu a jour par App (la barre de titre connait deja ce
+     * projet — meme source, meme verite). Possede, libere a
+     * llm_core_free. NULL = rien d'ouvert dans un projet. */
+    char         *workdir_hint;
     /* Décision en attente (NULL si aucune) */
     CdbDecision  *decision;
 
@@ -727,6 +768,28 @@ struct LlmRequest {
     char         *body;         /* corps JSON de la requête */
     char         *auth;         /* header Authorization ou NULL */
     int           attempt;      /* numéro d'essai courant (0 = premier) */
+    /* Provider OpenCode-CLI : process one-shot au lieu de libsoup.
+     * Tous NULL/0 pour les providers HTTP. */
+    GPid          pid;          /* process spawné, 0 si HTTP */
+    guint         watch_id;     /* g_child_watch sur le process */
+    guint         timeout_id;   /* g_timeout 120 s sans sortie */
+    char         *prompt;       /* texte user (au lieu du body JSON) */
+    /* Dédup des evenements « text » du CLI : chaque part (id stable) est
+     * reemise en snapshot complet pendant le streaming. L'historique des
+     * parts dans l'ordre + la table id->texte permettent de reconstruire
+     * la reponse a chaque snapshot — le dernier gagne, plus de doublons. */
+    GHashTable   *cli_parts;    /* id (g_free) -> texte (g_free) */
+    GPtrArray    *cli_part_ids; /* ids dans l'ordre d'apparition */
+    /* Discipline de finalisation CLI : la requete ne meurt que quand
+     * la derniere lecture async DU PIPE est rendue ET que le process est
+     * mort. L'un sans l'autre laisserait soit des lignes dans le pipe
+     * (reponse amputee — l'arret sans reponse du 19 oct), soit une
+     * liberation sous une lecture en vol (use-after-free). */
+    gboolean cli_read_pending;  /* une read_async attend son callback */
+    gboolean cli_proc_done;     /* watch declenche, ou kill administratif */
+    gboolean cli_finishing;     /* timeout passe : plus rien ne parse */
+    gboolean cli_ui_done;       /* l'historique a ete pousse, une fois */
+    gboolean cli_freed;         /* garde du free unique */
 };
 
 /* Détache la requête en vol d'une tuile sur le point de mourir :

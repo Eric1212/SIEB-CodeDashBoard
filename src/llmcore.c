@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <signal.h>
 #include "session.h"
 #include "mdview.h"
 #include "i18n.h"
@@ -33,6 +34,10 @@
 #include <glib/guuid.h>
 #include <string.h>
 #include <gdk/gdkkeysyms.h>
+#include <gio/gunixinputstream.h>
+
+/* Forward declarations pour le provider OpenCode-CLI. */
+static gboolean opencode_cli_timeout(gpointer data);
 
 /* Attribution applicative (convention OpenRouter, doc app-attribution) :
  * headers HTTP poses sur CHAQUE requete chat/completions, tous providers
@@ -157,11 +162,13 @@ llm_config_merge_members(JsonObject *members)
 static const struct {
     const char *name;
     const char *url;
+    const char *models_from; /* NULL = lui-meme ; fournisseur dont on emprunte /models */
 } LLM_PROVIDERS[] = {
-    { "OpenRouter",  "https://openrouter.ai/api/v1"    },
-    { "OpenCode",    "https://opencode.ai/zen/v1"      },
-    { "HyperCharm",  "https://hyper.charm.land/v1"     },
-    { "KiloGateway", "https://api.kilo.ai/api/gateway" },
+    { "OpenRouter",   "https://openrouter.ai/api/v1",    NULL },
+    { "OpenCode",     "https://opencode.ai/zen/v1",      NULL },
+    { "OpenCode-CLI", NULL,                              "OpenCode" },
+    { "HyperCharm",   "https://hyper.charm.land/v1",     NULL },
+    { "KiloGateway",  "https://api.kilo.ai/api/gateway", NULL },
 };
 
 /* URL de base d'un provider connu ; NULL si inconnu. */
@@ -176,6 +183,41 @@ llm_provider_default_url(const char *provider)
         if (g_strcmp0(provider, LLM_PROVIDERS[i].name) == 0)
             return LLM_PROVIDERS[i].url;
     return NULL;
+}
+
+/* URL du catalogue /models d'un provider. La plupart repondent chez eux ;
+ * un provider sans endpoint propre (OpenCode-CLI) declare un models_from
+ * et puise la liste du fournisseur nomme. NULL = pas de catalogue. */
+const char *
+llm_provider_models_url(const char *provider)
+{
+    gsize i;
+
+    if (provider == NULL)
+        return NULL;
+    for (i = 0; i < G_N_ELEMENTS(LLM_PROVIDERS); i++) {
+        if (g_strcmp0(provider, LLM_PROVIDERS[i].name) != 0)
+            continue;
+        if (LLM_PROVIDERS[i].url != NULL)
+            return LLM_PROVIDERS[i].url;
+        return llm_provider_default_url(LLM_PROVIDERS[i].models_from);
+    }
+    return NULL;
+}
+
+/* « Est un provider » se lit au catalogue, pas a la presence d'une URL :
+ * OpenCode-CLI est un provider sans endpoint (il spawn un binaire). */
+gboolean
+llm_provider_is_known(const char *provider)
+{
+    gsize i;
+
+    if (provider == NULL)
+        return FALSE;
+    for (i = 0; i < G_N_ELEMENTS(LLM_PROVIDERS); i++)
+        if (g_strcmp0(provider, LLM_PROVIDERS[i].name) == 0)
+            return TRUE;
+    return FALSE;
 }
 
 /* ------------------------------------------------ */
@@ -554,7 +596,7 @@ void
 llm_models_fetch(const char *provider, LlmModelsCallback cb,
                  gpointer user_data)
 {
-    const char   *base = llm_provider_default_url(provider);
+    const char   *base = llm_provider_models_url(provider);
     ModelsFetch  *f;
     SoupMessage  *msg;
     char         *url;
@@ -648,6 +690,111 @@ llm_config_get_api_key(const char *provider)
     if (root_node != NULL)
         json_node_unref(root_node);
     return key;
+}
+
+/* ------------------------------------------------ */
+/* Policy OpenCode-CLI (cli_agent / cli_auto)         */
+/*                                                    */
+/* Ces deux membres ne vivent que sous le provider    */
+/* « OpenCode-CLI » dans llm.json. Ils pilotent les   */
+/* flags du spawn (--agent X, --auto) — la SEULE      */
+/* façon de laisser opencode exécuter ses propres     */
+/* tools : la boucle d'approbation de CDB (cdb_bash,  */
+/* barre ASK/ALLOW) n'existe pas cote CLI, le CLI     */
+/* n'execute que ses tools a lui, chez nous.          */
+/* Defaut ferme : agent NULL, auto FALSE = chat seul, */
+/* opencode refusant ses propres permissions.         */
+/* ------------------------------------------------ */
+
+char *
+llm_config_get_cli_agent(const char *provider)
+{
+    JsonObject *prov;
+    JsonNode   *root_node = NULL;
+    char       *agent;
+
+    prov = llm_config_provider_object(provider, &root_node);
+    agent = (prov != NULL && json_object_has_member(prov, "cli_agent"))
+                ? g_strdup(json_object_get_string_member(prov, "cli_agent"))
+                : NULL;
+    if (root_node != NULL)
+        json_node_unref(root_node);
+    return agent;
+}
+
+gboolean
+llm_config_get_cli_auto(const char *provider)
+{
+    JsonObject *prov;
+    JsonNode   *root_node = NULL;
+    gboolean    au;
+
+    prov = llm_config_provider_object(provider, &root_node);
+    au = (prov != NULL && json_object_has_member(prov, "cli_auto"))
+             ? json_object_get_boolean_member(prov, "cli_auto")
+             : FALSE;
+    if (root_node != NULL)
+        json_node_unref(root_node);
+    return au;
+}
+
+/* Sauve la policy CLI d'un provider (recharge-modifie-recrit comme
+ * save_provider : les autres providers survivent). Agent vide = membre
+ * RETIRE — pas un « cli_agent: "" » qui trainerait. */
+void
+llm_config_save_cli(const char *provider, const char *agent, gboolean au)
+{
+    char        *path = llm_config_path();
+    JsonParser  *parser = json_parser_new();
+    JsonNode    *root_node = NULL;
+    JsonObject  *root, *provs, *prov;
+    JsonGenerator *gen;
+    gchar       *text;
+    GError      *error = NULL;
+
+    if (json_parser_load_from_file(parser, path, NULL)) {
+        root_node = json_node_copy(json_parser_get_root(parser));
+        root = json_node_get_object(root_node);
+        if (!json_object_has_member(root, "providers"))
+            json_object_set_object_member(root, "providers",
+                                          json_object_new());
+        provs = json_object_get_object_member(root, "providers");
+    } else {
+        root = json_object_new();
+        provs = json_object_new();
+        json_object_set_object_member(root, "providers", provs);
+        root_node = json_node_new(JSON_NODE_OBJECT);
+        json_node_take_object(root_node, root);
+    }
+    prov = json_object_has_member(provs, provider)
+               ? json_object_get_object_member(provs, provider)
+               : NULL;
+    if (prov == NULL) {
+        prov = json_object_new();
+        json_object_set_string_member(prov, "api_url", "");
+        json_object_set_string_member(prov, "api_key", "");
+        json_object_set_object_member(provs, provider, prov);
+    }
+    if (agent != NULL && agent[0] != '\0')
+        json_object_set_string_member(prov, "cli_agent", agent);
+    else if (json_object_has_member(prov, "cli_agent"))
+        json_object_remove_member(prov, "cli_agent");
+    json_object_set_boolean_member(prov, "cli_auto", au);
+
+    gen = json_generator_new();
+    json_generator_set_root(gen, root_node);
+    json_generator_set_pretty(gen, TRUE);
+    text = json_generator_to_data(gen, NULL);
+    if (!g_file_set_contents(path, text, -1, &error)) {
+        g_printerr(_("CDB: failed to save CLI policy: %s\n"),
+                   error->message);
+        g_error_free(error);
+    }
+    g_free(text);
+    g_object_unref(gen);
+    json_node_unref(root_node);
+    g_object_unref(parser);
+    g_free(path);
 }
 
 /* ------------------------------------------------ */
@@ -1317,6 +1464,10 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
     JsonObject *provs = NULL, *prov = NULL;
     const char *new_url = NULL;
     char       *new_key = NULL;
+    /* Policy CLI : COPIES aussi — l'arbre est libere avant le
+     * rafraichissement de la config vivante, prov ne lit plus rien. */
+    char       *new_agent = NULL;
+    gboolean    new_auto = FALSE;
 
     if (cfg == NULL || provider == NULL || model == NULL) {
         g_object_unref(parser);
@@ -1355,6 +1506,13 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
                   ? g_strdup(json_object_get_string_member(prov,
                                                            "api_key"))
                   : g_strdup("");
+    new_agent = (prov != NULL && json_object_has_member(prov, "cli_agent"))
+                    ? g_strdup(json_object_get_string_member(prov,
+                                                             "cli_agent"))
+                    : NULL;
+    new_auto = (prov != NULL && json_object_has_member(prov, "cli_auto"))
+                   ? json_object_get_boolean_member(prov, "cli_auto")
+                   : FALSE;
 
     /* active.{provider,model} — les providers ne sont pas touchés. On mute
      * l'objet « active » déjà présent au lieu de le remplacer : le profil
@@ -1398,6 +1556,15 @@ llm_config_switch_active(LlmConfig *cfg, const char *provider,
         }
         g_free(cfg->api_key);
         cfg->api_key = new_key; /* possession transférée */
+        /* OpenCode-CLI : la policy du CLI suit la bascule. Sans ces
+         * lignes, quitter OpenCode-CLI(YOLO) laisserait cli_auto TRUE
+         * vivant — et y entrer heriterait de l'agent d'un autre.
+         * prov est LIBERE avec l'arbre (json_node_unref plus haut) :
+         * on ne lit que les copies faites avant la liberation — lire
+         * prov ici etait le crash de bascule signale le 19 oct. */
+        g_free(cfg->cli_agent);
+        cfg->cli_agent = new_agent;   /* possession transferee */
+        cfg->cli_auto = new_auto;
     }
 }
 
@@ -1410,6 +1577,7 @@ llm_config_free(LlmConfig *cfg)
     g_free(cfg->model);
     g_free(cfg->api_url);
     g_free(cfg->api_key);
+    g_free(cfg->cli_agent);
     g_free(cfg);
 }
 
@@ -1472,6 +1640,15 @@ llm_config_read(void){
                        ? g_strdup(json_object_get_string_member(prov_obj,
                                                                 "api_key"))
                        : NULL;
+        /* OpenCode-CLI : agent et auto-approbation de SES tools.
+         * Absents = defaut ferme : pas d'agent nomme, rien d'auto. */
+        cfg->cli_agent = json_object_has_member(prov_obj, "cli_agent")
+                         ? g_strdup(json_object_get_string_member(
+                               prov_obj, "cli_agent"))
+                         : NULL;
+        cfg->cli_auto = json_object_has_member(prov_obj, "cli_auto")
+                        && json_object_get_boolean_member(prov_obj,
+                                                          "cli_auto");
     }
 
     /* Config incomplète = pas de chat. La clé est OPTIONNELLE
@@ -1517,6 +1694,9 @@ llm_config_reload(LlmConfig *cfg)
     cfg->api_url = fresh->api_url;
     g_free(cfg->api_key);
     cfg->api_key = fresh->api_key;
+    g_free(cfg->cli_agent);
+    cfg->cli_agent = fresh->cli_agent;
+    cfg->cli_auto = fresh->cli_auto;
     g_free(fresh);                     /* coquille : plus rien dedans */
     return cfg;
 }
@@ -4441,6 +4621,20 @@ llm_request_free(LlmRequest *req)
      * deloger : c'est ici qu'il doit partir. Sur une conversation de 2,7 Mo
      * c'etait 2,7 Mo par tour qui restaient (mesure : +2053 Ko/tour). */
     g_clear_object (&req->msg);
+    /* OpenCode-CLI : libère les ressources du process. */
+    g_free(req->prompt);
+    if (req->cli_parts != NULL)
+        g_hash_table_destroy(req->cli_parts);
+    if (req->cli_part_ids != NULL)
+        g_ptr_array_free(req->cli_part_ids, TRUE);
+    if (req->timeout_id != 0)
+        g_source_remove(req->timeout_id);
+    if (req->watch_id != 0)
+        g_source_remove(req->watch_id);
+    if (req->pid != 0) {
+        kill(req->pid, SIGTERM);
+        g_spawn_close_pid(req->pid);
+    }
     if (req->pending != NULL)
         g_string_free(req->pending, TRUE);
     g_clear_object (&req->stream);
@@ -5062,6 +5256,520 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
                               sizeof(req->scratch), G_PRIORITY_DEFAULT,
                               req->core->cancel, llm_stream_read, req);
 }
+
+/* ------------------------------------------------------------------ */
+/* Provider OpenCode-CLI : spawn one-shot au lieu de libsoup           */
+/* ------------------------------------------------------------------ */
+/* --- Discipline de finalisation CLI (voir les drapeaux llm.h) --------
+ * Trois evenements concourent : la fin de chaque lecture async du pipe,
+ * la mort du process (watch) et le timeout de 120 s. Le mesure du
+ * 19 oct a casse l'illusion qu'un seul suffit : le watch tirait a la
+ * mort du process, avant que la derniere lecture ait vide le pipe —
+ * reponse poussee vide, « arret sans reponse ». Depuis : la liberation
+ * attend la RENCONTRE des deux conditions, et le watch ne fait que
+ * poser son drapeau si une lecture est encore en vol. */
+
+/* Tue le process s'il vit encore et scelle cli_proc_done. Le
+ * g_spawn_close_pid n'est appele qu'ici ou dans le watch, jamais les
+ * deux : le watch se reconnait a req->pid == 0. */
+static void
+opencode_cli_kill(LlmRequest *req)
+{
+    if (req->pid != 0) {
+        kill(req->pid, SIGKILL);
+        g_spawn_close_pid(req->pid);
+        req->pid = 0;
+    }
+    req->cli_proc_done = TRUE;
+}
+
+/* Rendu definitive du tour : historique, vues, bouton. Une seule fois
+ * (cli_ui_done) — le watch et la lecture EOF peuvent s'y croiser. */
+static void
+opencode_cli_ui_finalise(LlmRequest *req)
+{
+    LlmCore *c = req->core;
+
+    if (req->cli_ui_done)
+        return;
+    req->cli_ui_done = TRUE;
+    core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
+    for (guint vi = 0; vi < c->views->len; vi++) {
+        LlmTile *v = g_ptr_array_index(c->views, vi);
+
+        hist_flush_reply(v);
+        llm_slots_title_update(v);
+        hist_append(v, "\n");
+        llm_busy_set(v, FALSE);
+    }
+}
+
+/* La rencontre : plus de lecture en vol ET process mort → libre.
+ * Garde cli_freed : nulle part deux chemins ne liberent. */
+static void
+opencode_cli_release(LlmRequest *req)
+{
+    if (req->cli_read_pending || !req->cli_proc_done || req->cli_freed)
+        return;
+    req->cli_freed = TRUE;
+    llm_request_free(req);
+}
+
+
+/* Snapshot d'un part « text » du CLI : la reemission porte le texte
+ * COMPLET du part, jamais un delta. On le range par id (les ids restent
+ * dans l'ordre d'apparition) et on reconstruit la reponse entiere —
+ * le dernier snapshot d'un part gagne, aucun texte ne se duplique. */
+static void
+opencode_cli_part_text(LlmRequest *req, const char *pid, const char *text)
+{
+    LlmCore *c = req->core;
+
+    if (req->cli_parts == NULL) {
+        req->cli_parts = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                               g_free, g_free);
+        req->cli_part_ids = g_ptr_array_new_with_free_func(g_free);
+    }
+    if (!g_hash_table_contains(req->cli_parts, pid))
+        g_ptr_array_add(req->cli_part_ids, g_strdup(pid));
+    g_hash_table_replace(req->cli_parts, g_strdup(pid), g_strdup(text));
+
+    g_string_assign(c->reply, "");
+    for (guint i = 0; i < req->cli_part_ids->len; i++) {
+        const char *id = g_ptr_array_index(req->cli_part_ids, i);
+        const char *t  = g_hash_table_lookup(req->cli_parts, id);
+
+        if (i > 0)
+            g_string_append_c(c->reply, '\n');
+        g_string_append(c->reply, t);
+    }
+    for (guint vi = 0; vi < c->views->len; vi++)
+        hist_update_reply(g_ptr_array_index(c->views, vi));
+}
+
+/* Parse une ligne JSON de opencode run --format json. Un evenement « text »
+ * ne s'ajoute pas : il va au dedup par part, qui reconstruit c->reply. */
+static void
+opencode_cli_parse_line(LlmRequest *req, const char *line)
+{
+    LlmCore    *c = req->core;
+    JsonParser *parser;
+    JsonNode   *root;
+    JsonObject *obj;
+    const char *type;
+
+    parser = json_parser_new();
+    if (!json_parser_load_from_data(parser, line, -1, NULL)) {
+        g_object_unref(parser);
+        return;
+    }
+    root = json_parser_get_root(parser);
+    if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root)) {
+        g_object_unref(parser);
+        return;
+    }
+    obj = json_node_get_object(root);
+    if (!json_object_has_member(obj, "type")) {
+        g_object_unref(parser);
+        return;
+    }
+    type = json_object_get_string_member(obj, "type");
+    /* Capture de la session CLI : tout evenement porte un sessionID.
+     * On le prend une fois, a la premiere ligne qui en porte un —
+     * error compris, un run qui meurt a deja cree sa session. */
+    if (c->oc_session == NULL && json_object_has_member(obj, "sessionID")) {
+        const char *sid = json_object_get_string_member(obj, "sessionID");
+
+        if (sid != NULL && sid[0] != '\0')
+            c->oc_session = g_strdup(sid);
+    }
+    /* Le CLI rend ses echecs en evenement « error » sur STDOUT (mesure :
+     * modele mal qualifie -> {"type":"error",...}). Sans cette branche,
+     * le tour se terminait sur une reponse vide sans rien dire —
+     * l'arret silencieux signale par Eric le 18 oct. */
+    if (g_strcmp0(type, "error") == 0) {
+        const char *em = "unknown error";
+        char       *msg;
+
+        if (json_object_has_member(obj, "error")) {
+            JsonNode *en = json_object_get_member(obj, "error");
+
+            if (JSON_NODE_HOLDS_OBJECT(en)) {
+                JsonObject *eo = json_node_get_object(en);
+
+                if (json_object_has_member(eo, "message"))
+                    em = json_object_get_string_member(eo, "message");
+            }
+        }
+        msg = g_strdup_printf(_("\n[opencode] %s\n"), em);
+        core_cdb_announce(c, msg);
+        g_free(msg);
+        g_object_unref(parser);
+        return;
+    }
+    if (g_strcmp0(type, "text") != 0) {
+        g_object_unref(parser);
+        return;
+    }
+    if (json_object_has_member(obj, "part")) {
+        JsonObject *part = json_object_get_object_member(obj, "part");
+
+        /* Le CLI reemet le texte COMPLET du part a chaque update
+         * (snapshot, pas delta) : sans dedup par id, chaque reemission
+         * s'ajoutait a la precedente — les doublons de la capture
+         * d'Eric du 18 oct. Le helper range et reconstruit. */
+        if (json_object_has_member(part, "id") &&
+            json_object_has_member(part, "text"))
+            opencode_cli_part_text(req,
+                json_object_get_string_member(part, "id"),
+                json_object_get_string_member(part, "text"));
+    }
+
+    g_object_unref(parser);
+}
+
+/* Read callback sur le pipe stdout du process opencode. Chaque entree
+ * consomme la lecture en vol ; toute sortie pose des drapeaux et appelle
+ * release — la rencontre lecture-finuee + process-mort libere. */
+static void
+opencode_cli_stdout_read(GObject *source, GAsyncResult *res, gpointer data)
+{
+    LlmRequest *req = data;
+    LlmCore    *c = req->core;
+    GError     *error = NULL;
+    gssize      n;
+
+    n = g_input_stream_read_finish(G_INPUT_STREAM(source), res, &error);
+    req->cli_read_pending = FALSE;
+
+    /* Le timeout a deja tout dit : la mort du pipe n'est plus que
+     * administrative. */
+    if (req->cli_finishing) {
+        if (error != NULL)
+            g_error_free(error);
+        opencode_cli_release(req);
+        return;
+    }
+
+    /* Pause cliquee ou annulation : on jette tout entrant, on tue. */
+    if (c->stop_requested ||
+        (error != NULL &&
+         g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))) {
+        if (error != NULL)
+            g_error_free(error);
+        opencode_cli_kill(req);
+        core_history_push(c, LLMACTOR_LLM, FALSE, c->reply->str);
+        for (guint vi = 0; vi < c->views->len; vi++) {
+            LlmTile *v = g_ptr_array_index(c->views, vi);
+
+            hist_flush_reply(v);
+            llm_slots_title_update(v);
+            hist_append(v, _("\n〔cancelled〕\n"));
+            llm_busy_set(v, FALSE);
+        }
+        req->cli_ui_done = TRUE;
+        opencode_cli_release(req);
+        return;
+    }
+
+    if (error != NULL) {
+        /* Panne du pipe : annonce, rendu de ce qui survit, trepas. */
+        core_announce_net_error(c, error);
+        g_error_free(error);
+        opencode_cli_ui_finalise(req);
+        opencode_cli_kill(req);
+        opencode_cli_release(req);
+        return;
+    }
+
+    if (n <= 0) {
+        /* EOF : tout ce que le process a ecrit est lu. S'il est deja
+         * mort, on rend les clefs ici ; sinon le watch les rendra. */
+        if (req->pending->len > 0) {
+            opencode_cli_parse_line(req, req->pending->str);
+            g_string_truncate(req->pending, 0);
+        }
+        opencode_cli_ui_finalise(req);
+        opencode_cli_release(req);
+        return;
+    }
+
+    /* Accumule dans pending, parse les lignes complètes. */
+    g_string_append_len(req->pending, req->scratch, n);
+    {
+        char *start = req->pending->str;
+        char *nl;
+
+        while ((nl = strchr(start, '\n')) != NULL) {
+            *nl = '\0';
+            opencode_cli_parse_line(req, start);
+            start = nl + 1;
+        }
+        /* Décale le reste partiel en début de buffer. */
+        g_string_erase(req->pending, 0, start - req->pending->str);
+    }
+
+    /* Reset le timeout d'inactivité. */
+    if (req->timeout_id != 0) {
+        g_source_remove(req->timeout_id);
+        req->timeout_id = g_timeout_add_seconds(120,
+            (GSourceFunc)opencode_cli_timeout, req);
+    }
+
+    req->cli_read_pending = TRUE;
+    g_input_stream_read_async(G_INPUT_STREAM(source), req->scratch,
+                              sizeof(req->scratch), G_PRIORITY_DEFAULT,
+                              c->cancel, opencode_cli_stdout_read, req);
+}
+
+/* Timeout 120 s sans sortie : on tue le process. Le message passe par
+ * l'historique (loi de la panne reseau : l'abandon ne doit jamais etre
+ * muet). On ne libere PAS ici : la lecture en vol est la seule voie
+ * qui peut finir sans laisser de callback dans le vide — le kill ferme
+ * le pipe, la lecture se termine, et c'est elle qui rendra la requete
+ * par opencode_cli_release (cli_finishing aura coupe court au parse).
+ * Le watch, lui, n'est qu'un temoin : il pose son drapeau et s'efface
+ * devant la lecture. */
+static gboolean
+opencode_cli_timeout(gpointer data)
+{
+    LlmRequest *req = data;
+    LlmCore    *c = req->core;
+
+    req->timeout_id = 0;
+    req->cli_finishing = TRUE;
+    core_cdb_announce(c, _("\n[error: opencode timeout after 120s]\n"));
+    opencode_cli_ui_finalise(req);
+    opencode_cli_kill(req);
+    opencode_cli_release(req);
+    return G_SOURCE_REMOVE;
+}
+
+/* Watch sur la mort du process opencode : c'est la seconde condition
+ * de liberation, rien de plus. Si une lecture async est encore en vol,
+ * le pipe peut tenir la derniere ligne de la reponse — la mort du
+ * process ne vaut pas fin de la lecture. Mesure du 19 oct : le watch
+ * poussait l'historique avant que la lecture n'ait rendu les evenements,
+ * et le tour finissait vide sans explication.
+ * Donc : lecture en vol = on pose le drapeau et on part ; c'est la
+ * lecture qui finalisera a l'EOF. Le watch ne touche plus pending ni
+ * l'historique — un seul maitre du rendu final, la lecture. */
+static void
+opencode_cli_watch(GPid pid, gint status, gpointer data)
+{
+    LlmRequest *req = data;
+
+    (void)status;
+    req->pid = 0;
+    req->watch_id = 0;
+    g_spawn_close_pid(pid);
+    req->cli_proc_done = TRUE;
+
+    /* La derniere ligne sans \n final ne regarde plus le watch : la
+     * lecture a vide le pipe jusqu'a l'EOF, ou le videra. */
+    if (req->cli_read_pending)
+        return;
+
+    opencode_cli_ui_finalise(req);
+    opencode_cli_release(req);
+}
+
+/* Lance « opencode run --standalone --format json ». FALSE si spawn impossible. */
+/* LOI DU PROVIDER CLI : aucun demon, jamais. (decision d'Eric Boucher,
+ * 19 oct — la RAM est rendue des que le cycle passe de busy a pret.)
+ * Sans --standalone, opencode run n'est qu'un CLIENT qui se branche sur un
+ * service d'arriere-plan partage (opencode serve --service), re-adapte par
+ * systemd --user : notre kill ne tue que le client et le service continue
+ * de travailler sans personne, ~220-280 Mo retenus indefiniment. Mesures du
+ * 19 oct sur ce poste :
+ *   - demon partage : location.directory = le dossier du DERNIER qui l'a
+ *     cree, PAS le workdir passe a g_spawn — le modele, ne trouvant pas le
+ *     Makefile du projet, finissait a faire « find / » (32 s de reponse)
+ *     puis « Transport: The socket connection... » et le tour mourait vide.
+ *   - --standalone : le serveur devient un ENFANT DIRECT du client
+ *     (« serve --stdio --port 0 »), donc le workdir est enfin honore (mesure:
+ *     read {"path":"/tmp/ocwd-solo/Makefile"} → reponse exacte), et SIGKILL
+ *     sur le client seul laisse 0 survivant a +1 s — le serveur --stdio meurt
+ *     a la fermeture de son pipe. 3,8 s le cycle complet avec tools, contre
+ *     2,0 s sur question triviale via demon : ~1 s d'amorçage prive, paye
+ *     exprès.
+ * Le drapeau n'est DONC PAS un reglage : il n'existe plus de chemin vers le
+ * service partage. Ne pas le retirer, ne pas le rendre optionnel. */
+static gboolean
+opencode_cli_spawn(LlmRequest *req)
+{
+    LlmCore  *c = req->core;
+    GError   *error = NULL;
+    gchar    *bin;
+    gchar    *model_ref;   /* « opencode/<id> » — format exige par le CLI */
+    gchar    *workdir;     /* projet courant de la session (voir plus bas) */
+    gchar   **envp;        /* PWD = workdir, pose juste avant le spawn */
+    /* Aucune case n'est remplie ici : tout se cable par n plus bas, dans
+     * l'ordre. Un tableau nu, dimensionne par le static_assert. */
+    gchar    *argv[14];
+    /* Garde de cablage : 7 cases figees (0-6) + le pire cas dynamique
+     * (--agent + valeur, --auto, --session + valeur, prompt = 6) + le NULL
+     * terminal = 14. Ajouter un flag sans agrandir argv etait jusqu'ici un
+     * ecriture hors cases, silencieuse a la compilation. */
+    static_assert(G_N_ELEMENTS(argv) == 14,
+                  "argv du CLI OpenCode : agrandir le tableau avec les flags");
+    gint     stdout_fd;
+    gboolean ok;
+    int       n;          /* index de cablage des argv dynamiques */
+
+    /* Binaire : api_key (pas de clé pour un CLI), sinon PATH. */
+    if (c->cfg->api_key != NULL && c->cfg->api_key[0] != '\0')
+        bin = g_strdup(c->cfg->api_key);
+    else
+        bin = g_find_program_in_path("opencode");
+    if (bin == NULL) {
+        core_cdb_announce(c, _("\n[error: opencode binary not found]\n"));
+        return FALSE;
+    }
+    /* Reference du modele : le CLI exige « opencode/<id> » (mesure du
+     * 18 oct : « -m big-pickle » repond « Invalid model reference » dans
+     * l'evenement error du JSON stdout). La tuile ne porte que l'id nu. */
+    if (c->cfg->model == NULL) {
+        core_cdb_announce(c, _("\n[error: no model selected]\n"));
+        g_free(bin);
+        return FALSE;
+    }
+    model_ref = strchr(c->cfg->model, '/') != NULL
+                ? g_strdup(c->cfg->model)
+                : g_strdup_printf("opencode/%s", c->cfg->model);
+    /* Dossier de travail : le projet courant de la session, PAS le cwd
+     * du processus — CDB lance depuis le lanceur de bureau a /home/eric
+     * pour cwd, et le CLI y aurait cherche les depot au lieu du notre
+     * (mesure du 19 oct : « le repertoire de travail est /home/eric »).
+     * Meme chaine de resolution que le prompt : test > projet selectionne
+     * > cwd. Et la session CLI est attachee a son dossier : un projet
+     * change oubliait la session, une neuve nait dans le nouveau. */
+    workdir = g_strdup(g_getenv("CDB_TEST_PROJET"));
+    if (workdir == NULL)
+        workdir = roots_current_project(c->roots, c->multi_paths);
+    if (workdir == NULL && c->workdir_hint != NULL)
+        workdir = g_strdup(c->workdir_hint);   /* projet du fichier courant */
+    if (workdir == NULL)
+        workdir = g_get_current_dir();
+    if (c->oc_session != NULL &&   /* origine inconnue (sans ancre) = oubliee */
+        (c->oc_session_dir == NULL || g_strcmp0(workdir, c->oc_session_dir) != 0)) {
+        g_clear_pointer(&c->oc_session, g_free);
+        g_clear_pointer(&c->oc_session_dir, g_free);
+    }
+
+    /* Policy CLI : agent et auto-approbation des tools opencode regles
+     * dans Settings ; defaut ferme = aucun des deux. La session est
+     * possedee par le core, JAMAIS --continue : celle-la reprend la
+     * derniere session du repertoire — donc le TUI live de l'utilisateur
+     * s'il en tient un ici (mesure du 18 oct : reponses d'une autre
+     * conversation, en snapshots dupliques). */
+    /* Cablage : UN seul compteur, du debut a la fin, aucun index nu.
+     * Regle non ecrite jusqu'ici : le haut de la fonction posait les cases
+     * fixes a la main (argv[0], argv[5]) pendant que le bas comptait avec n.
+     * Les deux se sont rates le jour ou --standalone a deplace le "-m" :
+     * « argv[5] = model_ref » a ecrase le flag, le NULL de la case 6 a coupe
+     * la table, et le prompt n'est jamais parti — question vide, reponse
+     * inventee (mesure du 19 oct, session 003). */
+    n = 0;
+    argv[n++] = bin;
+    argv[n++] = (gchar *)"run";
+    argv[n++] = (gchar *)"--format";
+    argv[n++] = (gchar *)"json";
+    argv[n++] = (gchar *)"--standalone";
+    argv[n++] = (gchar *)"-m";
+    argv[n++] = model_ref;
+    /* Garde d'execution, avant tout debordement : le pire cas dynamique
+     * vaut 6 cases (--agent + valeur, --auto, --session + valeur, prompt)
+     * plus le NULL. Le static_assert ne voit que la taille declaree ; lui
+     * voit le compteur. */
+    g_assert(n + 7 <= (int) G_N_ELEMENTS(argv));
+    if (c->cfg->cli_agent != NULL && c->cfg->cli_agent[0] != '\0') {
+        argv[n++] = (gchar *)"--agent";
+        argv[n++] = c->cfg->cli_agent;
+    }
+    if (c->cfg->cli_auto)
+        argv[n++] = (gchar *)"--auto";
+    if (c->oc_session != NULL) {
+        argv[n++] = (gchar *)"--session";
+        argv[n++] = c->oc_session;
+    }
+    argv[n++] = req->prompt;
+    argv[n] = NULL;   /* 14e case : le compteur les a toutes remplies, aucune n'est numerotee a la main */
+
+    /* PWD suit le workdir, sinon le workdir ne sert a rien. Mesure du
+     * 19 oct, trois lancings a cwd = le projet :
+     *   PWD = projet      -> le service boote sur le projet
+     *   PWD = /tmp/ocdiag -> le service boote sur /tmp/ocdiag  (le cwd est
+     *                        pourtant le projet : PWD GAGNE sur le cwd)
+     *   PWD absent        -> le service boote sur le projet (repli sur cwd)
+     * opencode lit donc $PWD AVANT le vrai cwd. Or g_spawn pose le cwd de
+     * l'enfant et ne recalcule jamais PWD ; avec envp NULL l'enfant herite du
+     * PWD de CDB — /home/eric quand CDB vient du lanceur de bureau, d'ou le
+     * « le repertoire de travail est /home/eric » du 19 oct et les « find / »
+     * du modele ne trouvant pas le Makefile du projet. */
+    envp = g_get_environ();
+    envp = g_environ_setenv(envp, "PWD", workdir, TRUE);
+
+    ok = g_spawn_async_with_pipes(
+        workdir,        /* le projet courant, pas le cwd du processus */
+        argv,
+        envp,           /* PWD = workdir : opencode le lit avant le cwd */
+        G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH,
+        NULL, NULL,     /* child setup */
+        &req->pid,
+        NULL,           /* stdin */
+        &stdout_fd,
+        NULL,           /* stderr */
+        &error);
+
+    if (!ok) {
+        char *msg = g_strdup_printf(
+            _("\n[error: cannot spawn opencode: %s]\n"), error->message);
+
+        core_cdb_announce(c, msg);
+        g_free(msg);
+        g_error_free(error);
+        g_free(bin);
+        g_free(model_ref);
+        g_free(workdir);
+        g_strfreev(envp);
+        for (guint vi = 0; vi < c->views->len; vi++)
+            llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
+        return FALSE;
+    }
+
+    g_free(bin);          /* le spawn a copie argv */
+    g_free(model_ref);
+    g_strfreev(envp);   /* le spawn a copie l'environnement */
+    /* La session qui nait (ou continue) dans ce run appartient a ce
+     * dossier : la prochaine entree comparera et oubliera si besoin. */
+    g_free(c->oc_session_dir);
+    c->oc_session_dir = workdir;   /* possession transferee */
+    /* Stream stdout pour lire la sortie JSON. */
+    req->stream = g_unix_input_stream_new(stdout_fd, TRUE);
+
+    /* Watch sur la mort du process. */
+    req->watch_id = g_child_watch_add(req->pid, opencode_cli_watch, req);
+
+    /* Timeout d'inactivité. */
+    req->timeout_id = g_timeout_add_seconds(120,
+        (GSourceFunc)opencode_cli_timeout, req);
+
+    /* Lance la lecture async. */
+    /* Le drapeau se pose AVANT l'armement, pas au retour du callback :
+     * un enfant qui meurt avant la premiere donnee trouverait
+     * cli_read_pending a FALSE (g_new0), le watch se croirait seul maitre,
+     * pousserait l'historique vide et libererait la requete sous une
+     * lecture en vol. Mesure du 19 oct : c'est exactement le trou que la
+     * discipline de finalisation devait fermer, ouvert sur le premier essai
+     * seulement — les suivants posaient le drapeau (ligne plus bas). */
+    req->cli_read_pending = TRUE;
+    g_input_stream_read_async(req->stream, req->scratch,
+                              sizeof(req->scratch), G_PRIORITY_DEFAULT,
+                              c->cancel, opencode_cli_stdout_read, req);
+
+    return TRUE;
+}
 /* Un essai d'envoi : reconstruit un SoupMessage neuf depuis la requête
  * stockée. Contre l'intuition — et contre l'ancien commentaire, qui disait
  * que « la session possède le message après send_async » : send_async ne vole
@@ -5070,6 +5778,27 @@ llm_send_done(GObject *source, GAsyncResult *res, gpointer data)
 void
 llm_send_attempt(LlmRequest *req)
 {
+    LlmCore *c = req->core;
+
+    /* Provider OpenCode-CLI : spawn one-shot, pas de HTTP. */
+    if (g_strcmp0(c->cfg->provider, "OpenCode-CLI") == 0) {
+        /* Busy d'abord : sans icone pause, un second envoi partirait
+         * pendant le premier tour et les deux se battraient c->reply. */
+        for (guint vi = 0; vi < c->views->len; vi++)
+            llm_busy_set(g_ptr_array_index(c->views, vi), TRUE);
+        if (!opencode_cli_spawn(req)) {
+            /* Le busy pose au-dessus est a rendre ICI, par celui qui l'a
+             * pose : opencode_cli_spawn a trois sorties FALSE et une seule
+             * (l'echec de g_spawn) rendait le bouton. Un binaire introuvable
+             * ou un modele non choisi laissaient donc la tuile en pause pour
+             * toujours — contre la loi du bouton media (mort = play). */
+            for (guint vi = 0; vi < c->views->len; vi++)
+                llm_busy_set(g_ptr_array_index(c->views, vi), FALSE);
+            llm_request_free(req);  /* spawn mort : la requete doit partir */
+        }
+        return;
+    }
+
     SoupMessage *msg = soup_message_new("POST", req->url);
 
     /* Une URL de provider malformée (un api_url saisi à la main) donne ici
@@ -6813,6 +7542,21 @@ llm_send(LlmTile *t, const char G_GNUC_UNUSED *prompt)
     if (c->cfg->api_key != NULL && c->cfg->api_key[0] != '\0')
         req->auth = g_strdup_printf("Bearer %s", c->cfg->api_key);
 
+
+    /* Provider OpenCode-CLI : extrait le dernier message user comme prompt,
+     * pas de body JSON. */
+    if (g_strcmp0(c->cfg->provider, "OpenCode-CLI") == 0) {
+        for (gint i = (gint)c->history->len - 1; i >= 0; i--) {
+            LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
+
+            if (m->actor == LLMACTOR_USER && !m->local) {
+                req->prompt = g_strdup(m->content);
+                break;
+            }
+        }
+        if (req->prompt == NULL)
+            req->prompt = g_strdup("");  /* garde-fou */
+    }
     req->body = llm_body_build(t);
     /* Second langage : le corps est construit par llm_body_build (intacte),
      * puis traduit ici. Juste avant la sauvegarde du slot — un slot est « le
@@ -6861,6 +7605,11 @@ llm_history_wipe(LlmTile *t)
     g_array_set_size(t->core->history, 0);
     if (t->core->answered_tools != NULL)
         g_hash_table_remove_all(t->core->answered_tools);
+    /* Chat vide = conversation neuve : le CLI repartira sur une session
+     * neuve a l' prochain envoi (sinon opencode se souviendrait de ce
+     * que CDB a oublie — deux memoires qui divergent). */
+    g_clear_pointer(&t->core->oc_session, g_free);
+    g_clear_pointer(&t->core->oc_session_dir, g_free);
     llm_live_wipe();
 }
 
@@ -6940,6 +7689,11 @@ llm_core_free(LlmCore *c)
         g_object_unref(c->soup);
     if (c->reply != NULL)
         g_string_free(c->reply, TRUE);
+    /* La session CLI a ete sauvee juste au-dessus (llm_live_save) :
+     * elle peut partir, le prochain load la retrouvera. */
+    g_clear_pointer(&c->oc_session, g_free);
+    g_clear_pointer(&c->oc_session_dir, g_free);
+    g_free(c->workdir_hint);
     if (c->history != NULL) {
         for (i = 0; i < c->history->len; i++) {
             LlmMsg *m = &g_array_index(c->history, LlmMsg, i);
